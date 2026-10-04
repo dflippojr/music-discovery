@@ -14,6 +14,24 @@ Planning. Nothing is built yet. The plan for v1 lives in the [issues](https://gi
 4. Offline evaluation harness, then a hybrid ranker compared against the baseline
 5. A static demo page and a small blind listener study
 
+## Development
+
+Use Python 3.12 and activate a virtual environment before installing:
+
+```sh
+python -m venv .venv
+# Activate .venv using your shell's activation script.
+python -m pip install -e ".[dev]"
+ruff check .
+ruff format --check .
+pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
+musicdiscovery --version
+```
+
+`ingest`, `recommend`, and `evaluate` currently exit with status 1 and a
+"not implemented yet" message. Tests use synthetic fixtures only; datasets
+and audio must never be committed. Store raw and generated datasets in `data/`.
+
 ## License
 
 Code is MIT licensed (see [LICENSE](LICENSE)). Catalog data keeps its own license, which will be recorded in `docs/catalog.md` once the catalog is chosen.
