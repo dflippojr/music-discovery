@@ -1,2 +1,19 @@
 # music-discovery
-Music discovery over a permitted open catalog: describe what you like, get explained recommendations, and measure a baseline against a better ranker with offline metrics and real listeners.
+
+Music discovery over a fixed, openly licensed catalog. Start from a track, describe the qualities you like, and get recommendations that explain why each one was picked. The point of the project is the evaluation: a simple similarity baseline is compared with a more capable ranker, first with offline metrics and then with real listeners, and the write-up says what those results can and cannot show.
+
+No streaming-service API is involved; the catalog and its license are chosen up front.
+
+## Status
+
+Planning. Nothing is built yet. The plan for v1 lives in the [issues](https://github.com/dflippojr/music-discovery/issues):
+
+1. Choose a permitted catalog and ingest it
+2. Project scaffold and CI, including SonarCloud
+3. Preference input and a content-based baseline with explanations
+4. Offline evaluation harness, then a hybrid ranker compared against the baseline
+5. A static demo page and a small blind listener study
+
+## License
+
+Code is MIT licensed (see [LICENSE](LICENSE)). Catalog data keeps its own license, which will be recorded in `docs/catalog.md` once the catalog is chosen.
