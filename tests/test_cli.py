@@ -16,7 +16,7 @@ def test_installed_version():
     assert result.stderr == ""
 
 
-@pytest.mark.parametrize("command", ["ingest", "recommend", "evaluate"])
+@pytest.mark.parametrize("command", ["recommend", "evaluate"])
 def test_placeholder(command, capsys):
     assert main([command]) == 1
     captured = capsys.readouterr()
