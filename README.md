@@ -1,5 +1,7 @@
 # music-discovery
 
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=dflippojr_music-discovery&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=dflippojr_music-discovery)
+
 Music discovery over a fixed, openly licensed catalog. Start from a track, describe the qualities you like, and get recommendations that explain why each one was picked. The point of the project is the evaluation: a simple similarity baseline is compared with a more capable ranker, first with offline metrics and then with real listeners, and the write-up says what those results can and cannot show.
 
 No streaming-service API is involved; the catalog and its license are chosen up front.

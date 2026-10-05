@@ -1,0 +1,52 @@
+name: SonarCloud
+
+# Runs the tests for coverage and performs the SonarCloud analysis, so
+# Automatic Analysis must stay off in the SonarCloud project. The quality
+# gate fails this check through sonar.qualitygate.wait.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: sonar-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    # Secrets are not passed to pull requests from forks; skip rather than fail.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so SonarCloud can blame lines and find the PR base.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and dev tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Test with coverage
+        timeout-minutes: 20
+        run: pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Scan with SonarCloud
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARCLOUD_TOKEN }}
+        with:
+          args: >
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.qualitygate.wait=true
