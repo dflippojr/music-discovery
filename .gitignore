@@ -20,3 +20,5 @@ data/
 node_modules/
 test-results/
 coverage-js/
+ratings/
+.study-fixture/

@@ -85,15 +85,18 @@ def test_parity_file_matches_the_rankers(bundle, catalog):
 
 def test_static_files_follow_the_csp_rules(bundle):
     out = bundle[0]
-    page = (out / "index.html").read_text()
-    assert "<script>" not in page and "<style" not in page
-    assert " style=" not in page and " onclick=" not in page
-    assert 'src="demo.js"' in page and 'href="demo.css"' in page
-    script = (out / "demo.js").read_text()
-    for forbidden in (".innerHTML", "eval(", 'setAttribute("style"'):
-        assert forbidden not in script
-    urls = re.findall(r"https?://[^\"' ]+", script)
-    assert urls == ["http://www.w3.org/2000/svg"]  # the SVG namespace, not a request
+    for name, script in (("index.html", "demo.js"), ("study.html", "study.js")):
+        page = (out / name).read_text()
+        assert "<script>" not in page and "<style" not in page
+        assert " style=" not in page and " onclick=" not in page
+        assert f'src="{script}"' in page and 'href="demo.css"' in page
+    for name in (n for n in demo.STATIC_FILES if n.endswith(".js")):
+        script = (out / name).read_text("utf-8")
+        for forbidden in (".innerHTML", "eval(", 'setAttribute("style"', 'fetch("http'):
+            assert forbidden not in script, name
+        urls = re.findall(r"https?://[^\"' ]+", script)
+        # at most the SVG namespace, which is not a request
+        assert urls in ([], ["http://www.w3.org/2000/svg"]), name
     assert "https://" not in (out / "demo.css").read_text()
 
 

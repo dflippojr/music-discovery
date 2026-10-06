@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Listener study ratings file",
+  "description": "One file per session, exported by the study page. Only a random session id, task inputs, shown track ids, which ranker made each list, ratings, the overall preference and times. No names, emails, IP addresses or free text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "session_id", "started_at", "exported_at", "tasks"],
+  "properties": {
+    "format": { "const": "music-discovery-study" },
+    "version": { "const": 1 },
+    "session_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "exported_at": { "$ref": "#/$defs/timestamp" },
+    "tasks": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "quality": {
+      "type": "string",
+      "pattern": "^(genre|tag|more|less):[^\n]{1,60}$"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "seed_track_id", "likes", "dislikes", "started_at", "completed_at", "lists", "preferred"],
+      "properties": {
+        "task": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "seed_track_id": { "type": "integer", "minimum": 0 },
+        "likes": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/quality" } },
+        "dislikes": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/quality" } },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "lists": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/list" }
+        },
+        "preferred": { "enum": ["A", "B", "none"] }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "ranker", "results"],
+      "properties": {
+        "label": { "enum": ["A", "B"] },
+        "ranker": { "enum": ["baseline", "hybrid"] },
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/result" }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["track_id", "rating", "new_to_me"],
+      "properties": {
+        "track_id": { "type": "integer", "minimum": 0 },
+        "rating": { "enum": [1, -1] },
+        "new_to_me": { "type": "boolean" }
+      }
+    }
+  }
+}
