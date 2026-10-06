@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
@@ -17,6 +18,8 @@ from musicdiscovery.ranking import BaselineRanker, Ranker, Recommendation
 K = 10
 QUERY_SEED = 20261005
 BOOTSTRAP_SEED = 7
+HOLDOUT_FRACTION = 0.5
+HOLDOUT_SEED = 20261006
 BOOTSTRAP_RESAMPLES = 1000
 QUERIES_PER_SPLIT = 100
 SPLITS = ("validation", "test")
@@ -205,14 +208,104 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
 # --- metrics -----------------------------------------------------------------
 
 METRICS: dict[str, str] = {
-    "genre_precision": "Genre precision@10",
-    "genre_ndcg": "Genre nDCG@10",
+    "genre_precision": "Same-genre rate@10 (genre precision)",
+    "genre_ndcg": "Same-genre nDCG@10 (genre nDCG)",
     "tag_overlap": "Tag overlap@10 (mean Jaccard with the seed)",
+    "heldout_tags": "Held-out tag overlap@10 (mean Jaccard of hidden tags)",
     "adherence": "Preference adherence@10",
     "artist_diversity": "Artist diversity (distinct artists / list length)",
     "popularity": "Popularity (mean listen percentile of results)",
     "coverage": "Catalog coverage",
 }
+
+
+# Which rankers can see the label each metric is scored against.
+METRIC_NOTES: dict[str, str] = {
+    "genre_precision": (
+        "Scored on `genre_top`: `popular` filters on it and `hybrid` scores on it "
+        "through genre ids and tags, so they see the label; `baseline` (audio "
+        "features only) and `random` do not."
+    ),
+    "genre_ndcg": (
+        "Scored on `genre_top`; the same rankers see the label as for the "
+        "same-genre rate."
+    ),
+    "tag_overlap": (
+        "Scored on full tag sets: `hybrid` scores on tags, and a liked `tag:` "
+        "quality can name one of the seed's tags, so these rankers see the label."
+    ),
+    "heldout_tags": (
+        "Rankers see only a visible half of each track's tags; the score uses "
+        "the hidden half, which no ranker sees. Queries whose seed has fewer "
+        "than two tags are skipped."
+    ),
+}
+
+MIN_TAGS_FOR_HOLDOUT = 2
+
+
+class HeldOut:
+    """A seeded split of every track's tags into visible and held-out halves.
+
+    Each track's split depends only on the seed and its track id, so it does not
+    change with row order. Tracks with fewer than two tags keep everything
+    visible and have no held-out tags.
+    """
+
+    def __init__(
+        self,
+        catalog: Catalog,
+        fraction: float = HOLDOUT_FRACTION,
+        seed: int = HOLDOUT_SEED,
+    ):
+        if not 0 < fraction < 1:
+            raise EvaluationError(
+                f"hold-out fraction must be in (0, 1), got {fraction}"
+            )
+        self.fraction = fraction
+        self.seed = seed
+        self.catalog = catalog
+        self.visible: list[frozenset] = []
+        self.held: list[frozenset] = []
+        for track_id, tags in zip(
+            catalog.track_ids, catalog.frame["tags"], strict=True
+        ):
+            ordered = sorted(tags)
+            if len(ordered) < MIN_TAGS_FOR_HOLDOUT:
+                self.visible.append(frozenset(ordered))
+                self.held.append(frozenset())
+                continue
+            rng = np.random.default_rng([seed, int(track_id)])
+            order = rng.permutation(len(ordered))
+            hidden = min(max(round(len(ordered) * fraction), 1), len(ordered) - 1)
+            self.held.append(frozenset(ordered[i] for i in order[:hidden]))
+            self.visible.append(frozenset(ordered[i] for i in order[hidden:]))
+
+    def view(self) -> Catalog:
+        """The catalog as rankers see it: visible tags only."""
+        frame = self.catalog.frame.copy()
+        frame["tags"] = pd.Series(
+            [sorted(tags) for tags in self.visible], index=frame.index, dtype=object
+        )
+        return Catalog(frame)
+
+    def preference(self, query: "Query", k: int) -> Preference:
+        """The query's preference without a liked tag the ranker may not see."""
+        row = self.catalog.position[query.seed]
+        likes = [
+            text
+            for text in query.likes
+            if not text.lower().startswith("tag:")
+            or text.partition(":")[2].strip() in self.visible[row]
+        ]
+        return Preference.from_strings([query.seed], likes, k=k)
+
+    def overlap(self, seed_row: int, rows: np.ndarray) -> float:
+        """Mean Jaccard of held-out tags with the seed's; nan if undefined."""
+        seed_held = self.held[seed_row]
+        if not seed_held or not len(rows):
+            return float("nan")
+        return float(np.mean([_jaccard(seed_held, self.held[r]) for r in rows]))
 
 
 class Context:
@@ -247,6 +340,7 @@ def query_metrics(
     nan = float("nan")
     out = dict.fromkeys(METRICS, nan)
     out.pop("coverage")
+    out.pop("heldout_tags")  # needs the hold-out; scored in `evaluate`
     if not len(rows):
         return out, rows
 
@@ -310,9 +404,13 @@ def evaluate(
     ranker_names: Sequence[str],
     k: int = K,
     resamples: int = BOOTSTRAP_RESAMPLES,
+    holdout_fraction: float = HOLDOUT_FRACTION,
+    holdout_seed: int = HOLDOUT_SEED,
 ) -> dict:
     """Score each ranker on every query; return the numbers as a JSON-ready dict."""
     ctx = Context(catalog)
+    holdout = HeldOut(catalog, holdout_fraction, holdout_seed)
+    view = holdout.view()
     rankers = {name: make_ranker(name) for name in ranker_names}
     table: dict[str, dict] = {}
     for name, ranker in rankers.items():
@@ -324,6 +422,14 @@ def evaluate(
             for metric, value in values.items():
                 per_query[metric][i] = value
             recommended[i, rows] = True
+        # Held-out tags: the ranker gets the visible-tags view and nothing else.
+        blind = make_ranker(name)
+        for i, query in enumerate(queries):
+            results = blind.rank(holdout.preference(query, k), view)
+            rows = np.array([view.position[r.track_id] for r in results], dtype=int)
+            per_query["heldout_tags"][i] = holdout.overlap(
+                catalog.position[query.seed], rows
+            )
         table[name] = {}
         for split in SPLITS:
             index = np.flatnonzero([q.split == split for q in queries])
@@ -351,6 +457,17 @@ def evaluate(
         "queries_with_axis_likes": sum(
             any(t.startswith(("more:", "less:")) for t in q.likes) for q in queries
         ),
+        "heldout": {
+            "fraction": holdout_fraction,
+            "seed": holdout_seed,
+            "queries_skipped": {
+                split: sum(
+                    q.split == split and not holdout.held[catalog.position[q.seed]]
+                    for q in queries
+                )
+                for split in SPLITS
+            },
+        },
         "catalog_tracks": len(catalog),
         "catalog_mean_popularity": _round(float(ctx.percentile.mean())),
         "rankers": table,
@@ -375,11 +492,18 @@ LIMITS = """\
 These numbers come from proxies, not listeners. Read them with the following in mind.
 
 - **Genre labels are a proxy for relevance, not ground truth.** A result counts as
-  relevant when it shares the seed's top genre. That rewards obvious picks, says
+  same-genre when it shares the seed's top genre. That rewards obvious picks, says
   nothing about whether a listener enjoys a result, and cannot show that anything
   was discovered. A ranker that returns the same sound-alikes every time scores well.
   The `popular` reference ranker returns only the seed's genre, so it scores 1.0 on
-  genre precision by construction.
+  the same-genre rate by construction, and `hybrid` scores on genre ids and tags.
+- **Held-out tag overlap hides half of each track's tags from the rankers**, so it
+  does not reward using a label it is scored against. It is still a proxy: tags are
+  noisy, sparse (tracks with fewer than two tags have nothing to hide, and queries
+  seeded on them are skipped), and correlated with genre, so a ranker that finds
+  same-genre tracks gains through the visible tags too. A tag a listener would not
+  care about counts as much as one they would. When a query likes a tag that is
+  held out for its seed, that like is dropped for this metric.
 - **Queries are synthetic.** Seeds are random catalog tracks and likes are sampled
   from the seed's own genre, tags and a feature axis. Real listeners are messier.
 - **Tag overlap** depends on how well people tagged tracks; only queries whose seed
@@ -408,6 +532,24 @@ def _cell(score: dict) -> str:
     return f"{score['mean']:.3f} [{score['lo']:.3f}, {score['hi']:.3f}]"
 
 
+MIN_SCORED_QUERIES = 30
+
+
+def _sparsity_note(results: dict) -> list[str]:
+    """A warning, when tags are too sparse for a stable held-out interval."""
+    skipped = results["heldout"]["queries_skipped"]
+    scored = {split: results["queries"][split] - skipped[split] for split in SPLITS}
+    if min(scored.values()) >= MIN_SCORED_QUERIES:
+        return []
+    return [
+        f"**Tags are sparse:** only {scored['validation']} validation and "
+        f"{scored['test']} test queries have a seed with two or more tags, so the "
+        "held-out tag intervals are wide and rest on few queries. Read that metric "
+        "as weak evidence, and do not rank rankers whose intervals overlap.",
+        "",
+    ]
+
+
 def render_report(
     results: dict, version: dict, report_date: date, queries_path: str
 ) -> str:
@@ -421,6 +563,13 @@ def render_report(
         "Cells are the mean with a bootstrap 95% interval "
         f"({results['bootstrap_resamples']} resamples over queries).",
         "",
+        f"Held-out tags: {results['heldout']['fraction']:.0%} of each track's tags "
+        f"are hidden from the rankers, split with seed {results['heldout']['seed']}. "
+        "Queries skipped because the seed has fewer than two tags: "
+        f"{results['heldout']['queries_skipped']['validation']} validation, "
+        f"{results['heldout']['queries_skipped']['test']} test.",
+        "",
+        *_sparsity_note(results),
         "## Catalog version",
         "",
         f"- Dataset: {version['dataset']} (see `docs/catalog.md`)",
@@ -445,6 +594,8 @@ def render_report(
                 f"| {name} | {_cell(scores['validation'][metric])} "
                 f"| {_cell(scores['test'][metric])} |"
             )
+        if metric in METRIC_NOTES:
+            lines += ["", METRIC_NOTES[metric]]
         if metric == "popularity":
             lines += ["", f"Catalog mean: {results['catalog_mean_popularity']:.3f}."]
         if metric == "adherence":

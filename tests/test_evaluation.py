@@ -14,6 +14,7 @@ from musicdiscovery.evaluation import (
     METRICS,
     Context,
     EvaluationError,
+    HeldOut,
     PopularRanker,
     Query,
     RandomRanker,
@@ -245,6 +246,11 @@ def test_render_handles_missing_values():
         "bootstrap_resamples": 5,
         "queries": {"validation": 1, "test": 1},
         "queries_with_axis_likes": 0,
+        "heldout": {
+            "fraction": 0.5,
+            "seed": 1,
+            "queries_skipped": {"validation": 0, "test": 0},
+        },
         "catalog_mean_popularity": 0.5,
         "rankers": {"r": per_split},
     }
@@ -298,3 +304,171 @@ def test_paths_outside_working_directory_are_refused(
         write_queries(outside, queries, catalog)
     with pytest.raises(EvaluationError, match="outside the working directory"):
         load_queries(Path("..") / "q.json", catalog)
+
+
+# --- held-out tags -----------------------------------------------------------
+
+
+def make_tagged_frame(per_group=40, seed=3):
+    """Two genres x two styles; a track carries 6 of its style's 10 tags."""
+    frame = make_frame(per_genre=2 * per_group, seed=seed).sort_values("track_id")
+    rng = np.random.default_rng(seed)
+    tags = []
+    for position, genre in enumerate(frame["genre_top"]):
+        style = (position // per_group) % 2
+        pool = [f"{genre}-{style}-{n}" for n in range(10)]
+        tags.append(sorted(rng.choice(pool, size=6, replace=False).tolist()))
+    frame["tags"] = tags
+    frame.loc[frame.index[:3], "tags"] = pd.Series(
+        [[], ["solo"], []], index=frame.index[:3]
+    )
+    return frame
+
+
+@pytest.fixture(scope="module")
+def tagged():
+    return Catalog(make_tagged_frame())
+
+
+@pytest.fixture(scope="module")
+def tagged_queries(tagged):
+    return generate_queries(tagged, per_split=30)
+
+
+def test_holdout_is_deterministic_disjoint_and_half(tagged):
+    a, b = HeldOut(tagged), HeldOut(tagged)
+    assert a.visible == b.visible and a.held == b.held
+    for tags, visible, held in zip(
+        tagged.frame["tags"], a.visible, a.held, strict=True
+    ):
+        assert visible | held == frozenset(tags)
+        assert not visible & held
+        if len(tags) >= 2:
+            assert len(held) == len(tags) // 2
+        else:
+            assert not held
+    other = HeldOut(tagged, seed=1)
+    assert other.held != a.held
+    shuffled = Catalog(tagged.frame.sample(frac=1, random_state=4))
+    again = HeldOut(shuffled)
+    for track_id, held in zip(shuffled.track_ids, again.held, strict=True):
+        assert held == a.held[tagged.position[int(track_id)]]
+    with pytest.raises(EvaluationError, match="fraction"):
+        HeldOut(tagged, fraction=1.0)
+
+
+class Spy:
+    """Wraps a ranker and records everything it is shown."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.catalogs = []
+        self.preferences = []
+
+    def rank(self, preference, catalog):
+        self.catalogs.append(catalog)
+        self.preferences.append(preference)
+        return self.inner.rank(preference, catalog)
+
+
+def test_held_out_tags_are_never_visible_to_a_ranker(
+    monkeypatch, tagged, tagged_queries
+):
+    from musicdiscovery import evaluation
+
+    holdout = HeldOut(tagged)
+    original = dict(evaluation.RANKERS)
+    spies = {}
+
+    def factory(name):
+        def build():
+            spies[name] = Spy(original[name]())
+            return spies[name]
+
+        return build
+
+    monkeypatch.setattr(evaluation, "RANKERS", {n: factory(n) for n in original})
+    evaluate(tagged, tagged_queries, list(original), resamples=10)
+    assert set(spies) == set(original)
+    blind_runs = 0
+    for spy in spies.values():
+        for catalog, preference in zip(spy.catalogs, spy.preferences, strict=True):
+            if catalog is tagged:
+                continue
+            blind_runs += 1
+            for track_id, tags in zip(
+                catalog.track_ids, catalog.frame["tags"], strict=True
+            ):
+                row = tagged.position[int(track_id)]
+                assert set(tags) == holdout.visible[row]
+                assert not set(tags) & holdout.held[row]
+            seed_row = tagged.position[preference.seeds[0]]
+            for quality in preference.likes:
+                if quality.kind == "tag":
+                    assert quality.name not in holdout.held[seed_row]
+    assert blind_runs == len(original) * len(tagged_queries)
+
+
+def test_full_tags_would_score_higher_than_visible_tags(tagged, tagged_queries):
+    holdout = HeldOut(tagged)
+    view = holdout.view()
+    ranker = make_ranker("hybrid")
+    full, blind = [], []
+    for query in tagged_queries:
+        seed_row = tagged.position[query.seed]
+        if not holdout.held[seed_row]:
+            continue
+        for catalog, scores in ((tagged, full), (view, blind)):
+            results = ranker.rank(holdout.preference(query, 10), catalog)
+            rows = np.array([catalog.position[r.track_id] for r in results])
+            scores.append(holdout.overlap(seed_row, rows))
+    assert np.mean(full) > np.mean(blind)
+
+
+def test_heldout_metric_orders_rankers_and_counts_skips(tagged, tagged_queries):
+    results = evaluate(tagged, tagged_queries, ["hybrid", "random"], resamples=100)
+    for split in ("validation", "test"):
+        hybrid = results["rankers"]["hybrid"][split]["heldout_tags"]
+        random = results["rankers"]["random"][split]["heldout_tags"]
+        assert hybrid["lo"] <= hybrid["mean"] <= hybrid["hi"]
+        assert hybrid["mean"] > random["mean"]
+    held = results["heldout"]
+    assert held["fraction"] == 0.5
+    assert set(held["queries_skipped"]) == {"validation", "test"}
+    again = evaluate(tagged, tagged_queries, ["hybrid", "random"], resamples=100)
+    assert again == results
+
+
+def test_overlap_is_nan_without_held_out_tags(tagged):
+    holdout = HeldOut(tagged)
+    assert np.isnan(holdout.overlap(0, np.array([1, 2])))
+    seed = next(i for i, h in enumerate(holdout.held) if h)
+    assert np.isnan(holdout.overlap(seed, np.array([], dtype=int)))
+    assert holdout.overlap(seed, np.array([seed])) == 1.0
+
+
+def test_report_states_holdout_and_label_visibility(tmp_path, tagged, tagged_queries):
+    path = tmp_path / "queries.json"
+    write_queries(path, tagged_queries, tagged)
+    md, js = run(tagged, path, ["baseline", "random"], tmp_path, date(2026, 10, 5))
+    text = md.read_text()
+    assert "## Same-genre rate@10" in text
+    assert "## Held-out tag overlap@10" in text
+    assert "Genre precision@10" not in text
+    assert "50% of each track's tags" in text
+    assert "seed 20261006" in text
+    assert text.count("which no ranker sees") == 1
+    assert "`baseline` (audio features only)" in text
+    assert json.loads(js.read_text())["heldout"]["seed"] == 20261006
+
+
+def test_report_warns_when_tags_are_too_sparse(tmp_path, tagged, tagged_queries):
+    path = tmp_path / "queries.json"
+    write_queries(path, tagged_queries, tagged)
+    sparse = Catalog(tagged.frame.assign(tags=[[] for _ in range(len(tagged))]))
+    write_queries(path, generate_queries(sparse, per_split=30), sparse)
+    md, _ = run(sparse, path, ["random"], tmp_path, date(2026, 10, 5))
+    assert "**Tags are sparse:** only 0 validation and 0 test queries" in md.read_text()
+    write_queries(path, generate_queries(tagged, per_split=60), tagged)
+    md, _ = run(tagged, path, ["random"], tmp_path, date(2026, 10, 5))
+    assert "Tags are sparse" not in md.read_text()
