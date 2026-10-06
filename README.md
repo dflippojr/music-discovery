@@ -30,10 +30,14 @@ pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.
 musicdiscovery --version
 ```
 
-`ingest`, `recommend`, and `evaluate` currently exit with status 1 and a
-"not implemented yet" message. Tests use synthetic fixtures only; datasets
+`musicdiscovery ingest` downloads the FMA metadata archive (about 342 MiB),
+verifies its checksum and writes the cleaned `small` catalog under `data/`;
+see [docs/catalog.md](docs/catalog.md). `recommend` and `evaluate` currently
+exit with status 1 and a "not implemented yet" message. Tests use synthetic fixtures only; datasets
 and audio must never be committed. Store raw and generated datasets in `data/`.
 
 ## License
 
-Code is MIT licensed (see [LICENSE](LICENSE)). Catalog data keeps its own license, which will be recorded in `docs/catalog.md` once the catalog is chosen.
+Code is MIT licensed (see [LICENSE](LICENSE)). Catalog data (FMA metadata and features) is CC BY 4.0; see [docs/catalog.md](docs/catalog.md) for the source, checksums and attribution.
+
+Track metadata and audio features come from the Free Music Archive dataset (FMA), Defferrard et al., ISMIR 2017, <https://github.com/mdeff/fma>, licensed under CC BY 4.0.
