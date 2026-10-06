@@ -5,7 +5,7 @@
 
 import { Rankers } from "./ranker.js";
 import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, newSessionId, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
-import { buildPreference, h, makeIds, QualityPicker, randomRow, SeedPicker, thumbButton } from "./ui.js";
+import { buildPreference, DeferredSources, h, makeIds, QualityPicker, randomRow, SeedPicker, thumbButton } from "./ui.js";
 
 const PREFERENCES = [
   { value: "A", text: "List A" },
@@ -18,6 +18,7 @@ class Study {
     this.root = root;
     this.data = data;
     this.rankers = new Rankers(data);
+    this.sources = new DeferredSources(data);
     this.orders = balancedOrders(TASK_COUNT, randomRow);
     this.session = { id: newSessionId((bytes) => crypto.getRandomValues(bytes)), startedAt: timestamp(), tasks: [] };
     this.id = makeIds();
@@ -120,8 +121,9 @@ class Study {
     const title = data.titles[row] || `Track ${result.trackId}`;
     const genre = data.genre[row] >= 0 ? data.genres[data.genre[row]] : "";
     const links = [];
-    if (data.sources[row]) links.push(h("a", { href: data.sources[row], target: "_blank", rel: "noopener noreferrer", text: "Source page (FMA)" }));
     if (data.licenses[data.license[row]]) links.push(h("a", { href: data.licenses[data.license[row]], target: "_blank", rel: "noopener noreferrer", text: "License" }));
+    const linkBox = h("span", { class: "md-links" }, links);
+    this.sources.fill(linkBox, row);
     const onRate = (value) => {
       result.rating = result.rating === value ? null : value;
       paint();
@@ -142,7 +144,7 @@ class Study {
       "li",
       { class: "md-result" },
       h("div", { class: "md-result-head" }, h("span", { class: "md-rank", "aria-hidden": "true", text: String(rank) }), h("div", {}, h("p", { class: "md-title", text: title }), h("p", { class: "md-meta", text: [data.artists[data.artist[row]], genre].filter(Boolean).join(" · ") }))),
-      h("div", { class: "md-result-foot" }, h("span", { class: "md-links" }, links), h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
+      h("div", { class: "md-result-foot" }, linkBox, h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
       h("div", { class: "md-new" }, fresh, h("label", { for: fresh.id }, "New to me", h("span", { class: "md-sr", text: ` for ${title}` }))),
     );
   }
@@ -190,7 +192,9 @@ async function mount(root) {
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    root.study = new Study(root, await response.json());
+    const study = new Study(root, await response.json());
+    root.study = study;
+    study.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
   } catch (error) {
     root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The study could not load its catalog (${error.message}).` }));
   } finally {

@@ -13,7 +13,7 @@ fi
 bundle=$1
 target=$2
 
-for name in index.html study.html demo.css demo.js study.js study-lib.js ui.js ranker.js catalog.json; do
+for name in index.html study.html demo.css demo.js study.js study-lib.js ui.js ranker.js catalog.json sources.json; do
   if [ ! -f "$bundle/$name" ]; then
     echo "vendor-into-site: $bundle/$name is missing; run musicdiscovery export-demo first" >&2
     exit 1
@@ -21,7 +21,7 @@ for name in index.html study.html demo.css demo.js study.js study-lib.js ui.js r
 done
 
 mkdir -p "$target"
-for name in index.html study.html demo.css demo.js study.js study-lib.js ui.js ranker.js catalog.json; do
+for name in index.html study.html demo.css demo.js study.js study-lib.js ui.js ranker.js catalog.json sources.json; do
   cp "$bundle/$name" "$target/$name"
 done
 echo "vendor-into-site: copied the demo bundle into $target"

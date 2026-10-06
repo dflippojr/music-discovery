@@ -20,22 +20,29 @@ python -m http.server -d build/demo 8000    # open http://localhost:8000/
 | `demo.js`, `ranker.js`, `ui.js` | the UI, the JavaScript port of both rankers and shared UI pieces (ES modules) |
 | `study.html`, `study.js`, `study-lib.js` | the blind listener study page (see below) |
 | `demo.css` | styles, scoped to `.md-demo`; light and dark by `prefers-color-scheme` |
-| `catalog.json` | compact catalog and precomputed data (see below) |
+| `catalog.json` | compact catalog and precomputed data (see below); the first download |
+| `sources.json` | FMA source page URL per track; fetched after the page is ready |
 | `parity.json` | expected top 10 from Python on fixed queries; for tests, not vendored |
 
 `export-demo` prints each file's raw and gzip size and the bundle total, and
-exits non-zero if the compressed bundle reaches 2 MiB (the target for the small
-catalog). The generated bundle is never committed.
+exits non-zero if the compressed bundle (both data files) reaches 2 MiB (the
+target for the small catalog). It also reports the first-load size (everything
+but `sources.json`) and the deferred size separately. The generated bundle is never committed.
 
 ## What is in `catalog.json`
 
-Per track: id, title, artist, top genre, license URL and source page link. Then
+Per track: id, title, artist, top genre and license URL. Then
 the data each ranker needs, as base64 little-endian integers:
 
 - the 20-dimension PCA projection the baseline uses, as 16-bit integers with one
   scale, plus the three clipped axis z-scores (energy, brightness, noisiness);
 - the hybrid's TF-IDF genre and tag matrix in sparse form, the popularity
   percentile, and the weights from `hybrid_config.json`.
+
+Source page links are in `sources.json` (`{"version", "sources"}`, in catalog order),
+which the page fetches after it is ready: results show their license link at once and
+gain the source link when the file arrives. If it fails to load, the links are left out.
+Vendor both files together.
 
 Quantisation error is far below the score gaps that decide the top 10, and the
 parity test guards that.
