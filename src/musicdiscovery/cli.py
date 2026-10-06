@@ -5,11 +5,21 @@ import json
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 from musicdiscovery import __version__
 from musicdiscovery.catalog import Catalog, CatalogError
-from musicdiscovery.ingest import CATALOG_NAME, IngestError, ingest
+from musicdiscovery.evaluation import (
+    DEFAULT_QUERIES,
+    DEFAULT_REPORT_DIR,
+    RANKERS,
+    EvaluationError,
+    generate_queries,
+    run,
+    write_queries,
+)
+from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, ingest
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
 from musicdiscovery.ranking import BaselineRanker
 
@@ -50,6 +60,30 @@ def _run_recommend(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_evaluate(args: argparse.Namespace) -> int:
+    try:
+        catalog_dir = args.data_dir / "catalog"
+        catalog = Catalog.load(catalog_dir / CATALOG_NAME)
+        if args.generate_queries:
+            write_queries(args.queries, generate_queries(catalog), catalog)
+            print(f"evaluate: wrote queries to {args.queries}")
+            return 0
+        report_date = date.fromisoformat(args.date) if args.date else date.today()
+        report, numbers = run(
+            catalog,
+            args.queries,
+            args.ranker or ["baseline", "random", "popular"],
+            args.out_dir,
+            report_date,
+            catalog_dir / MANIFEST_NAME,
+        )
+    except (CatalogError, EvaluationError, PreferenceError, ValueError) as error:
+        print(f"evaluate: {error}", file=sys.stderr)
+        return 1
+    print(f"evaluate: wrote {report} and {numbers}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse commands and report features that are not implemented yet."""
     parser = argparse.ArgumentParser(prog="musicdiscovery", description=__doc__)
@@ -87,7 +121,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--exclude-seed-artist", action="store_true", help="skip the seed artist"
     )
     recommend.add_argument("--json", action="store_true", help="print JSON")
-    subparsers.add_parser("evaluate", help="Evaluate (not implemented yet)")
+    evaluate = subparsers.add_parser(
+        "evaluate", help="Score rankers on stored queries and write a report"
+    )
+    evaluate.add_argument("--data-dir", type=Path, default=Path("data"))
+    evaluate.add_argument(
+        "--ranker",
+        action="append",
+        choices=sorted(RANKERS),
+        help="ranker to score; repeat for several (default: all)",
+    )
+    evaluate.add_argument("--queries", type=Path, default=DEFAULT_QUERIES)
+    evaluate.add_argument("--out-dir", type=Path, default=DEFAULT_REPORT_DIR)
+    evaluate.add_argument("--date", help="report date, YYYY-MM-DD (default: today)")
+    evaluate.add_argument(
+        "--generate-queries",
+        action="store_true",
+        help="write the seeded query file for this catalog and exit",
+    )
 
     args = parser.parse_args(argv)
     if args.command is None:
@@ -99,6 +150,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "recommend":
         return _run_recommend(args)
+
+    if args.command == "evaluate":
+        return _run_evaluate(args)
 
     print(f"{args.command}: not implemented yet", file=sys.stderr)
     return 1
