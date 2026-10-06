@@ -7,8 +7,11 @@ downloaded. See ``docs/catalog.md`` for the source, checksum and licenses.
 import ast
 import csv
 import hashlib
+import http.client
 import json
 import shutil
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
@@ -24,6 +27,10 @@ INGEST_VERSION = 1
 ARCHIVE_NAME = "fma_metadata.zip"
 CATALOG_NAME = "catalog.parquet"
 MANIFEST_NAME = "catalog.json"
+
+DOWNLOAD_TIMEOUT_SECONDS = 30
+DOWNLOAD_ATTEMPTS = 3
+_BACKOFF_SECONDS = 2
 
 _ARCHIVE_DIR = "fma_metadata/"
 _CHUNK_BYTES = 1 << 20
@@ -53,15 +60,48 @@ def sha1_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _download_once(url: str, partial: Path) -> None:
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+        with partial.open("wb") as out:
+            shutil.copyfileobj(response, out, _CHUNK_BYTES)
+
+
+def _is_transient(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500
+    return True
+
+
+def _download(url: str, target: Path) -> None:
+    """Download to ``target`` via a fresh ``.part`` file, retrying transient errors."""
+    partial = target.with_suffix(".part")
+    cause: Exception | None = None
+    attempts = 0
+    while attempts < DOWNLOAD_ATTEMPTS:
+        if attempts:
+            time.sleep(_BACKOFF_SECONDS * 2 ** (attempts - 1))
+        attempts += 1
+        partial.unlink(missing_ok=True)
+        try:
+            _download_once(url, partial)
+            partial.replace(target)
+            return
+        except (OSError, http.client.HTTPException) as error:
+            cause = error
+            partial.unlink(missing_ok=True)
+            if not _is_transient(error):
+                break
+    raise IngestError(
+        f"could not download {url} after {attempts} attempt(s): {cause}"
+    ) from cause
+
+
 def fetch_archive(url: str, sha1: str, cache_dir: Path) -> Path:
     """Return the verified archive, downloading it only when not cached."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     target = cache_dir / ARCHIVE_NAME
     if not target.exists():
-        partial = target.with_suffix(".part")
-        with urllib.request.urlopen(url) as response, partial.open("wb") as out:
-            shutil.copyfileobj(response, out, _CHUNK_BYTES)
-        partial.replace(target)
+        _download(url, target)
     actual = sha1_of(target)
     if actual != sha1:
         target.unlink()
