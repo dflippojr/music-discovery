@@ -23,5 +23,6 @@ Never commit datasets or audio, whether raw or generated. Keep datasets under
 the ignored `data/` directory. Tests must use synthetic fixtures only and must
 not download catalog data or call external services.
 
-SonarCloud settings live in `sonar-project.properties`. The SonarCloud workflow
-is tracked separately in issue #3.
+SonarCloud settings live in `sonar-project.properties`. The SonarCloud workflow is
+`.github/workflows/sonar.yml`; it runs the tests for coverage and the quality gate
+fails the check. CI itself is `.github/workflows/ci.yml`.
