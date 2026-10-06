@@ -16,14 +16,6 @@ def test_installed_version():
     assert result.stderr == ""
 
 
-@pytest.mark.parametrize("command", ["evaluate"])
-def test_placeholder(command, capsys):
-    assert main([command]) == 1
-    captured = capsys.readouterr()
-    assert captured.err == f"{command}: not implemented yet\n"
-    assert captured.out == ""
-
-
 @pytest.mark.parametrize("argv", [[], ["--help"], ["ingest", "--help"]])
 def test_help(argv, capsys):
     if argv:
