@@ -20,6 +20,9 @@ musicdiscovery = "musicdiscovery.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+musicdiscovery = ["hybrid_config.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"

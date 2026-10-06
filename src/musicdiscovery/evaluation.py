@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from musicdiscovery.catalog import Catalog
+from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
 from musicdiscovery.ranking import BaselineRanker, Ranker, Recommendation
 
@@ -95,6 +96,7 @@ class PopularRanker:
 
 RANKERS: dict[str, Callable[[], Ranker]] = {
     "baseline": BaselineRanker,
+    "hybrid": HybridRanker,
     "random": RandomRanker,
     "popular": PopularRanker,
 }
@@ -213,7 +215,7 @@ METRICS: dict[str, str] = {
 }
 
 
-class _Context:
+class Context:
     """Per-catalog lookups shared by every query and ranker."""
 
     def __init__(self, catalog: Catalog):
@@ -236,7 +238,7 @@ def _jaccard(a: frozenset, b: frozenset) -> float:
 
 
 def query_metrics(
-    ctx: _Context, query: Query, results: Sequence[Recommendation], k: int = K
+    ctx: Context, query: Query, results: Sequence[Recommendation], k: int = K
 ) -> tuple[dict[str, float], np.ndarray]:
     """Per-query metric values (nan where undefined) and the recommended rows."""
     catalog = ctx.catalog
@@ -310,7 +312,7 @@ def evaluate(
     resamples: int = BOOTSTRAP_RESAMPLES,
 ) -> dict:
     """Score each ranker on every query; return the numbers as a JSON-ready dict."""
-    ctx = _Context(catalog)
+    ctx = Context(catalog)
     rankers = {name: make_ranker(name) for name in ranker_names}
     table: dict[str, dict] = {}
     for name, ranker in rankers.items():
@@ -479,6 +481,11 @@ def run(
     md_path = out_dir / f"{stem}.md"
     json_path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     md_path.write_text(
-        render_report(results, version, report_date, queries_path.as_posix())
+        render_report(
+            results,
+            version,
+            report_date,
+            queries_path.relative_to(Path.cwd().resolve()).as_posix(),
+        )
     )
     return md_path, json_path

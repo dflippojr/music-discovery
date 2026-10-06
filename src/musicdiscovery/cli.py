@@ -16,12 +16,13 @@ from musicdiscovery.evaluation import (
     RANKERS,
     EvaluationError,
     generate_queries,
+    make_ranker,
     run,
     write_queries,
 )
+from musicdiscovery.hybrid import HybridConfigError
 from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, ingest
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
-from musicdiscovery.ranking import BaselineRanker
 
 
 def _run_ingest(data_dir: Path) -> int:
@@ -47,8 +48,8 @@ def _run_recommend(args: argparse.Namespace) -> int:
         preference = Preference.from_strings(
             args.seed, args.like, args.dislike, args.k, args.exclude_seed_artist
         )
-        results = BaselineRanker().rank(preference, catalog)
-    except (CatalogError, PreferenceError) as error:
+        results = make_ranker(args.ranker).rank(preference, catalog)
+    except (CatalogError, HybridConfigError, PreferenceError) as error:
         print(f"recommend: {error}", file=sys.stderr)
         return 1
     if args.json:
@@ -72,12 +73,18 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         report, numbers = run(
             catalog,
             args.queries,
-            args.ranker or ["baseline", "random", "popular"],
+            args.ranker or ["baseline", "hybrid", "random", "popular"],
             args.out_dir,
             report_date,
             catalog_dir / MANIFEST_NAME,
         )
-    except (CatalogError, EvaluationError, PreferenceError, ValueError) as error:
+    except (
+        CatalogError,
+        EvaluationError,
+        HybridConfigError,
+        PreferenceError,
+        ValueError,
+    ) as error:
         print(f"evaluate: {error}", file=sys.stderr)
         return 1
     print(f"evaluate: wrote {report} and {numbers}")
@@ -119,6 +126,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     recommend.add_argument("-k", type=int, default=DEFAULT_K, help="result count")
     recommend.add_argument(
         "--exclude-seed-artist", action="store_true", help="skip the seed artist"
+    )
+    recommend.add_argument(
+        "--ranker",
+        choices=["baseline", "hybrid"],
+        default="baseline",
+        help="ranker to use (default: baseline)",
     )
     recommend.add_argument("--json", action="store_true", help="print JSON")
     evaluate = subparsers.add_parser(
