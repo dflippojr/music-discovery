@@ -121,14 +121,57 @@ describe("demo page", () => {
     await close(page, context);
   });
 
-  test("every result explains itself and links to its source", async () => {
+  test("every result explains itself and links to its source and license", async () => {
     const { context, page } = await open();
     await pickSeed(page);
+    const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+    const { sources } = JSON.parse(readFileSync(join(bundle, "sources.json"), "utf8"));
+    assert.equal("sources" in catalog, false);
     for (const item of await page.locator(".md-result").all()) {
       assert.ok((await item.locator(".md-why li").count()) >= 1);
-      assert.match(await item.getByRole("link", { name: /Source page/ }).getAttribute("href"), /^https:/);
+      const link = item.getByRole("link", { name: /Source page/ });
+      await link.waitFor();
+      const row = catalog.titles.indexOf(await item.locator(".md-title").textContent());
+      assert.equal(await link.getAttribute("href"), sources[row]);
+      assert.match(await item.getByRole("link", { name: "License" }).getAttribute("href"), /^https:/);
     }
     await close(page, context);
+  });
+
+  test("results show without the source link until sources.json arrives, then gain it", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    let release;
+    const gate = new Promise((done) => {
+      release = done;
+    });
+    await page.route("**/sources.json", async (route) => {
+      await gate;
+      await route.continue();
+    });
+    await page.goto(base);
+    await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+    await pickSeed(page);
+    const items = page.locator(".md-result");
+    assert.equal(await items.count(), 10);
+    assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 0);
+    assert.equal(await page.getByRole("link", { name: "License" }).count(), 10);
+    release();
+    await page.getByRole("link", { name: /Source page/ }).first().waitFor();
+    assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 10);
+    await context.close();
+  });
+
+  test("results still work if sources.json fails to load", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.route("**/sources.json", (route) => route.fulfill({ status: 404 }));
+    await page.goto(base);
+    await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+    await pickSeed(page);
+    assert.equal(await page.getByRole("link", { name: "License" }).count(), 10);
+    assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 0);
+    await context.close();
   });
 
   test("chips cycle like, dislike, clear from the keyboard and change the results", async () => {

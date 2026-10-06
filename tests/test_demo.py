@@ -38,9 +38,19 @@ def ints(blob, dtype):
 
 def test_export_writes_every_file(bundle):
     out, size = bundle
-    for name in (*demo.STATIC_FILES, demo.CATALOG_FILE, demo.PARITY_FILE):
+    for name in (
+        *demo.STATIC_FILES,
+        demo.CATALOG_FILE,
+        demo.SOURCES_FILE,
+        demo.PARITY_FILE,
+    ):
         assert (out / name).is_file()
-    assert set(size.files) == {*demo.STATIC_FILES, demo.CATALOG_FILE}
+    assert set(size.files) == {
+        *demo.STATIC_FILES,
+        demo.CATALOG_FILE,
+        demo.SOURCES_FILE,
+    }
+    assert size.initial + size.deferred == size.compressed
     assert 0 < size.compressed < size.raw < demo.TARGET_BYTES
 
 
@@ -49,8 +59,11 @@ def test_catalog_arrays_line_up(bundle, catalog):
     n = len(catalog)
     assert data["count"] == n
     assert data["ids"] == [int(t) for t in catalog.track_ids]
-    for key in ("titles", "artist", "genre", "license", "sources"):
+    for key in ("titles", "artist", "genre", "license"):
         assert len(data[key]) == n
+    assert "sources" not in data
+    sources = json.loads((bundle[0] / demo.SOURCES_FILE).read_text())
+    assert sources["sources"] == [""] * n  # the synthetic frame has no source URLs
     base = data["baseline"]
     projected = ints(base["projected"], "<i2")
     assert projected.size == n * base["dims"]
@@ -164,7 +177,7 @@ def test_vendor_script_copies_runtime_files(bundle, tmp_path):
     )
     assert run.returncode == 0, run.stderr
     assert sorted(p.name for p in target.iterdir()) == sorted(
-        [*demo.STATIC_FILES, demo.CATALOG_FILE]
+        [*demo.STATIC_FILES, demo.CATALOG_FILE, demo.SOURCES_FILE]
     )
     empty = subprocess.run(
         ["sh", str(script), str(tmp_path), str(tmp_path / "t")],

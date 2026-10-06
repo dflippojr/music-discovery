@@ -111,6 +111,10 @@ def _run_export_demo(args: argparse.Namespace) -> int:
         f"{size.compressed / 1024:.1f} KiB compressed "
         f"(target under {TARGET_BYTES // 1024} KiB), wrote {args.out_dir}"
     )
+    print(
+        f"export-demo: first load {size.initial / 1024:.1f} KiB compressed, "
+        f"deferred {size.deferred / 1024:.1f} KiB"
+    )
     if size.compressed >= TARGET_BYTES:
         print("export-demo: bundle is over the size target", file=sys.stderr)
         return 1

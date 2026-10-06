@@ -3,7 +3,7 @@
 // in the browser from catalog.json; ratings never leave the page unless exported.
 
 import { Rankers } from "./ranker.js";
-import { buildPreference, h, makeIds, QualityPicker, SeedPicker, thumbButton } from "./ui.js";
+import { buildPreference, DeferredSources, h, makeIds, QualityPicker, SeedPicker, thumbButton } from "./ui.js";
 
 const RANKER_LABELS = {
   hybrid: "Hybrid",
@@ -18,6 +18,7 @@ class Demo {
   constructor(root, data) {
     this.root = root;
     this.data = data;
+    this.sources = new DeferredSources(data);
     this.rankers = new Rankers(data);
     this.ranker = "hybrid";
     this.ratings = new Map(); // context key -> rating record
@@ -104,6 +105,7 @@ class Demo {
     const context = JSON.stringify([this.ranker, preference]);
     this.status.textContent = `${picks.length} recommendations from the ${RANKER_LABELS[this.ranker].toLowerCase()} ranker for ${this.seed.labels[this.seed.row]}.`;
     this.painters = new Map();
+    this.sources.slots = [];
     this.results.replaceChildren(...picks.map((pick, i) => this.resultItem(pick, i + 1, preference, context)));
   }
 
@@ -113,12 +115,11 @@ class Demo {
     const title = data.titles[row] || `Track ${pick.id}`;
     const genre = data.genre[row] >= 0 ? data.genres[data.genre[row]] : "";
     const links = [];
-    if (data.sources[row]) {
-      links.push(h("a", { href: data.sources[row], target: "_blank", rel: "noopener noreferrer", text: "Source page (FMA)" }));
-    }
     if (data.licenses[data.license[row]]) {
       links.push(h("a", { href: data.licenses[data.license[row]], target: "_blank", rel: "noopener noreferrer", text: "License" }));
     }
+    const linkBox = h("span", { class: "md-links" }, links);
+    this.sources.fill(linkBox, row);
     const key = `${context}|${pick.id}`;
     const onRate = (value) => this.rate(key, value, pick, preference);
     const up = thumbButton(1, "Thumbs up", title, onRate);
@@ -135,7 +136,7 @@ class Demo {
       { class: "md-result" },
       h("div", { class: "md-result-head" }, h("span", { class: "md-rank", "aria-hidden": "true", text: String(rank) }), h("div", {}, h("p", { class: "md-title", text: title }), h("p", { class: "md-meta", text: [data.artists[data.artist[row]], genre].filter(Boolean).join(" · ") }))),
       h("ul", { class: "md-why", "aria-label": "Why this track" }, pick.explanations.map((text) => h("li", { text }))),
-      h("div", { class: "md-result-foot" }, h("span", { class: "md-links" }, links), h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
+      h("div", { class: "md-result-foot" }, linkBox, h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
     );
   }
 
@@ -177,6 +178,7 @@ async function mount(root) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const demo = new Demo(root, await response.json());
     root.demo = demo;
+    demo.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
   } catch (error) {
     root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The demo could not load its catalog (${error.message}).` }));
   } finally {

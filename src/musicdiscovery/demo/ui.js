@@ -56,6 +56,44 @@ export function thumbIcon(down) {
   return svg;
 }
 
+/** The source page link for a result; it is a separate element so it can arrive after the result. */
+export function sourceLink(href) {
+  return h("a", { href, target: "_blank", rel: "noopener noreferrer", text: "Source page (FMA)" });
+}
+
+/**
+ * Source page URLs live in their own file so the first download stays small. Results show their
+ * license link at once; `fill` adds the source link now or when `sources.json` arrives.
+ * A failed fetch leaves results without the source link rather than breaking the page.
+ */
+export class DeferredSources {
+  constructor(data) {
+    this.data = data;
+    this.slots = [];
+  }
+
+  /** Fetch the file; call this once the UI is on screen. */
+  load(url) {
+    this.ready = fetch(url)
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      .then((body) => {
+        this.data.sources = body.sources;
+        for (const { element, row } of this.slots) this.add(element, row);
+      })
+      .catch(() => {});
+  }
+
+  add(element, row) {
+    const href = this.data.sources?.[row];
+    if (href) element.prepend(sourceLink(href));
+  }
+
+  fill(element, row) {
+    if (this.data.sources) this.add(element, row);
+    else this.slots.push({ element, row });
+  }
+}
+
 export function trackLabel(data, row) {
   const { titles, artists, artist, ids } = data;
   return `${titles[row] || `Track ${ids[row]}`} — ${artists[artist[row]] || "Unknown artist"}`;

@@ -25,7 +25,9 @@ from musicdiscovery.preference import AXES, Preference
 
 FORMAT_VERSION = 1
 CATALOG_FILE = "catalog.json"
+SOURCES_FILE = "sources.json"  # fetched after the page is ready
 PARITY_FILE = "parity.json"
+DEFERRED_FILES = (SOURCES_FILE,)
 STATIC_FILES = (
     "index.html",
     "study.html",
@@ -62,6 +64,18 @@ class BundleSize:
     @property
     def compressed(self) -> int:
         return sum(packed for _, packed in self.files.values())
+
+    @property
+    def deferred(self) -> int:
+        """Compressed bytes fetched after the page is ready."""
+        return sum(
+            packed for name, (_, packed) in self.files.items() if name in DEFERRED_FILES
+        )
+
+    @property
+    def initial(self) -> int:
+        """Compressed bytes the page needs before it is ready."""
+        return self.compressed - self.deferred
 
 
 def _blob(array: np.ndarray, dtype: str) -> str:
@@ -128,7 +142,6 @@ def build_catalog(catalog: Catalog) -> dict:
         "genre": [genres.index(g) if g in genres else -1 for g in genre_names],
         "licenses": licenses,
         "license": license_index,
-        "sources": _text(frame, "source_url"),
         "chips": {"genres": genres, "tags": [t for t, _ in top_tags]},
         "axes": [
             {"name": a, "up": AXES[a].up, "down": AXES[a].down} for a in axis_names
@@ -160,6 +173,14 @@ def build_catalog(catalog: Catalog) -> dict:
             "poolSize": config.pool_size,
             "varietyText": VARIETY_TEXT,
         },
+    }
+
+
+def build_sources(catalog: Catalog) -> dict:
+    """Source page URL per track, in catalog order; kept out of the first download."""
+    return {
+        "version": FORMAT_VERSION,
+        "sources": _text(catalog.frame, "source_url"),
     }
 
 
@@ -202,7 +223,7 @@ def _write_json(path: Path, data: dict) -> None:
 def measure(out_dir: Path) -> BundleSize:
     """Raw and gzip sizes of the files a site needs (parity data excluded)."""
     sizes = {}
-    for name in (*STATIC_FILES, CATALOG_FILE):
+    for name in (*STATIC_FILES, CATALOG_FILE, SOURCES_FILE):
         raw = (out_dir / name).read_bytes()
         sizes[name] = (len(raw), len(gzip.compress(raw, 9)))
     return BundleSize(sizes)
@@ -217,5 +238,6 @@ def export_demo(catalog: Catalog, out_dir: Path) -> BundleSize:
         with resources.as_file(source.joinpath(name)) as path:
             shutil.copyfile(path, out_dir / name)
     _write_json(out_dir / CATALOG_FILE, build_catalog(catalog))
+    _write_json(out_dir / SOURCES_FILE, build_sources(catalog))
     _write_json(out_dir / PARITY_FILE, build_parity(catalog))
     return measure(out_dir)
