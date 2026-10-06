@@ -1,0 +1,27 @@
+#!/bin/sh
+# Copy the demo bundle into a directory of a static site.
+# Usage: scripts/vendor-into-site <bundle_dir> <target_dir>
+# <bundle_dir> is the output of `musicdiscovery export-demo`. The site's own
+# repository decides where the demo goes and how it is linked; this only copies
+# the runtime files (not parity.json, which is for tests).
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: $0 <bundle_dir> <target_dir>" >&2
+  exit 2
+fi
+bundle=$1
+target=$2
+
+for name in index.html demo.css demo.js ranker.js catalog.json; do
+  if [ ! -f "$bundle/$name" ]; then
+    echo "vendor-into-site: $bundle/$name is missing; run musicdiscovery export-demo first" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$target"
+for name in index.html demo.css demo.js ranker.js catalog.json; do
+  cp "$bundle/$name" "$target/$name"
+done
+echo "vendor-into-site: copied the demo bundle into $target"

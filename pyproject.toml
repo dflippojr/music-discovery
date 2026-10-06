@@ -21,7 +21,7 @@ musicdiscovery = "musicdiscovery.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-musicdiscovery = ["hybrid_config.json"]
+musicdiscovery = ["hybrid_config.json", "demo/*.html", "demo/*.css", "demo/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

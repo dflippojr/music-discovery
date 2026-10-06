@@ -90,6 +90,7 @@ class _Metadata:
         norms = np.sqrt(np.bincount(self.rows, weights=values**2, minlength=n))
         norms[norms == 0] = 1.0
         self.values = values / norms[self.rows]
+        self.tokens = list(vocabulary)
         self.size = len(vocabulary)
         self.count = n
 
