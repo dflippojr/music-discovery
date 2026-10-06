@@ -149,6 +149,9 @@ against hybrid (means; 95% bootstrap intervals are in the report):
   across more of the catalog.
 - **Tag overlap** rose slightly, with intervals that overlap.
 - The hybrid pulls a little toward popular tracks (0.53 against 0.50).
+- **A measure the rankers cannot see** was added after this report: held-out
+  tag overlap, in `reports/offline-2026-10-06.md` (see `docs/evaluation.md`).
+  Few queries have a seed with two or more tags, so its intervals are wide.
 - Everything above is proxy metrics on synthetic queries; see the Limits
   section of the report. Whether the hybrid is better for listeners is for the
   listener study (issue #8).
