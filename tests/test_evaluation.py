@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -56,6 +57,11 @@ def make_frame(per_genre=60, seed=0):
             )
             track_id += 1
     return pd.DataFrame(rows).sample(frac=1, random_state=1)
+
+
+@pytest.fixture(autouse=True)
+def in_tmp_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture(scope="module")
@@ -226,7 +232,7 @@ def test_report_has_tables_limits_and_version(tmp_path, catalog, queries):
     assert "`abc`" in text
     numbers = json.loads(js.read_text())
     assert numbers["catalog"]["ingest_version"] == 1
-    assert len(numbers["queries_sha1"]) == 40
+    assert len(numbers["queries_sha256"]) == 64
     assert set(numbers["rankers"]) == {"baseline", "random", "popular"}
 
 
@@ -278,3 +284,16 @@ def test_cli_errors(tmp_path, data_dir, capsys, extra):
 def test_cli_missing_catalog(tmp_path, capsys):
     assert main(["evaluate", "--data-dir", str(tmp_path)]) == 1
     assert "no catalog" in capsys.readouterr().err
+
+
+def test_paths_outside_working_directory_are_refused(
+    tmp_path, monkeypatch, catalog, queries
+):
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    outside = tmp_path / "elsewhere" / "q.json"
+    with pytest.raises(EvaluationError, match="outside the working directory"):
+        write_queries(outside, queries, catalog)
+    with pytest.raises(EvaluationError, match="outside the working directory"):
+        load_queries(Path("..") / "q.json", catalog)

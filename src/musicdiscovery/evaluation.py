@@ -28,6 +28,14 @@ class EvaluationError(Exception):
     """Raised when queries or rankers cannot be used."""
 
 
+def confined(path: Path) -> Path:
+    """Resolve a user-supplied path and keep it inside the working directory."""
+    resolved = (Path.cwd() / path).resolve()
+    if not resolved.is_relative_to(Path.cwd().resolve()):
+        raise EvaluationError(f"{path} is outside the working directory")
+    return resolved
+
+
 # --- reference rankers -------------------------------------------------------
 
 
@@ -152,6 +160,7 @@ def generate_queries(
 
 
 def write_queries(path: Path, queries: Sequence[Query], catalog: Catalog) -> None:
+    path = confined(path)
     payload = {
         "query_seed": QUERY_SEED,
         "k": K,
@@ -163,6 +172,7 @@ def write_queries(path: Path, queries: Sequence[Query], catalog: Catalog) -> Non
 
 
 def load_queries(path: Path, catalog: Catalog) -> list[Query]:
+    path = confined(path)
     if not path.exists():
         raise EvaluationError(
             f"no queries at {path}; create them with `musicdiscovery evaluate "
@@ -456,11 +466,13 @@ def run(
     manifest_path: Path | None = None,
 ) -> tuple[Path, Path]:
     """Evaluate and write `offline-<date>.md` and `.json`; return their paths."""
+    queries_path = confined(queries_path)
+    out_dir = confined(out_dir)
     queries = load_queries(queries_path, catalog)
     results = evaluate(catalog, queries, list(dict.fromkeys(ranker_names)))
     version = catalog_version(manifest_path, catalog)
     results["catalog"] = version
-    results["queries_sha1"] = hashlib.sha1(queries_path.read_bytes()).hexdigest()
+    results["queries_sha256"] = hashlib.sha256(queries_path.read_bytes()).hexdigest()
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"offline-{report_date.isoformat()}"
     json_path = out_dir / f"{stem}.json"
