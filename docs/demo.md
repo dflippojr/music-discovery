@@ -78,10 +78,11 @@ returned files into a report.
 This repository only delivers the bundle. To copy it into a site checkout:
 
 ```sh
-scripts/vendor-into-site build/demo ../personal-website/demo/music-discovery
+scripts/vendor-into-site build/demo "<site checkout>/public/<chosen path>"
 ```
 
-Where it is linked from, and any change to that site, happen in its own repository.
+The site's repository decides the path (it must be inside what that site deploys)
+and any header or cache rules, as well as where the demo is linked from.
 To embed it on another page, load `demo.css`, add `<div id="music-discovery-demo"
 data-music-discovery></div>` and `<script type="module" src="…/demo.js">`; the
 catalog is fetched from next to `demo.js` (or from `data-catalog`).

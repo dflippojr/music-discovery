@@ -8,13 +8,26 @@ No streaming-service API is involved; the catalog and its license are chosen up 
 
 ## Status
 
-Planning. Nothing is built yet. The plan for v1 lives in the [issues](https://github.com/dflippojr/music-discovery/issues):
+A pilot-stage evaluation, not a product. Built and merged:
 
-1. Choose a permitted catalog and ingest it
-2. Project scaffold and CI, including SonarCloud
-3. Preference input and a content-based baseline with explanations
-4. Offline evaluation harness, then a hybrid ranker compared against the baseline
-5. A static demo page and a small blind listener study
+- Catalog ingest for the FMA `small` set: [docs/catalog.md](docs/catalog.md)
+- Content-based baseline ranker with explanations: [docs/ranking.md](docs/ranking.md)
+- Hybrid ranker with diversity re-ranking: [docs/ranking.md](docs/ranking.md)
+- Offline evaluation harness and reports: [docs/evaluation.md](docs/evaluation.md), [reports/](reports/)
+- Static demo page: [docs/demo.md](docs/demo.md)
+- Listener study tooling (blind study page and analysis command): [docs/listener-study.md](docs/listener-study.md), [#9](https://github.com/dflippojr/music-discovery/issues/9)
+
+Remaining:
+
+- Run the listener pilot and publish the blind comparison: [#8](https://github.com/dflippojr/music-discovery/issues/8)
+
+Results are in the reports, not restated here; the latest is [reports/offline-2026-10-06.md](reports/offline-2026-10-06.md).
+
+## Where things are
+
+- `reports/`: committed offline evaluation reports (`.md` and `.json`)
+- `eval/queries.json`: the stored queries used by `evaluate`
+- `scripts/`: helper scripts, including `vendor-into-site` for the demo
 
 ## Development
 
