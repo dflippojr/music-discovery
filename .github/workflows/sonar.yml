@@ -48,7 +48,7 @@ jobs:
         timeout-minutes: 20
         run: pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
