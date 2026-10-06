@@ -22,6 +22,15 @@ const THUMB_PATH =
 
 let uid = 0;
 
+/** A uniformly random row; crypto keeps the choice free of Math.random. */
+function randomRow(count) {
+  const limit = 2 ** 32 - (2 ** 32 % count);
+  const draw = new Uint32Array(1);
+  do crypto.getRandomValues(draw);
+  while (draw[0] >= limit);
+  return draw[0] % count;
+}
+
 function capitalise(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
@@ -106,7 +115,7 @@ class Demo {
     });
     this.list = h("ul", { id: this.id("list"), class: "md-suggestions", role: "listbox", "aria-label": "Matching tracks", hidden: true });
     const random = h("button", { type: "button", class: "md-button", text: "Pick a random track" });
-    random.addEventListener("click", () => this.pickSeed(Math.floor(Math.random() * this.data.count)));
+    random.addEventListener("click", () => this.pickSeed(randomRow(this.data.count)));
     this.input.addEventListener("input", () => this.suggest());
     this.input.addEventListener("keydown", (event) => this.onSeedKey(event));
     this.input.addEventListener("blur", () => this.closeList());

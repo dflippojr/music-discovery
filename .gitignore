@@ -19,3 +19,4 @@ data/
 .demo-fixture/
 node_modules/
 test-results/
+coverage-js/

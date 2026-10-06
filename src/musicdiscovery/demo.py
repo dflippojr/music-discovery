@@ -15,10 +15,11 @@ from importlib import resources
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from musicdiscovery import ranking
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.evaluation import generate_queries, make_ranker
+from musicdiscovery.evaluation import confined, generate_queries, make_ranker
 from musicdiscovery.hybrid import VARIETY_TEXT, HybridConfig, _Metadata
 from musicdiscovery.preference import AXES, Preference
 
@@ -67,7 +68,7 @@ def _quantise(values: np.ndarray, limit: float) -> tuple[np.ndarray, float]:
 def _text(frame, column: str) -> list[str]:
     if column not in frame.columns:
         return [""] * len(frame)
-    return ["" if v is None or v != v else str(v) for v in frame[column]]
+    return ["" if pd.isna(v) else str(v) for v in frame[column]]
 
 
 def _table(values: list[str]) -> tuple[list[str], list[int]]:
@@ -199,7 +200,8 @@ def measure(out_dir: Path) -> BundleSize:
 
 
 def export_demo(catalog: Catalog, out_dir: Path) -> BundleSize:
-    """Write the bundle into `out_dir` and return its size."""
+    """Write the bundle into `out_dir` (inside the working directory)."""
+    out_dir = confined(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     source = resources.files("musicdiscovery").joinpath("demo")
     for name in STATIC_FILES:

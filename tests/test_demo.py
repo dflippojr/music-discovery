@@ -26,7 +26,9 @@ def catalog():
 @pytest.fixture(scope="module")
 def bundle(tmp_path_factory, catalog):
     out = tmp_path_factory.mktemp("bundle")
-    size = demo.export_demo(catalog, out)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.chdir(out)
+        size = demo.export_demo(catalog, out)
     return out, size
 
 
@@ -95,7 +97,8 @@ def test_static_files_follow_the_csp_rules(bundle):
     assert "https://" not in (out / "demo.css").read_text()
 
 
-def test_cli_exports_and_reports_size(tmp_path, capsys):
+def test_cli_exports_and_reports_size(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     data = tmp_path / "data" / "catalog"
     data.mkdir(parents=True)
     make_frame(per_genre=60).to_parquet(data / "catalog.parquet", index=False)
@@ -106,12 +109,33 @@ def test_cli_exports_and_reports_size(tmp_path, capsys):
     assert (out / "catalog.json").is_file()
 
 
+def test_cli_refuses_to_write_outside_the_working_directory(
+    tmp_path, capsys, monkeypatch
+):
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    data = tmp_path / "data" / "catalog"
+    data.mkdir(parents=True)
+    make_frame(per_genre=60).to_parquet(data / "catalog.parquet", index=False)
+    argv = [
+        "export-demo",
+        str(tmp_path / "elsewhere"),
+        "--data-dir",
+        str(tmp_path / "data"),
+    ]
+    assert main(argv) == 1
+    assert "outside the working directory" in capsys.readouterr().err
+    assert not (tmp_path / "elsewhere").exists()
+
+
 def test_cli_reports_a_missing_catalog(tmp_path, capsys):
     assert main(["export-demo", str(tmp_path / "x"), "--data-dir", str(tmp_path)]) == 1
     assert "export-demo:" in capsys.readouterr().err
 
 
 def test_cli_fails_when_over_the_size_target(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     data = tmp_path / "data" / "catalog"
     data.mkdir(parents=True)
     make_frame(per_genre=60).to_parquet(data / "catalog.parquet", index=False)

@@ -7,12 +7,32 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import libCoverage from "istanbul-lib-coverage";
+import libReport from "istanbul-lib-report";
+import reports from "istanbul-reports";
 import { chromium } from "playwright";
+import v8ToIstanbul from "v8-to-istanbul";
 
 const bundle = resolve(process.env.DEMO_BUNDLE ?? ".demo-fixture");
 const axeSource = readFileSync(resolve("node_modules/axe-core/axe.min.js"), "utf8");
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'";
+
+// Coverage of demo.js and ranker.js, merged over every test and written as lcov for
+// SonarCloud when COVERAGE_DIR is set.
+const sources = { "demo.js": resolve("src/musicdiscovery/demo/demo.js"), "ranker.js": resolve("src/musicdiscovery/demo/ranker.js") };
+const coverage = libCoverage.createCoverageMap({});
+
+async function collect(entries) {
+  for (const entry of entries) {
+    const name = new URL(entry.url).pathname.slice(1);
+    if (!sources[name]) continue;
+    const converter = v8ToIstanbul(sources[name], 0, { source: entry.source });
+    await converter.load();
+    converter.applyCoverage(entry.functions);
+    coverage.merge(converter.toIstanbul());
+  }
+}
 
 let server;
 let browser;
@@ -38,6 +58,10 @@ before(async () => {
 after(async () => {
   await browser?.close();
   server?.close();
+  if (process.env.COVERAGE_DIR) {
+    const context = libReport.createContext({ dir: process.env.COVERAGE_DIR, coverageMap: coverage });
+    reports.create("lcovonly", { file: "lcov.info" }).execute(context);
+  }
 });
 
 async function open(options = {}) {
@@ -47,6 +71,7 @@ async function open(options = {}) {
   page.on("console", (m) => m.type() === "error" && problems.push(m.text()));
   page.on("pageerror", (e) => problems.push(String(e)));
   page.on("requestfailed", (r) => problems.push(`request failed: ${r.url()}`));
+  await page.coverage.startJSCoverage();
   await page.goto(base);
   await page.waitForSelector("#music-discovery-demo input[role=combobox]");
   return { context, page, problems };
@@ -58,6 +83,11 @@ async function pickSeed(page, text = "Synthetic track 10") {
   await page.getByRole("option").first().waitFor();
   await input.press("Enter");
   await page.locator(".md-result").first().waitFor();
+}
+
+async function close(page, context) {
+  await collect(await page.coverage.stopJSCoverage());
+  await context.close();
 }
 
 const titles = (page) => page.locator(".md-result .md-title").allTextContents();
@@ -87,7 +117,7 @@ describe("demo page", () => {
     assert.deepEqual(await titles(page), hybrid);
     assert.equal(await page.evaluate(() => globalThis.marker), "same page");
     assert.deepEqual(problems, []);
-    await context.close();
+    await close(page, context);
   });
 
   test("every result explains itself and links to its source", async () => {
@@ -97,7 +127,7 @@ describe("demo page", () => {
       assert.ok((await item.locator(".md-why li").count()) >= 1);
       assert.match(await item.getByRole("link", { name: /Source page/ }).getAttribute("href"), /^https:/);
     }
-    await context.close();
+    await close(page, context);
   });
 
   test("chips cycle like, dislike, clear from the keyboard and change the results", async () => {
@@ -113,7 +143,7 @@ describe("demo page", () => {
     await page.keyboard.press("Enter");
     assert.match(await chip.textContent(), /not selected/);
     assert.deepEqual(await titles(page), before);
-    await context.close();
+    await close(page, context);
   });
 
   for (const scheme of ["light", "dark"]) {
@@ -127,7 +157,7 @@ describe("demo page", () => {
       await page.getByRole("button", { name: /^Thumbs up/ }).first().click();
       assert.deepEqual(await axeViolations(page), []);
       assert.deepEqual(problems, []);
-      await context.close();
+      await close(page, context);
     });
   }
 
@@ -136,7 +166,7 @@ describe("demo page", () => {
     await pickSeed(page);
     const widths = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
     assert.ok(widths[0] <= widths[1], `scrollWidth ${widths[0]} > ${widths[1]}`);
-    await context.close();
+    await close(page, context);
   });
 
   test("ratings stay in the page and export as JSON", async () => {
@@ -155,7 +185,7 @@ describe("demo page", () => {
     assert.deepEqual(body.ratings.map((r) => r.rating).sort(), [-1, 1]);
     assert.equal(body.ratings[0].ranker, "hybrid");
     assert.ok(requests.every((url) => url.startsWith(base) || url.startsWith("blob:")), requests.join());
-    await context.close();
+    await close(page, context);
   });
 
   test("reduced motion is respected", async () => {
@@ -163,6 +193,6 @@ describe("demo page", () => {
     await pickSeed(page);
     const duration = await page.locator(".md-chip").first().evaluate((el) => getComputedStyle(el).transitionDuration);
     assert.match(duration, /^0s/);
-    await context.close();
+    await close(page, context);
   });
 });
