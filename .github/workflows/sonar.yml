@@ -21,39 +21,50 @@ concurrency:
 jobs:
   sonar:
     runs-on: ubuntu-latest
-    # Secrets are not passed to pull requests from forks, and Dependabot pull
-    # requests read a separate Dependabot secrets store that has no
-    # SONARCLOUD_TOKEN; skip rather than fail. The CI workflow still runs for
-    # them and the quality gate runs again on main.
+    # Fork PRs cannot access secrets. Same-repository Dependabot PRs use the
+    # Dependabot secret SONARCLOUD_TOKEN; other runs use the Actions secret.
     if: >-
       github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]')
+      github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      HAS_SONARCLOUD_TOKEN: ${{ secrets.SONARCLOUD_TOKEN != '' }}
     steps:
+      - name: Note missing token
+        if: env.HAS_SONARCLOUD_TOKEN != 'true'
+        run: |
+          echo "::notice::SONARCLOUD_TOKEN is not set for this event; skipping SonarCloud analysis. No analysis or quality gate result was produced. Configure the Actions or Dependabot secret as appropriate."
+          echo "SonarCloud analysis skipped: SONARCLOUD_TOKEN is absent for this event. No analysis or quality gate result was produced. Configure the Actions or Dependabot secret as appropriate." >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@v7
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         with:
           # Full history so SonarCloud can blame lines and find the PR base.
           fetch-depth: 0
 
       - uses: actions/setup-python@v7
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
 
       - name: Install package and dev tools
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         run: python -m pip install -e ".[dev]"
 
       - name: Test with coverage
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         timeout-minutes: 20
         run: pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
 
       - uses: actions/setup-node@v7
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         with:
           node-version: "24"
           cache: npm
 
       - name: Measure demo JavaScript coverage in the browser test
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         timeout-minutes: 10
         run: |
           python scripts/build_demo_fixture.py .demo-fixture
@@ -62,6 +73,7 @@ jobs:
           COVERAGE_DIR=coverage-js npm run test:browser
 
       - name: Scan with SonarCloud
+        if: env.HAS_SONARCLOUD_TOKEN == 'true'
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONARCLOUD_TOKEN }}

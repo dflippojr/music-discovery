@@ -50,6 +50,30 @@ see [docs/catalog.md](docs/catalog.md). `export-demo <out_dir>` writes the stati
 queries ([docs/evaluation.md](docs/evaluation.md)). Tests use synthetic fixtures
 only; datasets and audio must never be committed. Store raw and generated datasets in `data/`.
 
+## CI and dependency updates
+
+Dependabot checks Python packages and GitHub Actions at the repository root,
+and npm manifests at `/` and `/src/musicdiscovery/demo`, every week. The demo
+manifest currently declares only its module type, with no dependencies to update.
+
+The SonarCloud workflow analyses `src` and `tests`, imports Python and browser
+JavaScript coverage, and waits for the quality gate. Keep SonarCloud Automatic
+Analysis disabled when using this workflow. Fork PRs are skipped. Same-repository
+PRs, including Dependabot PRs, run analysis when their token is available.
+
+Store an authorized analysis token under the exact name `SONARCLOUD_TOKEN` in
+both repository secret stores: **Settings → Secrets and variables → Actions**
+and **Settings → Secrets and variables → Dependabot**. Dependabot-triggered
+workflows use Dependabot secrets, rather than Actions secrets, through the same
+`secrets.SONARCLOUD_TOKEN` reference. See the
+[GitHub documentation](https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependabot-on-actions).
+When the token is absent, the job emits a notice and summary and skips analysis;
+a green job in this state is not evidence of analysis or a passing quality gate.
+
+After configuring the secrets and landing the workflow, verify a `main` push,
+an ordinary same-repository PR, and a real Dependabot PR. Attach workflow-run and
+SonarCloud PR/head-commit result links to [#31](https://github.com/dflippojr/music-discovery/issues/31).
+
 ## License
 
 Code is MIT licensed (see [LICENSE](LICENSE)). Catalog data (FMA metadata and features) is CC BY 4.0; see [docs/catalog.md](docs/catalog.md) for the source, checksums and attribution.

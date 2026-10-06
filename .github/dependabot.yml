@@ -9,7 +9,10 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: npm
-    directory: /
+    directories:
+      - /
+      # Module-type manifest; currently has no dependencies to update.
+      - /src/musicdiscovery/demo
     schedule:
       interval: weekly
     groups:
