@@ -41,7 +41,8 @@ def test_interface_and_shipped_config(catalog):
     results = ranker.rank(pref(), catalog)
     assert len(results) == 10
     assert 100 not in {r.track_id for r in results}
-    assert HybridConfig.load() == HybridConfig.load()
+    assert ranker.config == HybridConfig.load()
+    assert 0 <= ranker.config.mmr_lambda <= 1
 
 
 def test_deterministic(catalog):
