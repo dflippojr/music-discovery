@@ -10,6 +10,7 @@ from pathlib import Path
 
 from musicdiscovery import __version__
 from musicdiscovery.catalog import Catalog, CatalogError
+from musicdiscovery.demo import TARGET_BYTES, DemoError, export_demo
 from musicdiscovery.evaluation import (
     DEFAULT_QUERIES,
     DEFAULT_REPORT_DIR,
@@ -91,6 +92,29 @@ def _run_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_export_demo(args: argparse.Namespace) -> int:
+    try:
+        catalog = Catalog.load(args.data_dir / "catalog" / CATALOG_NAME)
+        size = export_demo(catalog, args.out_dir)
+    except (CatalogError, DemoError, EvaluationError, OSError) as error:
+        print(f"export-demo: {error}", file=sys.stderr)
+        return 1
+    for name, (raw, packed) in size.files.items():
+        print(
+            f"export-demo: {name:<13}{raw / 1024:>9.1f} KiB"
+            f"{packed / 1024:>9.1f} KiB gzip"
+        )
+    print(
+        f"export-demo: bundle {size.raw / 1024:.1f} KiB, "
+        f"{size.compressed / 1024:.1f} KiB compressed "
+        f"(target under {TARGET_BYTES // 1024} KiB), wrote {args.out_dir}"
+    )
+    if size.compressed >= TARGET_BYTES:
+        print("export-demo: bundle is over the size target", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse commands and report features that are not implemented yet."""
     parser = argparse.ArgumentParser(prog="musicdiscovery", description=__doc__)
@@ -152,6 +176,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="write the seeded query file for this catalog and exit",
     )
+    export = subparsers.add_parser(
+        "export-demo", help="Write the static demo bundle for the browser"
+    )
+    export.add_argument("out_dir", type=Path, help="directory to write the bundle to")
+    export.add_argument("--data-dir", type=Path, default=Path("data"))
 
     args = parser.parse_args(argv)
     if args.command is None:
@@ -166,6 +195,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "evaluate":
         return _run_evaluate(args)
+
+    if args.command == "export-demo":
+        return _run_export_demo(args)
 
     print(f"{args.command}: not implemented yet", file=sys.stderr)
     return 1

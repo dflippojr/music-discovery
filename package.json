@@ -1,0 +1,14 @@
+{
+  "name": "music-discovery-demo-tests",
+  "private": true,
+  "description": "Node and browser tests for the static demo bundle",
+  "type": "module",
+  "scripts": {
+    "test:parity": "node --test tests/demo/parity.test.mjs",
+    "test:browser": "node --test tests/demo/browser.test.mjs"
+  },
+  "devDependencies": {
+    "axe-core": "^4.10.0",
+    "playwright": "^1.50.0"
+  }
+}

@@ -14,3 +14,8 @@ htmlcov/
 build/
 dist/
 data/
+
+# demo bundle output and browser-test tooling
+.demo-fixture/
+node_modules/
+test-results/
