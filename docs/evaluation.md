@@ -5,11 +5,11 @@ writes a Markdown report and a JSON file with the same numbers.
 
 ```sh
 musicdiscovery evaluate --generate-queries          # once per catalog; writes eval/queries.json
-musicdiscovery evaluate --ranker baseline --ranker random --ranker popular
+musicdiscovery evaluate --ranker baseline --ranker hybrid --ranker random --ranker popular
 ```
 
 Output goes to `reports/offline-<date>.md` and `.json` (`--out-dir`, `--date`).
-With no `--ranker`, all three run. Generated reports are committed only in a
+With no `--ranker`, all four run. Generated reports are committed only in a
 pull request that is about results.
 
 ## Queries
@@ -26,6 +26,7 @@ validation split to choose settings and the test split to report.
 | Name | What it returns |
 | --- | --- |
 | `baseline` | the content-based ranker in `docs/ranking.md` |
+| `hybrid` | the hybrid ranker in `docs/ranking.md` |
 | `random` | uniformly random tracks (seeded by the query) |
 | `popular` | the most listened-to tracks in the seed's top genre |
 

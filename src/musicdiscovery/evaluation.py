@@ -481,6 +481,11 @@ def run(
     md_path = out_dir / f"{stem}.md"
     json_path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     md_path.write_text(
-        render_report(results, version, report_date, queries_path.as_posix())
+        render_report(
+            results,
+            version,
+            report_date,
+            queries_path.relative_to(Path.cwd().resolve()).as_posix(),
+        )
     )
     return md_path, json_path

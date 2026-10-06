@@ -1,7 +1,7 @@
 {
-  "metadata_weight": 0.5,
-  "popularity_weight": 0.05,
-  "mmr_lambda": 0.3,
-  "genre_redundancy": 0.3,
+  "metadata_weight": 2.0,
+  "popularity_weight": 0.1,
+  "mmr_lambda": 0.6,
+  "genre_redundancy": 0.0,
   "pool_size": 100
 }
