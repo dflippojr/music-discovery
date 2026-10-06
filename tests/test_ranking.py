@@ -30,6 +30,7 @@ def make_frame(per_genre=40, extra_features=0, seed=0):
                     "title": f"t{track_id}",
                     "artist": f"artist{track_id % 20}",
                     "genre_top": genre,
+                    "genre_ids": [g + 1],
                     "tags": ["loud"] if i % 5 == 0 else ["quiet"],
                     "mfcc_mean_01": vec[0],
                     "mfcc_mean_02": vec[1],

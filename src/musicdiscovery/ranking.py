@@ -85,6 +85,17 @@ class BaselineRanker:
         return self._fit
 
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+        terms, scores, allowed = self.score_terms(preference, catalog)
+        candidates = np.flatnonzero(allowed)
+        # Highest score first; ties go to the lower track id.
+        order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
+        chosen = candidates[order[: preference.k]]
+        return [self.build(catalog, int(row), terms) for row in chosen]
+
+    def score_terms(
+        self, preference: Preference, catalog: Catalog
+    ) -> tuple[list[tuple[str, str, np.ndarray]], np.ndarray, np.ndarray]:
+        """Each score term per track, their sum, and which tracks may be shown."""
         preference.validate(catalog)
         fit = self._fitted(catalog)
         seed_rows = [catalog.position[s] for s in preference.seeds]
@@ -131,14 +142,10 @@ class BaselineRanker:
         if preference.exclude_seed_artist:
             artists = catalog.frame["artist"]
             allowed &= ~artists.isin(artists.iloc[seed_rows]).to_numpy()
-        candidates = np.flatnonzero(allowed)
-        # Highest score first; ties go to the lower track id.
-        order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
-        chosen = candidates[order[: preference.k]]
-        return [self._build(catalog, int(row), terms) for row in chosen]
+        return terms, scores, allowed
 
     @staticmethod
-    def _build(catalog: Catalog, row: int, terms) -> Recommendation:
+    def build(catalog: Catalog, row: int, terms) -> Recommendation:
         parts = tuple(
             ScoreTerm(name, float(values[row]), text) for name, text, values in terms
         )

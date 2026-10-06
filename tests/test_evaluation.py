@@ -12,12 +12,12 @@ from musicdiscovery.catalog import Catalog
 from musicdiscovery.cli import main
 from musicdiscovery.evaluation import (
     METRICS,
+    Context,
     EvaluationError,
     PopularRanker,
     Query,
     RandomRanker,
     _bare,
-    _Context,
     evaluate,
     generate_queries,
     load_queries,
@@ -47,6 +47,7 @@ def make_frame(per_genre=60, seed=0):
                     "title": f"t{track_id}",
                     "artist": f"artist{track_id % 25}",
                     "genre_top": genre,
+                    "genre_ids": [g + 1] if i % 2 else [g + 1, 9],
                     "tags": [f"{genre}-tag", "loud"] if i % 3 else [],
                     "listens": int(rng.integers(1, 10_000)),
                     **{f"mfcc_mean_{j:02d}": vec[j] for j in range(6)},
@@ -171,7 +172,7 @@ def test_metric_ranges_and_popularity_bias(catalog, queries):
 
 
 def test_adherence_counts_results_that_move_the_axis(catalog):
-    ctx = _Context(catalog)
+    ctx = Context(catalog)
     frame = catalog.frame
     seed_row = 5
     seed_value = frame["rmse_mean_01"].iloc[seed_row]
