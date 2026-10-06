@@ -13,6 +13,10 @@ precomputed features are used. No audio is downloaded, processed or hosted.
 | Archive SHA1 | `f0df49ffe5f2a6008d7dc83c6915b31835dfe733` (from the `mdeff/fma` README; ingest refuses any other file) |
 | Subset | `small`: 8,000 tracks, 8 balanced top genres (`set.subset == "small"` in `tracks.csv`) |
 
+The download uses a 30 s connect/read timeout and up to 3 attempts with
+exponential backoff for timeouts, connection drops and HTTP 5xx; 4xx fails at
+once. A failed download leaves no `.part` file and no archive behind.
+
 Files read from the archive, with their SHA1 as listed in its `checksums` file:
 
 | File | Used for | SHA1 |
