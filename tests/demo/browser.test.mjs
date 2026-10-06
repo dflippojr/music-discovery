@@ -3,7 +3,7 @@
 // 320 px layout, ratings and export. Needs `npm install` and `npx playwright install chromium`
 // and a bundle built by `python scripts/build_demo_fixture.py <dir>` (DEMO_BUNDLE).
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -18,9 +18,10 @@ const axeSource = readFileSync(resolve("node_modules/axe-core/axe.min.js"), "utf
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'";
 
-// Coverage of demo.js and ranker.js, merged over every test and written as lcov for
+// Coverage of the demo and study scripts, merged over every test and written as lcov for
 // SonarCloud when COVERAGE_DIR is set.
-const sources = { "demo.js": resolve("src/musicdiscovery/demo/demo.js"), "ranker.js": resolve("src/musicdiscovery/demo/ranker.js") };
+const sources = Object.fromEntries(["demo.js", "study.js", "study-lib.js", "ui.js", "ranker.js"].map((name) => [name, resolve("src/musicdiscovery/demo", name)]));
+const schema = JSON.parse(readFileSync(resolve("src/musicdiscovery/study-ratings.schema.json"), "utf8"));
 const coverage = libCoverage.createCoverageMap({});
 
 async function collect(entries) {
@@ -64,7 +65,7 @@ after(async () => {
   }
 });
 
-async function open(options = {}) {
+async function open(options = {}, { path = "", mount = "#music-discovery-demo input[role=combobox]" } = {}) {
   const context = await browser.newContext({ acceptDownloads: true, ...options });
   const page = await context.newPage();
   const problems = [];
@@ -72,8 +73,8 @@ async function open(options = {}) {
   page.on("pageerror", (e) => problems.push(String(e)));
   page.on("requestfailed", (r) => problems.push(`request failed: ${r.url()}`));
   await page.coverage.startJSCoverage();
-  await page.goto(base);
-  await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+  await page.goto(base + path);
+  await page.waitForSelector(mount);
   return { context, page, problems };
 }
 
@@ -193,6 +194,136 @@ describe("demo page", () => {
     await pickSeed(page);
     const duration = await page.locator(".md-chip").first().evaluate((el) => getComputedStyle(el).transitionDuration);
     assert.match(duration, /^0s/);
+    await close(page, context);
+  });
+});
+
+// --- study mode ----------------------------------------------------------------
+
+const study = (options) => open(options, { path: "study.html", mount: "#music-discovery-study button" });
+
+/** Pick a random seed, show the lists, rate every track and choose a preference. */
+async function doTask(page, { preference = "List A", last = false } = {}) {
+  await page.getByRole("button", { name: "Pick a random track" }).click();
+  await page.getByRole("button", { name: "Show the two lists" }).click();
+  await page.locator(".md-result").first().waitFor();
+  const items = page.locator(".md-result");
+  const count = await items.count();
+  for (let i = 0; i < count; i += 1) {
+    await items.nth(i).getByRole("button", { name: i % 3 ? /Thumbs up/ : /Thumbs down/ }).click();
+    if (i % 2 === 0) await items.nth(i).getByLabel(/New to me/).check();
+  }
+  await page.getByRole("radio", { name: preference }).check();
+  await page.getByRole("button", { name: last ? "Finish" : "Next task" }).click();
+}
+
+describe("study page", () => {
+  test("shows two unlabelled lists and never names a ranker", async () => {
+    const { context, page, problems } = await study();
+    assert.match(await page.locator("#music-discovery-study").textContent(), /By sending the file you agree/);
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    await page.locator(".md-result").first().waitFor();
+    assert.deepEqual(await page.locator("h3.md-study-list").allTextContents(), ["List A", "List B"]);
+    assert.equal(await page.locator(".md-result").count(), 10);
+    assert.equal(await page.locator(".md-why").count(), 0);
+    const markup = (await page.content()).toLowerCase();
+    assert.doesNotMatch(markup, /hybrid|baseline/);
+    assert.equal(await page.getByRole("button", { name: "Next task" }).isDisabled(), true);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("a full session exports one valid file with a balanced order and no personal fields", async () => {
+    const { context, page, problems } = await study();
+    const requests = [];
+    page.on("request", (r) => requests.push(r.url()));
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    const preferences = ["List A", "List B", "No preference", "List A", "List B"];
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal(await page.getByRole("heading", { name: `Task ${i + 1} of 5` }).count(), 1);
+      await doTask(page, { preference: preferences[i], last: i === 4 });
+    }
+    const exportButton = page.getByRole("button", { name: "Export my ratings" });
+    const [download] = await Promise.all([page.waitForEvent("download"), exportButton.click()]);
+    const file = await download.path();
+    if (process.env.STUDY_EXPORT_DIR) {
+      // CI feeds this synthetic session to `musicdiscovery analyze-study`.
+      mkdirSync(process.env.STUDY_EXPORT_DIR, { recursive: true });
+      copyFileSync(file, resolve(process.env.STUDY_EXPORT_DIR, "synthetic-session.json"));
+    }
+    const body = JSON.parse(readFileSync(file, "utf8"));
+    assert.deepEqual(Object.keys(body).sort(), Object.keys(schema.properties).sort());
+    assert.match(body.session_id, /^[0-9a-f]{32}$/);
+    assert.equal(body.tasks.length, 5);
+    const hybridFirst = body.tasks.filter((t) => t.lists[0].ranker === "hybrid").length;
+    assert.ok(hybridFirst === 2 || hybridFirst === 3, `hybrid first in ${hybridFirst} of 5 tasks`);
+    const taskKeys = Object.keys(schema.$defs.task.properties).sort();
+    const expected = ["A", "B", "none", "A", "B"];
+    body.tasks.forEach((task, i) => {
+      assert.deepEqual(Object.keys(task).sort(), taskKeys);
+      assert.equal(task.task, i + 1);
+      assert.deepEqual(task.lists.map((l) => l.label), ["A", "B"]);
+      assert.deepEqual(task.lists.map((l) => l.ranker).sort(), ["baseline", "hybrid"]);
+      assert.equal(task.preferred, expected[i]);
+      for (const list of task.lists) {
+        assert.equal(list.results.length, 5);
+        for (const result of list.results) {
+          assert.deepEqual(Object.keys(result).sort(), ["new_to_me", "rating", "track_id"]);
+          assert.ok(result.rating === 1 || result.rating === -1);
+        }
+      }
+    });
+    assert.ok(requests.every((url) => url.startsWith(base) || url.startsWith("blob:")), requests.join());
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("a task cannot finish before every track is rated and a list is chosen", async () => {
+    const { context, page } = await study();
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    assert.equal(await page.getByRole("button", { name: "Show the two lists" }).isDisabled(), true);
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    await page.getByRole("radio", { name: "List B" }).check();
+    assert.match(await page.locator(".md-status").textContent(), /10 tracks still need/);
+    const first = page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ });
+    await first.click();
+    assert.match(await page.locator(".md-status").textContent(), /9 tracks still need/);
+    await first.click(); // clears it again
+    assert.match(await page.locator(".md-status").textContent(), /10 tracks still need/);
+    assert.equal(await page.getByRole("button", { name: "Next task" }).isDisabled(), true);
+    await close(page, context);
+  });
+
+  for (const scheme of ["light", "dark"]) {
+    test(`axe-core finds no violations on the study screens in ${scheme} mode`, async () => {
+      const { context, page, problems } = await study({ colorScheme: scheme });
+      assert.deepEqual(await axeViolations(page), []);
+      await page.getByRole("button", { name: "I agree, start" }).click();
+      await page.getByRole("button", { name: "Pick a random track" }).click();
+      await page.getByRole("button", { name: /^Calmer/ }).click();
+      assert.deepEqual(await axeViolations(page), []);
+      await page.getByRole("button", { name: "Show the two lists" }).click();
+      await page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ }).click();
+      await page.locator(".md-result").first().getByLabel(/New to me/).check();
+      assert.deepEqual(await axeViolations(page), []);
+      assert.deepEqual(problems, []);
+      await close(page, context);
+    });
+  }
+
+  test("there is no horizontal scroll at 320 px on any study screen", async () => {
+    const { context, page } = await study({ viewport: { width: 320, height: 700 } });
+    const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    assert.equal(await fits(), true);
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    assert.equal(await fits(), true);
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    await page.locator(".md-result").first().waitFor();
+    assert.equal(await fits(), true);
     await close(page, context);
   });
 });

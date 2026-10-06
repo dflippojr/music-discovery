@@ -32,7 +32,7 @@ musicdiscovery --version
 
 `musicdiscovery ingest` downloads the FMA metadata archive (about 342 MiB),
 verifies its checksum and writes the cleaned `small` catalog under `data/`;
-see [docs/catalog.md](docs/catalog.md). `export-demo <out_dir>` writes the static demo page bundle ([docs/demo.md](docs/demo.md)). `recommend` ranks tracks
+see [docs/catalog.md](docs/catalog.md). `export-demo <out_dir>` writes the static demo page bundle ([docs/demo.md](docs/demo.md)); `analyze-study <ratings dir>` reports on returned listener-study files ([docs/listener-study.md](docs/listener-study.md)). `recommend` ranks tracks
 ([docs/ranking.md](docs/ranking.md)) and `evaluate` scores rankers on stored
 queries ([docs/evaluation.md](docs/evaluation.md)). Tests use synthetic fixtures
 only; datasets and audio must never be committed. Store raw and generated datasets in `data/`.

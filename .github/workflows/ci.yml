@@ -50,5 +50,11 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Check the JavaScript rankers against Python
         run: npm run test:parity
-      - name: Check the page in a browser under the site's CSP
+      - name: Check the study logic
+        run: npm run test:study
+      - name: Check the pages in a browser under the site's CSP
         run: npm run test:browser
+        env:
+          STUDY_EXPORT_DIR: .study-fixture
+      - name: Analyse the synthetic session the browser test exported
+        run: musicdiscovery analyze-study .study-fixture --out-dir .study-fixture/report

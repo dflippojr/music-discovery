@@ -24,6 +24,8 @@ from musicdiscovery.evaluation import (
 from musicdiscovery.hybrid import HybridConfigError
 from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, ingest
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
+from musicdiscovery.study import DEFAULT_RATINGS_DIR, StudyError
+from musicdiscovery.study import run as run_study
 
 
 def _run_ingest(data_dir: Path) -> int:
@@ -115,6 +117,17 @@ def _run_export_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_analyze_study(args: argparse.Namespace) -> int:
+    try:
+        report_date = date.fromisoformat(args.date) if args.date else date.today()
+        report = run_study(args.ratings_dir, args.out_dir, report_date)
+    except (StudyError, EvaluationError, OSError, ValueError) as error:
+        print(f"analyze-study: {error}", file=sys.stderr)
+        return 1
+    print(f"analyze-study: wrote {report}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse commands and report features that are not implemented yet."""
     parser = argparse.ArgumentParser(prog="musicdiscovery", description=__doc__)
@@ -182,6 +195,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     export.add_argument("out_dir", type=Path, help="directory to write the bundle to")
     export.add_argument("--data-dir", type=Path, default=Path("data"))
 
+    study = subparsers.add_parser(
+        "analyze-study",
+        help="Validate listener-study ratings files and write the report",
+    )
+    study.add_argument(
+        "ratings_dir",
+        type=Path,
+        nargs="?",
+        default=DEFAULT_RATINGS_DIR,
+        help="directory of returned ratings files (default: ratings)",
+    )
+    study.add_argument("--out-dir", type=Path, default=DEFAULT_REPORT_DIR)
+    study.add_argument("--date", help="report date, YYYY-MM-DD (default: today)")
+
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -198,6 +225,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "export-demo":
         return _run_export_demo(args)
+
+    if args.command == "analyze-study":
+        return _run_analyze_study(args)
 
     print(f"{args.command}: not implemented yet", file=sys.stderr)
     return 1

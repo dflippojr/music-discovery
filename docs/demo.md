@@ -17,7 +17,8 @@ python -m http.server -d build/demo 8000    # open http://localhost:8000/
 | File | Purpose |
 | --- | --- |
 | `index.html` | standalone test page; mounts the demo in `#music-discovery-demo` |
-| `demo.js`, `ranker.js` | the UI and the JavaScript port of both rankers (ES modules) |
+| `demo.js`, `ranker.js`, `ui.js` | the UI, the JavaScript port of both rankers and shared UI pieces (ES modules) |
+| `study.html`, `study.js`, `study-lib.js` | the blind listener study page (see below) |
 | `demo.css` | styles, scoped to `.md-demo`; light and dark by `prefers-color-scheme` |
 | `catalog.json` | compact catalog and precomputed data (see below) |
 | `parity.json` | expected top 10 from Python on fixed queries; for tests, not vendored |
@@ -48,6 +49,7 @@ must return the same top 10 as Python on 24 fixed queries (likes and dislikes):
 python scripts/build_demo_fixture.py .demo-fixture   # synthetic catalog, no dataset
 npm ci && npx playwright install chromium
 npm run test:parity    # Node: JavaScript vs Python top 10
+npm run test:study     # Node: study list order, session id and export shape
 npm run test:browser   # Chromium: CSP, console errors, toggle, axe-core, 320 px, ratings
 ```
 
@@ -61,6 +63,15 @@ The page uses no inline scripts, styles, handlers or third-party files.
 Thumbs up or down are kept in the page only. "Export my ratings" downloads JSON:
 `track_id`, `rating` (1 or -1), `ranker`, `seed_track_id`, `likes`, `dislikes`.
 The listener study builds on this.
+
+## Study page
+
+`study.html` is the blind listener study: two unlabelled lists per task, ratings
+and an overall preference, exported as one JSON file per session. It shares the
+bundle, CSP rules and checks with the demo (`study.js`, `study-lib.js` and the
+shared `ui.js`). The protocol, consent text and analysis plan are in
+[listener-study.md](listener-study.md); `musicdiscovery analyze-study` turns the
+returned files into a report.
 
 ## Putting it on dflippojr.dev
 

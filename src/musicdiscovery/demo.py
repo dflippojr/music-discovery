@@ -26,7 +26,16 @@ from musicdiscovery.preference import AXES, Preference
 FORMAT_VERSION = 1
 CATALOG_FILE = "catalog.json"
 PARITY_FILE = "parity.json"
-STATIC_FILES = ("index.html", "demo.css", "demo.js", "ranker.js")
+STATIC_FILES = (
+    "index.html",
+    "study.html",
+    "demo.css",
+    "demo.js",
+    "study.js",
+    "study-lib.js",
+    "ui.js",
+    "ranker.js",
+)
 TARGET_BYTES = 2 * 1024 * 1024  # compressed, for the small catalog
 TOP_TAGS = 40
 PARITY_QUERIES_PER_SPLIT = 12
