@@ -1,6 +1,9 @@
 """Ranker behaviour on a small synthetic catalog; no datasets, no network."""
 
 import json
+import os
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -244,3 +247,28 @@ def test_cli_errors(data_dir, capsys, extra):
 def test_cli_missing_catalog(tmp_path, capsys):
     assert main(["recommend", "--data-dir", str(tmp_path), "--seed", "1"]) == 1
     assert "ingest" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("title", ["東京", "Ångström"])
+def test_cli_survives_cp1252_console(tmp_path, title):
+    frame = make_frame()
+    frame["title"] = title
+    out = tmp_path / "catalog"
+    out.mkdir()
+    frame.to_parquet(out / "catalog.parquet", index=False)
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from musicdiscovery.cli import main; sys.exit(main())",
+            "recommend",
+        ]
+        + ["--data-dir", str(tmp_path), "--seed", "100", "-k", "3"],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout
