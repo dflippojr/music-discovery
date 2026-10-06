@@ -132,8 +132,17 @@ def _run_analyze_study(args: argparse.Namespace) -> int:
     return 0
 
 
+def _make_streams_safe() -> None:
+    """Degrade to ``?`` instead of crashing on consoles that cannot encode a name."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse commands and report features that are not implemented yet."""
+    _make_streams_safe()
     parser = argparse.ArgumentParser(prog="musicdiscovery", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command")
