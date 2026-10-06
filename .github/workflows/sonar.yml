@@ -21,8 +21,14 @@ concurrency:
 jobs:
   sonar:
     runs-on: ubuntu-latest
-    # Secrets are not passed to pull requests from forks; skip rather than fail.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Secrets are not passed to pull requests from forks, and Dependabot pull
+    # requests read a separate Dependabot secrets store that has no
+    # SONARCLOUD_TOKEN; skip rather than fail. The CI workflow still runs for
+    # them and the quality gate runs again on main.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@v7
         with:
