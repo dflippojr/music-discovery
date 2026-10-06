@@ -180,9 +180,9 @@ def test_deterministic_and_ties_by_track_id():
 
 def test_same_output_across_runs(catalog):
     preference = pref(likes=["more:brightness", "genre:Jazz"])
-    assert BaselineRanker().rank(preference, catalog) == BaselineRanker().rank(
-        preference, catalog
-    )
+    first = BaselineRanker().rank(preference, catalog)
+    second = BaselineRanker().rank(preference, catalog)
+    assert first == second
 
 
 def test_no_pca_and_constant_columns():
