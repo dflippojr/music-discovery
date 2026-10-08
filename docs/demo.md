@@ -2,7 +2,11 @@
 
 A small page that lets a visitor pick a seed track, like or dislike qualities,
 and read explained recommendations from the hybrid ranker (the default) or the
-baseline. It is fully static: ranking runs in the browser from precomputed
+baseline. The optional "Exclude the seed artist" checkbox is unchecked by default;
+checking it reranks with tracks by other artists, keeping your seed and qualities.
+Its state stays selected across seed and ranker changes. If no candidates remain,
+the page shows a status message and you can change the controls to restore results.
+It is fully static: ranking runs in the browser from precomputed
 data, with no server, accounts or analytics, and no audio. Each result links to
 its Free Music Archive page and license.
 
@@ -67,9 +71,14 @@ The page uses no inline scripts, styles, handlers or third-party files.
 
 ## Ratings
 
-Thumbs up or down are kept in the page only. "Export my ratings" downloads JSON:
-`track_id`, `rating` (1 or -1), `ranker`, `seed_track_id`, `likes`, `dislikes`.
-The listener study builds on this.
+Thumbs up or down are kept in the page only. "Export my ratings" downloads JSON.
+The normal demo exports `format: "music-discovery-ratings"`, `version: 2`, and
+`ratings` records containing `track_id`, `rating` (1 or -1), `ranker`,
+`seed_track_id`, `likes`, `dislikes`, and boolean `exclude_seed_artist`.
+The added boolean records the exclusion setting when that rating was made,
+including `false` by default. Ratings for the same query and track under different
+exclusion settings are kept separately. No importer currently exists in this repo.
+The blind listener study's controls, export schema and protocol are unchanged.
 
 ## Study page
 

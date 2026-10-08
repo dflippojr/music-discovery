@@ -152,6 +152,8 @@ class HybridRanker:
         relevance = np.sum([values for _, _, values in terms], axis=0)
 
         candidates = np.flatnonzero(allowed)
+        if not len(candidates):
+            return []
         order = np.lexsort((catalog.track_ids[candidates], -relevance[candidates]))
         pool = candidates[order[: max(config.pool_size, preference.k)]]
         picks, variety = self._mmr(catalog, pool, relevance[pool], preference.k)

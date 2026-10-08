@@ -46,3 +46,25 @@ test("bad input is rejected", () => {
   assert.throws(() => rankers.rank("baseline", { seeds: [parity.queries[0].seed], likes: ["more:tempo"] }), /unknown axis/);
   assert.throws(() => rankers.rank("nope", { seeds: [1] }), /unknown ranker/);
 });
+
+for (const [fixture, { catalog, queries }] of Object.entries(read("exclusion.json"))) {
+  for (const name of ["baseline", "hybrid"]) {
+    test(`${name} explicit exclusion matches Python on ${fixture} artists`, () => {
+      const rankers = new Rankers(catalog);
+      assert.ok(new Set(catalog.artist).size < catalog.count);
+      for (const query of queries) {
+        const preference = { seeds: [query.seed], likes: query.likes, dislikes: query.dislikes, excludeSeedArtist: query.excludeSeedArtist };
+        const picks = rankers.rank(name, preference, 10);
+        assert.deepEqual(picks.map((r) => r.id), query.expected[name], JSON.stringify(query));
+        assert.ok(picks.every((r) => r.id !== query.seed));
+        if (query.excludeSeedArtist) {
+          const seedArtist = catalog.artist[catalog.ids.indexOf(query.seed)];
+          assert.ok(picks.every((r) => catalog.artist[r.row] !== seedArtist));
+          if (fixture === "one_artist") assert.deepEqual(picks, []);
+        } else {
+          assert.equal(picks.length, 10);
+        }
+      }
+    });
+  }
+}
