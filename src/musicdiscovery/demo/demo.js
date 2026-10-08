@@ -185,7 +185,7 @@ async function mount(root) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const demo = new Demo(root, await response.json());
     root.demo = demo;
-    demo.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
+    void demo.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
   } catch (error) {
     root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The demo could not load its catalog (${error.message}).` }));
   } finally {

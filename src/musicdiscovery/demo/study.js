@@ -194,7 +194,7 @@ async function mount(root) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const study = new Study(root, await response.json());
     root.study = study;
-    study.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
+    void study.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
   } catch (error) {
     root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The study could not load its catalog (${error.message}).` }));
   } finally {
