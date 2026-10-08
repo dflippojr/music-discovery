@@ -101,6 +101,103 @@ async function axeViolations(page) {
 }
 
 describe("demo page", () => {
+  test("exclusion reranks from the keyboard and survives ranker and seed changes with qualities", async () => {
+    const { context, page, problems } = await open();
+    const checkbox = page.getByRole("checkbox", { name: "Exclude the seed artist" });
+    assert.equal(await checkbox.isChecked(), false);
+    await checkbox.check();
+    assert.match(await page.getByRole("status").textContent(), /Pick a seed track/);
+    await checkbox.uncheck();
+    await pickSeed(page, "Synthetic track 107");
+    const chip = page.getByRole("button", { name: /^Calmer/ });
+    await chip.click();
+    const original = await titles(page);
+    const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+    const checkArtists = async (seed) => {
+      const rows = (await titles(page)).map((title) => catalog.titles.indexOf(title));
+      const seedRow = catalog.ids.indexOf(seed);
+      assert.equal(rows.length, 10);
+      assert.ok(rows.every((row) => row !== seedRow && catalog.artist[row] !== catalog.artist[seedRow]));
+      assert.equal(await checkbox.isChecked(), true);
+      assert.match(await chip.textContent(), /liked/);
+    };
+    await checkbox.focus();
+    await page.keyboard.press("Space");
+    assert.notDeepEqual(await titles(page), original);
+    await checkArtists(107);
+    await page.getByRole("radio", { name: /Baseline/ }).check();
+    await checkArtists(107);
+    await pickSeed(page, "Synthetic track 110");
+    await checkArtists(110);
+    await page.getByRole("radio", { name: /Hybrid/ }).check();
+    await checkArtists(110);
+    await pickSeed(page, "Synthetic track 107");
+    await checkbox.uncheck();
+    assert.deepEqual(await titles(page), original);
+    assert.match(await chip.textContent(), /liked/);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("exclusion ratings retain separate original contexts in version 2 exports", async () => {
+    const { context, page, problems } = await open();
+    await pickSeed(page);
+    const original = await titles(page);
+    const checkbox = page.getByRole("checkbox", { name: "Exclude the seed artist" });
+    await checkbox.check();
+    const common = (await titles(page)).find((title) => original.includes(title));
+    assert.ok(common);
+    const item = page.locator(".md-result").filter({ has: page.getByText(common, { exact: true }) });
+    await item.getByRole("button", { name: /Thumbs down/ }).click();
+    await checkbox.uncheck();
+    const up = item.getByRole("button", { name: /Thumbs up/ });
+    assert.equal(await item.getByRole("button", { name: /Thumbs down/ }).getAttribute("aria-pressed"), "false");
+    await up.click();
+    await checkbox.check();
+    assert.equal(await item.getByRole("button", { name: /Thumbs down/ }).getAttribute("aria-pressed"), "true");
+    await page.getByRole("radio", { name: /Baseline/ }).check();
+    await pickSeed(page, "Synthetic track 11");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export my ratings" }).click()]);
+    const body = JSON.parse(readFileSync(await download.path(), "utf8"));
+    assert.equal(body.version, 2);
+    assert.equal(body.ratings.length, 2);
+    assert.equal(body.ratings[0].track_id, body.ratings[1].track_id);
+    assert.deepEqual(body.ratings.map((r) => [r.exclude_seed_artist, r.rating]), [[true, -1], [false, 1]]);
+    for (const record of body.ratings) {
+      assert.equal(record.ranker, "hybrid");
+      assert.equal(record.seed_track_id, 100);
+    }
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("all-one-artist catalogs announce zero results and keep controls usable", async () => {
+    const oneArtist = JSON.parse(readFileSync(join(bundle, "exclusion.json"), "utf8")).one_artist.catalog;
+    const { context, page, problems } = await open({}, { mount: "#music-discovery-demo" });
+    await page.route("**/catalog.json", (route) => route.fulfill({ json: oneArtist }));
+    await page.reload();
+    await page.getByRole("checkbox", { name: "Exclude the seed artist" }).waitFor();
+    await pickSeed(page);
+    const original = await titles(page);
+    const checkbox = page.getByRole("checkbox", { name: "Exclude the seed artist" });
+    await checkbox.check();
+    for (const ranker of ["Baseline", "Hybrid"]) {
+      await page.getByRole("radio", { name: new RegExp(ranker) }).check();
+      assert.deepEqual(await titles(page), []);
+      assert.match(await page.getByRole("status").textContent(), /No recommendations available/);
+      assert.deepEqual(await axeViolations(page), []);
+    }
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    assert.deepEqual(await titles(page), []);
+    await checkbox.uncheck();
+    assert.equal((await titles(page)).length, 10);
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    assert.deepEqual(await titles(page), original);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   test("opens on the hybrid ranker and the toggle switches both ways without reloading", async () => {
     const { context, page, problems } = await open();
     await page.evaluate(() => {
@@ -194,6 +291,7 @@ describe("demo page", () => {
     test(`axe-core finds no violations in ${scheme} mode`, async () => {
       const { context, page, problems } = await open({ colorScheme: scheme });
       await pickSeed(page);
+      await page.getByRole("checkbox", { name: "Exclude the seed artist" }).check();
       await page.getByRole("button", { name: /^Calmer/ }).click();
       const folk = page.locator(".md-chip").filter({ has: page.getByText("Folk", { exact: true }) });
       await folk.click();
@@ -208,6 +306,7 @@ describe("demo page", () => {
   test("there is no horizontal scroll at 320 px", async () => {
     const { context, page } = await open({ viewport: { width: 320, height: 700 } });
     await pickSeed(page);
+    await page.getByRole("checkbox", { name: "Exclude the seed artist" }).check();
     const widths = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
     assert.ok(widths[0] <= widths[1], `scrollWidth ${widths[0]} > ${widths[1]}`);
     await close(page, context);
@@ -227,6 +326,8 @@ describe("demo page", () => {
     const [download] = await Promise.all([page.waitForEvent("download"), exportButton.click()]);
     const body = JSON.parse(readFileSync(await download.path(), "utf8"));
     assert.deepEqual(body.ratings.map((r) => r.rating).sort(), [-1, 1]);
+    assert.equal(body.version, 2);
+    assert.ok(body.ratings.every((r) => r.exclude_seed_artist === false));
     assert.equal(body.ratings[0].ranker, "hybrid");
     assert.ok(requests.every((url) => url.startsWith(base) || url.startsWith("blob:")), requests.join());
     await close(page, context);
@@ -264,6 +365,7 @@ describe("study page", () => {
   test("shows two unlabelled lists and never names a ranker", async () => {
     const { context, page, problems } = await study();
     assert.match(await page.locator("#music-discovery-study").textContent(), /By sending the file you agree/);
+    assert.equal(await page.getByRole("checkbox", { name: "Exclude the seed artist" }).count(), 0);
     await page.getByRole("button", { name: "I agree, start" }).click();
     await page.getByRole("button", { name: "Pick a random track" }).click();
     await page.getByRole("button", { name: "Show the two lists" }).click();

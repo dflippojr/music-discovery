@@ -33,6 +33,9 @@ class Demo {
 
   build() {
     this.id = makeIds();
+    this.excludeSeedArtist = h("input", { type: "checkbox", id: this.id("exclude-seed-artist") });
+    this.excludeSeedArtist.addEventListener("change", () => this.render());
+    this.picker.element.append(h("div", { class: "md-row" }, this.excludeSeedArtist, h("label", { for: this.id("exclude-seed-artist"), text: "Exclude the seed artist" })));
     this.root.classList.add("md-demo");
     this.root.replaceChildren(
       h("p", { class: "md-lead", text: "Start from a track you like, say what you want more or less of, and see why each track was picked." }),
@@ -101,9 +104,12 @@ class Demo {
       return;
     }
     const preference = buildPreference(this.data, this.seed.row, this.picker.qualities);
+    preference.excludeSeedArtist = this.excludeSeedArtist.checked;
     const picks = this.rankers.rank(this.ranker, preference, 10);
     const context = JSON.stringify([this.ranker, preference]);
-    this.status.textContent = `${picks.length} recommendations from the ${RANKER_LABELS[this.ranker].toLowerCase()} ranker for ${this.seed.labels[this.seed.row]}.`;
+    this.status.textContent = picks.length
+      ? `${picks.length} recommendations from the ${RANKER_LABELS[this.ranker].toLowerCase()} ranker for ${this.seed.labels[this.seed.row]}.`
+      : "No recommendations available with these preferences. Try unchecking Exclude the seed artist or picking another seed track.";
     this.painters = new Map();
     this.sources.slots = [];
     this.results.replaceChildren(...picks.map((pick, i) => this.resultItem(pick, i + 1, preference, context)));
@@ -150,6 +156,7 @@ class Demo {
         seed_track_id: preference.seeds[0],
         likes: preference.likes,
         dislikes: preference.dislikes,
+        exclude_seed_artist: preference.excludeSeedArtist,
       });
     }
     this.painters.get(key)?.();
@@ -159,7 +166,7 @@ class Demo {
   }
 
   exportRatings() {
-    const body = { format: "music-discovery-ratings", version: 1, ratings: [...this.ratings.values()] };
+    const body = { format: "music-discovery-ratings", version: 2, ratings: [...this.ratings.values()] };
     const url = URL.createObjectURL(new Blob([`${JSON.stringify(body, null, 2)}\n`], { type: "application/json" }));
     const link = h("a", { href: url, download: "music-discovery-ratings.json" });
     document.body.append(link);

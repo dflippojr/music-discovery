@@ -97,6 +97,15 @@ def test_exclude_seed_artist_and_small_catalog(catalog):
     )
 
 
+def test_excluding_every_candidate_returns_empty():
+    frame = make_frame()
+    frame["artist"] = "Only artist"
+    catalog = Catalog(frame)
+    ranker = HybridRanker()
+    assert len(ranker.rank(pref(), catalog)) == 10
+    assert ranker.rank(pref(exclude_seed_artist=True), catalog) == []
+
+
 def test_metadata_similarity_prefers_shared_genre_ids_and_tags(catalog):
     metadata = _Metadata(catalog)
     seed_row = catalog.position[100]
