@@ -5,7 +5,7 @@
 
 import { Rankers } from "./ranker.js";
 import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, newSessionId, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
-import { buildPreference, DeferredSources, h, makeIds, QualityPicker, randomRow, SeedPicker, thumbButton } from "./ui.js";
+import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, SeedPicker, thumbButton } from "./ui.js";
 
 const PREFERENCES = [
   { value: "A", text: "List A" },
@@ -169,12 +169,7 @@ class Study {
     const status = h("p", { class: "md-status", role: "status" });
     exportButton.addEventListener("click", () => {
       const body = buildExport(this.session);
-      const url = URL.createObjectURL(new Blob([`${JSON.stringify(body, null, 2)}\n`], { type: "application/json" }));
-      const link = h("a", { href: url, download: `listener-study-${this.session.id.slice(0, 8)}.json` });
-      document.body.append(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadJson(body, `listener-study-${this.session.id.slice(0, 8)}.json`);
       status.textContent = "Downloaded. Please send that file to the person who invited you.";
     });
     this.show(
@@ -186,24 +181,8 @@ class Study {
   }
 }
 
-async function mount(root) {
-  const url = new URL(root.dataset.catalog ?? "catalog.json", import.meta.url);
-  root.setAttribute("aria-busy", "true");
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const study = new Study(root, await response.json());
-    root.study = study;
-    void study.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
-  } catch (error) {
-    root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The study could not load its catalog (${error.message}).` }));
-  } finally {
-    root.removeAttribute("aria-busy");
-  }
-}
-
 function start() {
-  document.querySelectorAll("[data-music-discovery-study]").forEach(mount);
+  document.querySelectorAll("[data-music-discovery-study]").forEach((root) => mountCatalog(root, Study, "study", import.meta.url));
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);

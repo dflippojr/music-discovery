@@ -605,3 +605,37 @@ describe("deferred source recovery", () => {
     });
   }
 });
+
+// --- shared catalog mounting -----------------------------------------------------
+
+describe("catalog load failures", () => {
+  const pages = [
+    { path: "", root: "#music-discovery-demo", name: "demo" },
+    { path: "study.html", root: "#music-discovery-study", name: "study" },
+  ];
+  const failures = [
+    { label: "non-OK response", route: (r) => r.fulfill({ status: 503, body: "" }), message: /HTTP 503/ },
+    { label: "invalid JSON", route: (r) => r.fulfill({ status: 200, contentType: "application/json", body: "{" }), message: /./ },
+  ];
+  for (const { path, root, name } of pages) {
+    for (const { label, route, message } of failures) {
+      test(`${name} shows its alert and clears aria-busy on ${label}`, async () => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        let catalogRequests = 0;
+        await page.route("**/catalog.json", (r) => {
+          catalogRequests += 1;
+          return route(r);
+        });
+        await page.goto(base + path);
+        const alert = page.locator(`${root} [role=alert]`);
+        await alert.waitFor();
+        assert.match(await alert.textContent(), new RegExp(`^The ${name} could not load its catalog [(]`));
+        assert.match(await alert.textContent(), message);
+        assert.equal(await page.locator(root).getAttribute("aria-busy"), null);
+        assert.equal(catalogRequests, 1);
+        await context.close();
+      });
+    }
+  }
+});
