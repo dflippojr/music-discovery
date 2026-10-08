@@ -29,8 +29,8 @@ python -m http.server -d build/demo 8000    # open http://localhost:8000/
 | `parity.json` | expected top 10 from Python on fixed queries; for tests, not vendored |
 
 `export-demo` prints each file's raw and gzip size and the bundle total, and
-exits non-zero if the compressed bundle (both data files) reaches 2 MiB (the
-target for the small catalog). It also reports the first-load size (everything
+exits non-zero if the compressed bundle (every file listed above except
+`parity.json`) reaches 2 MiB (the target for the small catalog). It also reports the first-load size (everything
 but `sources.json`) and the deferred size separately. The generated bundle is never committed.
 
 ## What is in `catalog.json`
