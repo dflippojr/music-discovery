@@ -64,33 +64,59 @@ export function sourceLink(href) {
 /**
  * Source page URLs live in their own file so the first download stays small. Results show their
  * license link at once; `fill` adds the source link now or when `sources.json` arrives.
- * A failed fetch leaves results without the source link rather than breaking the page.
+ * A failed fetch leaves results usable and offers an explicit retry without a page refresh.
  */
 export class DeferredSources {
-  constructor(data) {
+  constructor(data, root) {
     this.data = data;
-    this.slots = [];
+    this.root = root;
+    this.state = "idle";
+    this.status = h("p", { class: "md-source-status md-help", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+    this.retry = h("button", { type: "button", class: "md-button", text: "Retry source links", hidden: true });
+    this.retry.addEventListener("click", () => this.load(this.url));
+    this.element = h("div", { class: "md-source-controls" }, this.status, this.retry);
   }
 
   /** Fetch the file; call this once the UI is on screen. */
   load(url) {
+    if (this.state === "loading" || this.state === "loaded") return this.ready;
+    this.url = url;
+    const recovering = this.state === "failed";
+    this.state = "loading";
+    this.status.textContent = "Loading source links. License links and ratings remain available.";
+    this.retry.disabled = true;
     this.ready = fetch(url)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((body) => {
+        if (!Array.isArray(body?.sources) || body.sources.length !== this.data.count ||
+            !body.sources.every((href) => typeof href === "string")) throw new Error("Invalid sources");
         this.data.sources = body.sources;
-        for (const { element, row } of this.slots) this.add(element, row);
+        for (const element of this.root.querySelectorAll("[data-source-row]")) this.add(element, Number(element.dataset.sourceRow));
+        this.state = "loaded";
+        this.retry.hidden = true;
+        this.status.textContent = recovering ? "Source links recovered." : "Source links loaded.";
       })
-      .catch(() => {});
+      .catch(() => {
+        this.state = "failed";
+        this.status.textContent = "Source links are unavailable. Retry without refreshing; your ratings are kept. License links remain available.";
+        this.retry.disabled = false;
+        this.retry.hidden = false;
+      });
+    return this.ready;
   }
 
   add(element, row) {
     const href = this.data.sources?.[row];
-    if (href) element.prepend(sourceLink(href));
+    if (href && !element.querySelector("[data-source-link]")) {
+      const link = sourceLink(href);
+      link.setAttribute("data-source-link", "");
+      element.prepend(link);
+    }
   }
 
   fill(element, row) {
+    element.dataset.sourceRow = row;
     if (this.data.sources) this.add(element, row);
-    else this.slots.push({ element, row });
   }
 }
 

@@ -45,7 +45,15 @@ the data each ranker needs, as base64 little-endian integers:
 
 Source page links are in `sources.json` (`{"version", "sources"}`, in catalog order),
 which the page fetches after it is ready: results show their license link at once and
-gain the source link when the file arrives. If it fails to load, the links are left out.
+gain the source link when the file arrives. Both pages announce loading and failure.
+If the file is unavailable (including HTTP, network or invalid JSON failures),
+"Retry source links" fetches the same configured sources URL again. There are no
+automatic retries or per-track requests; the button is disabled during a retry.
+Recommendations, license links, ratings and study navigation remain usable.
+Successful recovery adds links once to the currently displayed results, announces
+recovery and removes the retry button. Seeds, qualities, ratings, list order and
+the study session id stay intact. You can retry again after another failure;
+there is no need to refresh and lose your in-progress session.
 Vendor both files together.
 
 Quantisation error is far below the score gaps that decide the top 10, and the

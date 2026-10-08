@@ -106,7 +106,7 @@ describe("demo page", () => {
     const checkbox = page.getByRole("checkbox", { name: "Exclude the seed artist" });
     assert.equal(await checkbox.isChecked(), false);
     await checkbox.check();
-    assert.match(await page.getByRole("status").textContent(), /Pick a seed track/);
+    assert.match(await page.locator(".md-status").textContent(), /Pick a seed track/);
     await checkbox.uncheck();
     await pickSeed(page, "Synthetic track 107");
     const chip = page.getByRole("button", { name: /^Calmer/ });
@@ -184,7 +184,7 @@ describe("demo page", () => {
     for (const ranker of ["Baseline", "Hybrid"]) {
       await page.getByRole("radio", { name: new RegExp(ranker) }).check();
       assert.deepEqual(await titles(page), []);
-      assert.match(await page.getByRole("status").textContent(), /No recommendations available/);
+      assert.match(await page.locator(".md-status").textContent(), /No recommendations available/);
       assert.deepEqual(await axeViolations(page), []);
     }
     await page.getByRole("button", { name: /^Calmer/ }).click();
@@ -253,6 +253,8 @@ describe("demo page", () => {
     assert.equal(await items.count(), 10);
     assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 0);
     assert.equal(await page.getByRole("link", { name: "License" }).count(), 10);
+    assert.match(await page.locator(".md-source-status").textContent(), /Loading source links/);
+    assert.equal(await page.locator(".md-source-status").getAttribute("role"), "status");
     release();
     await page.getByRole("link", { name: /Source page/ }).first().waitFor();
     assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 10);
@@ -471,4 +473,135 @@ describe("study page", () => {
     assert.equal(await fits(), true);
     await close(page, context);
   });
+});
+
+
+// All routes use the synthetic local bundle, never music services.
+describe("deferred source recovery", () => {
+  for (const path of ["", "study.html"]) {
+    const isStudy = path === "study.html";
+    const root = isStudy ? "#music-discovery-study" : "#music-discovery-demo";
+    const setup = async (page) => {
+      await page.goto(base + path);
+      if (isStudy) {
+        await page.getByRole("button", { name: "I agree, start" }).click();
+        await page.getByRole("button", { name: "Pick a random track" }).click();
+        await page.getByRole("button", { name: "Show the two lists" }).click();
+      } else await pickSeed(page);
+    };
+    for (const failure of ["http", "network", "json", "shape"]) {
+      test(`${path || "demo"}: ${failure} failure is accessible and retryable`, async () => {
+        const context = await browser.newContext({ viewport: { width: 320, height: 700 } });
+        const page = await context.newPage();
+        const errors = [];
+        page.on("pageerror", (error) => errors.push(String(error)));
+        await page.coverage.startJSCoverage();
+        let requests = 0;
+        await page.route("**/sources.json", (route) => {
+          requests += 1;
+          if (failure === "network") return route.abort();
+          if (failure === "http") return route.fulfill({ status: 404 });
+          return route.fulfill({ contentType: "application/json", body: failure === "json" ? "{" : '{"sources":null}' });
+        });
+        await setup(page);
+        const retry = page.getByRole("button", { name: "Retry source links" });
+        await retry.waitFor();
+        assert.match(await page.locator(".md-source-status").textContent(), /unavailable/);
+        assert.equal(await page.getByRole("link", { name: "License" }).count(), 10);
+        await page.getByRole("button", { name: /Thumbs up/ }).first().click();
+        assert.deepEqual(await axeViolations(page), []);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+        assert.equal(requests, 1); // no automatic retry
+        await retry.click();
+        await page.waitForFunction((root) => document.querySelector(root)[root.includes("study") ? "study" : "demo"].sources.state === "failed", root);
+        assert.equal(requests, 2);
+        assert.equal(await retry.isEnabled(), true);
+        assert.deepEqual(errors, []);
+        await close(page, context);
+      });
+    }
+
+    test(`${path || "demo"}: retry preserves ratings and session, populating only current results once`, async () => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.coverage.startJSCoverage();
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(String(error)));
+      let requests = 0;
+      let release;
+      const gate = new Promise((done) => { release = done; });
+      // A configured URL is reused for the retry rather than falling back to sources.json.
+      await page.route(base + path, (route) => {
+        const html = readFileSync(join(bundle, path || "index.html"), "utf8");
+        const marker = isStudy ? "data-music-discovery-study" : "data-music-discovery";
+        return route.fulfill({ contentType: "text/html", headers: { "content-security-policy": CSP },
+          body: html.replace(marker, `${marker} data-sources="recovery-sources.json"`) });
+      });
+      const sourceRequests = [];
+      page.on("request", (request) => {
+        if (request.url().includes("sources.json")) sourceRequests.push(request.url());
+      });
+      await page.route("**/recovery-sources.json", async (route) => {
+        requests += 1;
+        if (requests === 1) return route.fulfill({ status: 404 });
+        await gate;
+        await route.fulfill({ path: join(bundle, "sources.json") });
+      });
+      await setup(page);
+      const retry = page.getByRole("button", { name: "Retry source links" });
+      await retry.waitFor();
+      const first = page.getByRole("button", { name: /Thumbs up/ }).first();
+      await first.click();
+      await page.evaluate((root) => {
+        const app = document.querySelector(root)[root.includes("study") ? "study" : "demo"];
+        globalThis.originalApp = app;
+        globalThis.originalSession = app.session?.id;
+        globalThis.originalOrders = JSON.stringify(app.orders);
+        globalThis.oldLinks = [...document.querySelectorAll("[data-source-row]")];
+        for (let i = 0; i < 10; i += 1) app.sources.retry.click();
+      }, root);
+      await page.waitForFunction(() => document.querySelector(".md-source-status").textContent.includes("Loading"));
+      assert.equal(await retry.isDisabled(), true);
+      assert.equal(await first.getAttribute("aria-pressed"), "true");
+      if (isStudy) {
+        // Finish the old task while recovery is in flight, then display the next task.
+        for (const button of await page.getByRole("button", { name: /Thumbs up/ }).all()) {
+          if (await button.getAttribute("aria-pressed") !== "true") await button.click();
+        }
+        await page.getByRole("radio", { name: "List B" }).check();
+        await page.getByRole("button", { name: "Next task" }).click();
+        await page.getByRole("button", { name: "Pick a random track" }).click();
+        await page.getByRole("button", { name: "Show the two lists" }).click();
+      } else {
+        await pickSeed(page, "Synthetic track 110");
+        await page.getByRole("button", { name: /^Calmer/ }).click();
+      }
+      await page.getByRole("button", { name: /Thumbs down/ }).first().click();
+      const currentTitles = await titles(page);
+      release();
+      await page.waitForFunction(() => document.querySelector(".md-source-status").textContent === "Source links recovered.");
+      assert.equal(requests, 2);
+      assert.deepEqual(sourceRequests, [base + "recovery-sources.json", base + "recovery-sources.json"]);
+      assert.equal(await retry.isVisible(), false);
+      assert.deepEqual(await titles(page), currentTitles);
+      assert.equal(await page.getByRole("button", { name: /Thumbs down/ }).first().getAttribute("aria-pressed"), "true");
+      const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+      const { sources } = JSON.parse(readFileSync(join(bundle, "sources.json"), "utf8"));
+      for (const item of await page.locator(".md-result").all()) {
+        const links = item.getByRole("link", { name: /Source page/ });
+        assert.equal(await links.count(), 1);
+        const row = catalog.titles.indexOf(await item.locator(".md-title").textContent());
+        assert.equal(await links.getAttribute("href"), sources[row]);
+      }
+      assert.equal(await page.evaluate((root) => {
+        const app = document.querySelector(root)[root.includes("study") ? "study" : "demo"];
+        return app === globalThis.originalApp && app.session?.id === globalThis.originalSession &&
+          JSON.stringify(app.orders) === globalThis.originalOrders &&
+          globalThis.oldLinks.every((el) => !el.isConnected && !el.querySelector("[data-source-link]")) &&
+          (app.session ? app.session.tasks[0].lists[0].results[0].rating === 1 : [...app.ratings.values()].some((r) => r.rating === 1));
+      }, root), true);
+      assert.deepEqual(errors, []);
+      await close(page, context);
+    });
+  }
 });

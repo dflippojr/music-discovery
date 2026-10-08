@@ -18,7 +18,7 @@ class Study {
     this.root = root;
     this.data = data;
     this.rankers = new Rankers(data);
-    this.sources = new DeferredSources(data);
+    this.sources = new DeferredSources(data, root);
     this.orders = balancedOrders(TASK_COUNT, randomRow);
     this.session = { id: newSessionId((bytes) => crypto.getRandomValues(bytes)), startedAt: timestamp(), tasks: [] };
     this.id = makeIds();
@@ -27,7 +27,7 @@ class Study {
   }
 
   show(...children) {
-    this.root.replaceChildren(...children, h("p", { class: "md-attribution", text: this.data.attribution }));
+    this.root.replaceChildren(...children, this.sources.element, h("p", { class: "md-attribution", text: this.data.attribution }));
     this.root.querySelector("h2")?.focus();
   }
 
@@ -194,7 +194,7 @@ async function mount(root) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const study = new Study(root, await response.json());
     root.study = study;
-    study.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
+    void study.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
   } catch (error) {
     root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The study could not load its catalog (${error.message}).` }));
   } finally {
