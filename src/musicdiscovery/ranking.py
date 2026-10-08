@@ -70,6 +70,16 @@ class _Fit:
         self.unit = self.projected / norms[:, None]
 
 
+def _allowed(preference: Preference, catalog: Catalog) -> np.ndarray:
+    seed_rows = [catalog.position[s] for s in preference.seeds]
+    allowed = np.ones(len(catalog), dtype=bool)
+    allowed[seed_rows] = False
+    if preference.exclude_seed_artist:
+        artists = catalog.frame["artist"]
+        allowed &= ~artists.isin(artists.iloc[seed_rows]).to_numpy()
+    return allowed
+
+
 class BaselineRanker:
     """Cosine similarity to the seeds, plus fixed-weight axis, genre and tag terms."""
 
@@ -137,12 +147,7 @@ class BaselineRanker:
                 )
 
         scores = np.sum([values for _, _, values in terms], axis=0)
-        allowed = np.ones(len(catalog), dtype=bool)
-        allowed[seed_rows] = False
-        if preference.exclude_seed_artist:
-            artists = catalog.frame["artist"]
-            allowed &= ~artists.isin(artists.iloc[seed_rows]).to_numpy()
-        return terms, scores, allowed
+        return terms, scores, _allowed(preference, catalog)
 
     @staticmethod
     def build(catalog: Catalog, row: int, terms) -> Recommendation:

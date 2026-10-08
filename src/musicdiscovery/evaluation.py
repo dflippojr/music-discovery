@@ -13,7 +13,7 @@ import pandas as pd
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
-from musicdiscovery.ranking import BaselineRanker, Ranker, Recommendation
+from musicdiscovery.ranking import BaselineRanker, Ranker, Recommendation, _allowed
 
 K = 10
 QUERY_SEED = 20261005
@@ -56,16 +56,6 @@ def _bare(catalog: Catalog, rows: Sequence[int]) -> list[Recommendation]:
         )
         for row in rows
     ]
-
-
-def _allowed(preference: Preference, catalog: Catalog) -> np.ndarray:
-    seed_rows = [catalog.position[s] for s in preference.seeds]
-    allowed = np.ones(len(catalog), dtype=bool)
-    allowed[seed_rows] = False
-    if preference.exclude_seed_artist:
-        artists = catalog.frame["artist"]
-        allowed &= ~artists.isin(artists.iloc[seed_rows]).to_numpy()
-    return allowed
 
 
 class RandomRanker:
