@@ -18,7 +18,7 @@ class Demo {
   constructor(root, data) {
     this.root = root;
     this.data = data;
-    this.sources = new DeferredSources(data);
+    this.sources = new DeferredSources(data, root);
     this.rankers = new Rankers(data);
     this.ranker = "hybrid";
     this.ratings = new Map(); // context key -> rating record
@@ -75,6 +75,7 @@ class Demo {
       { class: "md-section", "aria-labelledby": this.id("res-h") },
       h("h2", { id: this.id("res-h"), text: "Recommendations" }),
       this.status,
+      this.sources.element,
       this.results,
       h("div", { class: "md-row" }, this.exportButton, h("span", { class: "md-help", text: "Ratings stay in this page. Export downloads them as a JSON file." })),
     );
@@ -111,7 +112,6 @@ class Demo {
       ? `${picks.length} recommendations from the ${RANKER_LABELS[this.ranker].toLowerCase()} ranker for ${this.seed.labels[this.seed.row]}.`
       : "No recommendations available with these preferences. Try unchecking Exclude the seed artist or picking another seed track.";
     this.painters = new Map();
-    this.sources.slots = [];
     this.results.replaceChildren(...picks.map((pick, i) => this.resultItem(pick, i + 1, preference, context)));
   }
 

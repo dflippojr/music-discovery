@@ -18,7 +18,7 @@ class Study {
     this.root = root;
     this.data = data;
     this.rankers = new Rankers(data);
-    this.sources = new DeferredSources(data);
+    this.sources = new DeferredSources(data, root);
     this.orders = balancedOrders(TASK_COUNT, randomRow);
     this.session = { id: newSessionId((bytes) => crypto.getRandomValues(bytes)), startedAt: timestamp(), tasks: [] };
     this.id = makeIds();
@@ -27,7 +27,7 @@ class Study {
   }
 
   show(...children) {
-    this.root.replaceChildren(...children, h("p", { class: "md-attribution", text: this.data.attribution }));
+    this.root.replaceChildren(...children, this.sources.element, h("p", { class: "md-attribution", text: this.data.attribution }));
     this.root.querySelector("h2")?.focus();
   }
 
