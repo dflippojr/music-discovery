@@ -44,6 +44,38 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+/** Save `body` as a local pretty-printed JSON download named `filename`. */
+export function downloadJson(body, filename) {
+  const url = URL.createObjectURL(new Blob([`${JSON.stringify(body, null, 2)}
+`], { type: "application/json" }));
+  const link = h("a", { href: url, download: filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Load the catalog named by `data-catalog` (relative to `moduleUrl`), build `new Page(root, catalog)`
+ * as `root[pageName]`, then start its deferred sources (`data-sources`, relative to the catalog).
+ * Source loading is intentionally not awaited.
+ */
+export async function mountCatalog(root, Page, pageName, moduleUrl) {
+  const url = new URL(root.dataset.catalog ?? "catalog.json", moduleUrl);
+  root.setAttribute("aria-busy", "true");
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const page = new Page(root, await response.json());
+    root[pageName] = page;
+    void page.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
+  } catch (error) {
+    root.replaceChildren(h("p", { class: "md-error", role: "alert", text: `The ${pageName} could not load its catalog (${error.message}).` }));
+  } finally {
+    root.removeAttribute("aria-busy");
+  }
+}
+
 export function thumbIcon(down) {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
