@@ -62,8 +62,17 @@ def sha1_of(path: Path) -> str:
 
 def _download_once(url: str, partial: Path) -> None:
     with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+        # HTTPResponse resolves framing (including chunked bodies) before reading.
+        expected = (
+            response.length if isinstance(response, http.client.HTTPResponse) else None
+        )
         with partial.open("wb") as out:
             shutil.copyfileobj(response, out, _CHUNK_BYTES)
+            received = out.tell()
+            if expected is not None and received < expected:
+                raise OSError(
+                    f"incomplete HTTP response: received {received} of {expected} bytes"
+                )
 
 
 def _is_transient(error: Exception) -> bool:
