@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "ui-testing"
 HANDLE = DATA / "instance.json"
+FIXTURE_TIMEOUT = 30
+CHILD_EXIT_TIMEOUT = 2
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
     "form-action 'none'; object-src 'none'"
@@ -92,6 +94,37 @@ class Handler(SimpleHTTPRequestHandler):
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
 
+def terminate_fixture(child):
+    """Reap only our fixture child before its files can be removed."""
+    if child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(timeout=CHILD_EXIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=CHILD_EXIT_TIMEOUT)
+
+
+def wait_for_fixture(child, stopping):
+    deadline = time.monotonic() + FIXTURE_TIMEOUT
+    while not stopping.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Fixture generation timed out after {FIXTURE_TIMEOUT} seconds"
+            )
+        try:
+            result = child.wait(timeout=min(0.1, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+        if stopping.is_set():
+            return False
+        if result:
+            raise subprocess.CalledProcessError(result, child.args)
+        return True
+    return False
+
+
 def start(port):
     validate_environment()
     DATA.mkdir(parents=True, exist_ok=True)
@@ -120,14 +153,18 @@ def start(port):
             threading.Thread(target=server.shutdown, daemon=True).start()
 
     previous_term = signal.signal(signal.SIGTERM, request_shutdown)
+    previous_int = signal.signal(signal.SIGINT, request_shutdown)
+    child = None
     try:
         with HANDLE.open("x", encoding="utf-8") as handle:
             json.dump(metadata, handle)
-        subprocess.run(
+        child = subprocess.Popen(
             [sys.executable, str(ROOT / "scripts/build_demo_fixture.py"), str(bundle)],
             cwd=ROOT,
-            check=True,
         )
+        if not wait_for_fixture(child, stopping):
+            print("UI startup cancelled during fixture generation", file=sys.stderr)
+            return
         catalog_path = bundle / "catalog.json"
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         catalog["licenses"] = ["/synthetic/license"] * len(catalog["licenses"])
@@ -137,6 +174,7 @@ def start(port):
         sources["sources"] = [f"/synthetic/track/{track}" for track in catalog["ids"]]
         source_path.write_text(json.dumps(sources), encoding="utf-8")
         if stopping.is_set():
+            print("UI startup cancelled", file=sys.stderr)
             return
         # The socket is bound and every file exists before announcing readiness.
         print(f"UI_URL=http://127.0.0.1:{port}/", flush=True)
@@ -148,7 +186,12 @@ def start(port):
         serving.set()
         server.serve_forever(poll_interval=0.1)
     finally:
-        signal.signal(signal.SIGTERM, previous_term)
+        try:
+            if child is not None:
+                terminate_fixture(child)
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
         server.server_close()
         remove_bundle(bundle)
         if HANDLE.exists():
@@ -189,7 +232,13 @@ def main():
             start(args.port)
         else:
             stop()
-    except (OSError, ValueError, subprocess.CalledProcessError, URLError) as error:
+    except (
+        OSError,
+        ValueError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        URLError,
+    ) as error:
         print(f"UI instance failed: {error}", file=sys.stderr)
         return 1
     return 0

@@ -37,6 +37,15 @@ PID and HANDLE. Readiness: GET /__ui_health returns that instance ID. Startup
 logs go to that terminal; redirect them to the evidence directory if desired.
 Occupied ports or an existing handle fail; no existing server is reused.
 Partial seed failure closes the socket and removes its own files and handle.
+Fixture generation has a 30-second startup deadline, below Playwright's
+60-second readiness timeout. A timeout prints a diagnostic and exits nonzero.
+SIGTERM or Ctrl+C during seeding cancels startup with a cancellation diagnostic.
+The launcher terminates only its owned fixture child and waits for exit,
+escalating to kill after two seconds and allowing two seconds to confirm that
+exit. After the child exits, it closes the socket and removes only its flat
+bundle and handle, within Playwright's 10-second graceful-shutdown window.
+The stop command requires a ready health endpoint; cancel seeding with SIGTERM
+or Ctrl+C in the owned launcher terminal.
 SIGTERM, Ctrl+C or the stop command triggers cleanup. Register teardown in a
 finally/trap before launching. Never use the handle's token in evidence.
 

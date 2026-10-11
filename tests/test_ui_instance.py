@@ -2,9 +2,15 @@
 
 import importlib.util
 import json
+import signal
 import socket
 import subprocess
+import sys
+import threading
+import time
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -48,33 +54,207 @@ def test_occupied_port_creates_no_handle_or_bundle(launcher):
     assert not list(launcher.DATA.iterdir())
 
 
-def test_partial_seed_failure_closes_port_and_removes_owned_files(
-    launcher, monkeypatch
-):
-    port = None
+@pytest.fixture
+def seeding(launcher, monkeypatch):
+    """Real owned children with a pipe handshake and no data dependencies."""
+    children = []
+    ports = []
     original_server = launcher.ThreadingHTTPServer
+    original_popen = subprocess.Popen
+    unrelated = launcher.DATA / "run-unrelated"
+    unrelated.mkdir(parents=True)
+    (unrelated / "keep.txt").write_text("keep")
 
     def server(*args, **kwargs):
-        nonlocal port
         instance = original_server(*args, **kwargs)
-        port = instance.server_port
+        ports.append(instance.server_port)
         return instance
 
-    def fail_seed(args, **kwargs):
-        bundle = Path(args[-1])
-        bundle.mkdir()
-        (bundle / "partial.json").write_text("{}")
-        raise subprocess.CalledProcessError(1, args)
+    def seed(*, block=False, exit_code=0, cancel=None, escalate=False):
+        def spawn(args, **kwargs):
+            script = (
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "bundle = Path(sys.argv[1])\n"
+                "bundle.mkdir()\n"
+                "(bundle / 'catalog.json').write_text("
+                "json.dumps({'ids': [100], 'licenses': ['synthetic']}))\n"
+                "(bundle / 'sources.json').write_text("
+                "json.dumps({'sources': ['synthetic']}))\n"
+                "print('ready', flush=True)\n"
+                + ("sys.stdin.read()\n" if block else "")
+                + f"sys.exit({exit_code})\n"
+            )
+            child = original_popen(
+                [sys.executable, "-c", script, args[-1]],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                **kwargs,
+            )
+            children.append(child)
+            ready = threading.Event()
+
+            def read_ready():
+                if child.stdout.readline() == "ready\n":
+                    ready.set()
+
+            threading.Thread(target=read_ready, daemon=True).start()
+            assert ready.wait(5), "Synthetic child did not reach seeding handshake"
+            if escalate:
+                # Deterministically exercise kill even on Windows, whose
+                # terminate() cannot be ignored by a signal handler.
+                monkeypatch.setattr(child, "terminate", lambda: None)
+            if cancel is not None:
+                original_wait = child.wait
+
+                def interrupt_wait(*args, **kwargs):
+                    monkeypatch.setattr(child, "wait", original_wait)
+                    signal.raise_signal(cancel)
+                    return original_wait(*args, **kwargs)
+
+                monkeypatch.setattr(child, "wait", interrupt_wait)
+            return child
+
+        monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
 
     monkeypatch.setattr(launcher, "ThreadingHTTPServer", server)
-    monkeypatch.setattr(launcher.subprocess, "run", fail_seed)
+    # Check that cleanup cannot race a live child still writing the bundle.
+    original_remove = launcher.remove_bundle
+
+    def remove(bundle):
+        assert children[-1].poll() is not None
+        original_remove(bundle)
+
+    monkeypatch.setattr(launcher, "remove_bundle", remove)
+    yield seed, children, ports
+    for child in children:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        child.stdin.close()
+        child.stdout.close()
+
+
+def assert_cleaned(launcher, children, ports):
+    assert children[-1].poll() is not None
+    assert not launcher.HANDLE.exists()
+    assert not Path(children[-1].args[-1]).exists()
+    assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("127.0.0.1", ports[-1]))
+    launcher.stop()  # safe to repeat after interrupted startup
+
+
+def assert_restart(launcher, monkeypatch, seeding):
+    seed, children, ports = seeding
+    seed()
+    previous_port = ports[-1]
+    serving = threading.Event()
+    original_serve = ThreadingHTTPServer.serve_forever
+    errors = []
+    observed = {}
+
+    def serve(server, **kwargs):
+        serving.set()
+        original_serve(server, **kwargs)
+
+    def stop_when_ready():
+        try:
+            if not serving.wait(5):
+                raise TimeoutError("Restarted server did not become ready")
+            metadata = json.loads(launcher.HANDLE.read_text())
+            observed["instance"] = metadata["instance"]
+            origin = f"http://127.0.0.1:{metadata['port']}"
+            with urlopen(origin + "/__ui_health", timeout=5) as response:
+                observed["health"] = json.load(response)
+            bundle = launcher.DATA / metadata["instance"]
+            observed["licenses"] = json.loads((bundle / "catalog.json").read_text())[
+                "licenses"
+            ]
+            observed["sources"] = json.loads((bundle / "sources.json").read_text())[
+                "sources"
+            ]
+            request = Request(
+                origin + "/__ui_stop",
+                method="POST",
+                headers={"X-UI-Token": metadata["token"]},
+            )
+            with urlopen(request, timeout=5) as response:
+                observed["stop_status"] = response.status
+        except Exception as error:
+            errors.append(error)
+        finally:
+            # Bound the test if readiness or an HTTP request fails.
+            if launcher_server is not None:
+                launcher_server.shutdown()
+
+    # Capture the real server for failure teardown without signalling others.
+    server_factory = launcher.ThreadingHTTPServer
+    launcher_server = None
+
+    def capture_server(*args, **kwargs):
+        nonlocal launcher_server
+        launcher_server = server_factory(*args, **kwargs)
+        return launcher_server
+
+    monkeypatch.setattr(launcher, "ThreadingHTTPServer", capture_server)
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", serve)
+    worker = threading.Thread(target=stop_when_ready, daemon=True)
+    worker.start()
+    launcher.start(previous_port)
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert not errors
+    assert observed["health"] == {"instance": observed["instance"]}
+    assert observed["licenses"] == ["/synthetic/license"]
+    assert observed["sources"] == ["/synthetic/track/100"]
+    assert observed["stop_status"] == 204
+    assert_cleaned(launcher, children, ports)
+
+
+def test_partial_seed_failure_closes_port_and_removes_owned_files(launcher, seeding):
+    seed, children, ports = seeding
+    seed(exit_code=1)
     with pytest.raises(subprocess.CalledProcessError):
         launcher.start(0)
-    assert not launcher.HANDLE.exists()
-    assert not list(launcher.DATA.iterdir())
-    with socket.socket() as probe:
-        assert probe.connect_ex(("127.0.0.1", port)) != 0
-    launcher.stop()  # safe after partial failure
+    assert_cleaned(launcher, children, ports)
+    assert list(launcher.DATA.iterdir()) == [launcher.DATA / "run-unrelated"]
+
+
+@pytest.mark.parametrize("escalate", [False, True])
+def test_seed_timeout_is_nonzero_and_allows_restart(
+    launcher, monkeypatch, seeding, capsys, escalate
+):
+    seed, children, ports = seeding
+    assert launcher.FIXTURE_TIMEOUT == 30
+    monkeypatch.setattr(launcher, "FIXTURE_TIMEOUT", 0.1)
+    monkeypatch.setattr(launcher, "CHILD_EXIT_TIMEOUT", 0.05)
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", "0"])
+    seed(block=True, escalate=escalate)
+    started = time.monotonic()
+    assert launcher.main() == 1
+    assert time.monotonic() - started < 5
+    assert "Fixture generation timed out" in capsys.readouterr().err
+    assert_cleaned(launcher, children, ports)
+    assert_restart(launcher, monkeypatch, seeding)
+
+
+@pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
+def test_signal_during_seeding_exits_child_and_allows_restart(
+    launcher, monkeypatch, seeding, capsys, cancel
+):
+    seed, children, ports = seeding
+    previous_handler = signal.getsignal(cancel)
+    seed(block=True, cancel=cancel)
+    started = time.monotonic()
+    launcher.start(0)
+    assert time.monotonic() - started < 5
+    assert signal.getsignal(cancel) == previous_handler
+    assert "UI startup cancelled during fixture generation" in capsys.readouterr().err
+    assert_cleaned(launcher, children, ports)
+    assert_restart(launcher, monkeypatch, seeding)
 
 
 def test_cleanup_refuses_paths_outside_disposable_directory(launcher, tmp_path):
