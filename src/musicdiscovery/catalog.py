@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pyarrow import ArrowException
 
 METADATA_COLUMNS = (
     "track_id",
@@ -45,7 +46,14 @@ class Catalog:
     def load(cls, path: Path) -> "Catalog":
         if not path.exists():
             raise CatalogError(f"no catalog at {path}; run `musicdiscovery ingest`")
-        return cls(pd.read_parquet(path))
+        try:
+            frame = pd.read_parquet(path)
+        except (OSError, ValueError, ArrowException) as error:
+            raise CatalogError(
+                f"could not read catalog at {path}; "
+                f"run `musicdiscovery ingest`: {error}"
+            ) from error
+        return cls(frame)
 
     def __len__(self) -> int:
         return len(self.frame)

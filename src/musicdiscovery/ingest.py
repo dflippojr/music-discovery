@@ -16,8 +16,12 @@ import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
+from pyarrow import ArrowException
+
+from musicdiscovery.catalog import Catalog, CatalogError
 
 METADATA_URL = "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip"
 METADATA_SHA1 = "f0df49ffe5f2a6008d7dc83c6915b31835dfe733"
@@ -38,7 +42,7 @@ _FEATURE_ROWS = 4  # feature, statistic, number and track_id header rows
 
 
 class IngestError(Exception):
-    """Raised when the source archive cannot be used."""
+    """Raised when the source archive or catalog cannot be used."""
 
 
 @dataclass(frozen=True)
@@ -204,15 +208,70 @@ def build_catalog(archive_path: Path) -> tuple[pd.DataFrame, IngestResult]:
     return catalog.reset_index(), result
 
 
-def _manifest_matches(manifest_path: Path, sha1: str) -> bool:
+def _cached_result(
+    manifest_path: Path, catalog_path: Path, sha1: str
+) -> IngestResult | None:
+    """Trust only matching metadata describing a readable, consistent catalog."""
     try:
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
-    return (
-        manifest.get("source_sha1") == sha1
-        and manifest.get("ingest_version") == INGEST_VERSION
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    if (
+        manifest.get("source_sha1") != sha1
+        or type(manifest.get("ingest_version")) is not int
+        or manifest["ingest_version"] != INGEST_VERSION
+        or manifest.get("subset") != SUBSET
+    ):
+        return None
+    saved = manifest.get("result")
+    count_fields = (
+        "subset_tracks",
+        "kept",
+        "dropped_missing_license",
+        "dropped_missing_features",
     )
+    if not isinstance(saved, dict) or set(saved) != {"skipped", *count_fields}:
+        return None
+    if saved["skipped"] is not False:
+        return None
+    if any(type(saved[name]) is not int or saved[name] < 0 for name in count_fields):
+        return None
+    if saved["subset_tracks"] != sum(saved[name] for name in count_fields[1:]):
+        return None
+    try:
+        catalog = Catalog.load(catalog_path)
+    except CatalogError:
+        return None
+    if len(catalog) != saved["kept"]:
+        return None
+    return IngestResult(**{**saved, "skipped": True})
+
+
+def _publish_catalog(
+    catalog: pd.DataFrame, result: IngestResult, out_dir: Path, sha1: str
+) -> None:
+    """Stage complete files; invalidate the manifest while replacing the pair."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "source_sha1": sha1,
+        "ingest_version": INGEST_VERSION,
+        "subset": SUBSET,
+        "result": asdict(result),
+    }
+    with TemporaryDirectory(prefix=".ingest-", dir=out_dir) as staging:
+        staged_catalog = Path(staging) / CATALOG_NAME
+        staged_manifest = Path(staging) / MANIFEST_NAME
+        catalog.to_parquet(staged_catalog, index=False)
+        staged_manifest.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        # Two file replacements are not a transaction. A missing manifest makes
+        # an interrupted publication recoverable, even if an old one matched.
+        (out_dir / MANIFEST_NAME).unlink(missing_ok=True)
+        staged_catalog.replace(out_dir / CATALOG_NAME)
+        staged_manifest.replace(out_dir / MANIFEST_NAME)
 
 
 def ingest(
@@ -222,21 +281,22 @@ def ingest(
 ) -> IngestResult:
     """Download (or reuse) the archive and write the catalog; no-op if current."""
     out_dir = data_dir / "catalog"
-    catalog_path = out_dir / CATALOG_NAME
-    manifest_path = out_dir / MANIFEST_NAME
-    if catalog_path.exists() and _manifest_matches(manifest_path, sha1):
-        saved = json.loads(manifest_path.read_text())["result"]
-        return IngestResult(**{**saved, "skipped": True})
+    cached = _cached_result(out_dir / MANIFEST_NAME, out_dir / CATALOG_NAME, sha1)
+    if cached is not None:
+        return cached
 
-    archive_path = fetch_archive(url, sha1, data_dir / "raw")
-    catalog, result = build_catalog(archive_path)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    catalog.to_parquet(catalog_path, index=False)
-    manifest = {
-        "source_sha1": sha1,
-        "ingest_version": INGEST_VERSION,
-        "subset": SUBSET,
-        "result": asdict(result),
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    try:
+        archive_path = fetch_archive(url, sha1, data_dir / "raw")
+        catalog, result = build_catalog(archive_path)
+        _publish_catalog(catalog, result, out_dir, sha1)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        zipfile.BadZipFile,
+        csv.Error,
+        StopIteration,
+        ArrowException,
+    ) as error:
+        raise IngestError(f"could not rebuild catalog: {error}") from error
     return result

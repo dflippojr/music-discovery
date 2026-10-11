@@ -1,6 +1,7 @@
 """Exercise ingest against a synthetic archive shaped like fma_metadata.zip."""
 
 import hashlib
+import json
 import zipfile
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pandas as pd
 import pytest
 
 from musicdiscovery import ingest as ingest_module
+from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.cli import main
 from musicdiscovery.ingest import IngestError, ingest
 
@@ -110,18 +112,27 @@ def test_ingest_builds_clean_catalog(tmp_path, archive):
     assert not catalog.isna().any().any()
 
 
-def test_second_run_is_a_noop(tmp_path, archive):
+def test_second_run_is_a_noop(tmp_path, archive, monkeypatch):
     path, sha1 = archive
     data_dir = tmp_path / "data"
     first = ingest(data_dir, url=path.as_uri(), sha1=sha1)
     catalog_path = data_dir / "catalog" / "catalog.parquet"
     stamp = catalog_path.stat().st_mtime_ns
 
+    manifest_path = data_dir / "catalog" / "catalog.json"
+    manifest_stamp = manifest_path.stat().st_mtime_ns
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("valid cache must not fetch an archive or build a catalog")
+
+    monkeypatch.setattr(ingest_module, "fetch_archive", unexpected)
+    monkeypatch.setattr(ingest_module, "build_catalog", unexpected)
     second = ingest(data_dir, url="file:///does/not/exist.zip", sha1=sha1)
 
     assert second.skipped
     assert second.kept == first.kept
     assert catalog_path.stat().st_mtime_ns == stamp
+    assert manifest_path.stat().st_mtime_ns == manifest_stamp
 
 
 def test_cached_download_is_reused(tmp_path, archive):
@@ -179,3 +190,203 @@ def test_unreadable_manifest_triggers_reingest(tmp_path, archive):
     (data_dir / "catalog" / "catalog.json").write_text("not json")
 
     assert not ingest(data_dir, url=path.as_uri(), sha1=sha1).skipped
+
+
+@pytest.fixture
+def cached_catalog(tmp_path, archive, monkeypatch):
+    path, sha1 = archive
+    data_dir = tmp_path / "data"
+    ingest(data_dir, url=path.as_uri(), sha1=sha1)
+
+    def unexpected_download(*args, **kwargs):
+        pytest.fail("recovery must reuse the verified cached archive")
+
+    monkeypatch.setattr(ingest_module, "_download", unexpected_download)
+    return data_dir, sha1
+
+
+@pytest.mark.parametrize("manifest", [[], None, True, 7, "manifest"])
+def test_wrong_manifest_top_level_recovers(cached_catalog, manifest):
+    data_dir, sha1 = cached_catalog
+    (data_dir / "catalog" / "catalog.json").write_text(json.dumps(manifest))
+    assert not ingest(data_dir, sha1=sha1).skipped
+    assert len(Catalog.load(data_dir / "catalog" / "catalog.parquet")) == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("result", None),
+        ("result", []),
+        ("result", {}),
+        ("result", "counts"),
+        ("ingest_version", True),
+        ("ingest_version", 1.0),
+        ("ingest_version", 0),
+        ("source_sha1", "stale"),
+        ("subset", "medium"),
+    ],
+)
+def test_invalid_manifest_fields_recover(cached_catalog, field, value):
+    data_dir, sha1 = cached_catalog
+    path = data_dir / "catalog" / "catalog.json"
+    manifest = json.loads(path.read_text())
+    manifest[field] = value
+    path.write_text(json.dumps(manifest))
+    assert not ingest(data_dir, sha1=sha1).skipped
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["subset_tracks", "kept", "dropped_missing_license", "dropped_missing_features"],
+)
+@pytest.mark.parametrize("value", [None, True, "2", 2.0, -1])
+def test_invalid_count_types_recover(cached_catalog, field, value):
+    data_dir, sha1 = cached_catalog
+    path = data_dir / "catalog" / "catalog.json"
+    manifest = json.loads(path.read_text())
+    manifest["result"][field] = value
+    path.write_text(json.dumps(manifest))
+    assert not ingest(data_dir, sha1=sha1).skipped
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing_result", "missing_count", "extra_field", "skipped", "totals"]
+)
+def test_wrong_result_structure_recovers(cached_catalog, mutation):
+    data_dir, sha1 = cached_catalog
+    path = data_dir / "catalog" / "catalog.json"
+    manifest = json.loads(path.read_text())
+    if mutation == "missing_result":
+        del manifest["result"]
+    elif mutation == "missing_count":
+        del manifest["result"]["kept"]
+    elif mutation == "extra_field":
+        manifest["result"]["extra"] = 0
+    elif mutation == "skipped":
+        manifest["result"]["skipped"] = 0
+    else:
+        manifest["result"]["subset_tracks"] += 1
+    path.write_text(json.dumps(manifest))
+    assert not ingest(data_dir, sha1=sha1).skipped
+
+
+@pytest.mark.parametrize(
+    "damage", ["unreadable", "missing", "count", "schema", "duplicate"]
+)
+def test_damaged_catalog_recovers(cached_catalog, damage):
+    data_dir, sha1 = cached_catalog
+    path = data_dir / "catalog" / "catalog.parquet"
+    frame = pd.read_parquet(path)
+    if damage == "unreadable":
+        path.write_bytes(b"truncated parquet")
+        with pytest.raises(CatalogError, match="could not read catalog"):
+            Catalog.load(path)
+    elif damage == "missing":
+        path.unlink()
+    else:
+        if damage == "count":
+            frame = frame.iloc[:1]
+        elif damage == "schema":
+            frame = frame.drop(columns="artist")
+        else:
+            frame.loc[1, "track_id"] = frame.loc[0, "track_id"]
+        frame.to_parquet(path, index=False)
+    assert not ingest(data_dir, sha1=sha1).skipped
+    assert Catalog.load(path).track_ids.tolist() == [1, 2]
+    assert ingest(data_dir, sha1=sha1).skipped
+
+
+@pytest.mark.parametrize(
+    "stage", ["parquet", "manifest", "catalog_replace", "manifest_replace"]
+)
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_publication_failure_is_recoverable(
+    cached_catalog, monkeypatch, stage, interrupted
+):
+    data_dir, sha1 = cached_catalog
+    out_dir = data_dir / "catalog"
+    catalog_path = out_dir / "catalog.parquet"
+    manifest_path = out_dir / "catalog.json"
+    failure = KeyboardInterrupt if interrupted else OSError
+    expected_error = KeyboardInterrupt if interrupted else IngestError
+    old_catalog = catalog_path.read_bytes()
+    old_manifest = manifest_path.read_bytes()
+    with monkeypatch.context() as patch:
+        # Force regeneration while retaining a complete previous cache.
+        patch.setattr(ingest_module, "_cached_result", lambda *args: None)
+        if stage == "parquet":
+
+            def fail_parquet(self, path, **kwargs):
+                path.write_bytes(b"partial parquet")
+                raise failure("publication failed")
+
+            patch.setattr(pd.DataFrame, "to_parquet", fail_parquet)
+        elif stage == "manifest":
+            write_text = Path.write_text
+
+            def fail_manifest(self, text, **kwargs):
+                write_text(self, "partial manifest", **kwargs)
+                raise failure("publication failed")
+
+            patch.setattr(Path, "write_text", fail_manifest)
+        else:
+            replace = Path.replace
+            target_name = (
+                "catalog.parquet" if stage == "catalog_replace" else "catalog.json"
+            )
+
+            def fail_replace(self, target):
+                if self.name == target_name:
+                    raise failure("publication failed")
+                return replace(self, target)
+
+            patch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(expected_error, match="publication failed"):
+            ingest(data_dir, sha1=sha1)
+    assert catalog_path.read_bytes() == old_catalog
+    assert not list(out_dir.glob(".ingest-*"))
+    if stage in {"parquet", "manifest"}:
+        assert manifest_path.read_bytes() == old_manifest
+        assert ingest(data_dir, sha1=sha1).skipped
+    else:
+        assert not manifest_path.exists()
+        assert not ingest(data_dir, sha1=sha1).skipped
+    assert Catalog.load(catalog_path).track_ids.tolist() == [1, 2]
+
+
+@pytest.mark.parametrize("failure", ["archive", "metadata", "write"])
+def test_cli_reports_reconstruction_failure(
+    cached_catalog, monkeypatch, capsys, failure
+):
+    data_dir, sha1 = cached_catalog
+    (data_dir / "catalog" / "catalog.parquet").write_bytes(b"truncated parquet")
+    monkeypatch.setattr(ingest_module.ingest, "__defaults__", ("unused", sha1))
+    if failure == "archive":
+        archive_path = data_dir / "raw" / "fma_metadata.zip"
+        archive_path.write_bytes(b"not a zip")
+        bad_sha1 = hashlib.sha1(archive_path.read_bytes()).hexdigest()
+        monkeypatch.setattr(ingest_module.ingest, "__defaults__", ("unused", bad_sha1))
+    elif failure == "metadata":
+
+        def fail_build(*args):
+            raise KeyError("missing tracks column")
+
+        monkeypatch.setattr(ingest_module, "build_catalog", fail_build)
+    else:
+
+        def fail_write(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_write)
+    assert main(["ingest", "--data-dir", str(data_dir)]) == 1
+    captured = capsys.readouterr()
+    assert "ingest: could not rebuild catalog:" in captured.err
+    assert "up to date" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_invalid_manifest_encoding_recovers(cached_catalog):
+    data_dir, sha1 = cached_catalog
+    (data_dir / "catalog" / "catalog.json").write_bytes(b"\xff")
+    assert not ingest(data_dir, sha1=sha1).skipped
