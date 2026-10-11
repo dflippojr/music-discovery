@@ -3,7 +3,7 @@
 // in the browser from catalog.json; ratings never leave the page unless exported.
 
 import { Rankers } from "./ranker.js";
-import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, SeedPicker, thumbButton } from "./ui.js";
+import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, resultPresentation, SeedPicker, thumbButton } from "./ui.js";
 
 const RANKER_LABELS = {
   hybrid: "Hybrid",
@@ -116,16 +116,7 @@ class Demo {
   }
 
   resultItem(pick, rank, preference, context) {
-    const { data } = this;
-    const row = pick.row;
-    const title = data.titles[row] || `Track ${pick.id}`;
-    const genre = data.genre[row] >= 0 ? data.genres[data.genre[row]] : "";
-    const links = [];
-    if (data.licenses[data.license[row]]) {
-      links.push(h("a", { href: data.licenses[data.license[row]], target: "_blank", rel: "noopener noreferrer", text: "License" }));
-    }
-    const linkBox = h("span", { class: "md-links" }, links);
-    this.sources.fill(linkBox, row);
+    const { title, header, linkBox } = resultPresentation(this.data, pick.row, rank, this.sources);
     const key = `${context}|${pick.id}`;
     const onRate = (value) => this.rate(key, value, pick, preference);
     const up = thumbButton(1, "Thumbs up", title, onRate);
@@ -140,7 +131,7 @@ class Demo {
     return h(
       "li",
       { class: "md-result" },
-      h("div", { class: "md-result-head" }, h("span", { class: "md-rank", "aria-hidden": "true", text: String(rank) }), h("div", {}, h("p", { class: "md-title", text: title }), h("p", { class: "md-meta", text: [data.artists[data.artist[row]], genre].filter(Boolean).join(" · ") }))),
+      header,
       h("ul", { class: "md-why", "aria-label": "Why this track" }, pick.explanations.map((text) => h("li", { text }))),
       h("div", { class: "md-result-foot" }, linkBox, h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
     );

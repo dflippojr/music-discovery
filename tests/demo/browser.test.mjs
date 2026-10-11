@@ -606,6 +606,69 @@ describe("deferred source recovery", () => {
   }
 });
 
+// --- result presentation ---------------------------------------------------------
+
+describe("result presentation", () => {
+  const cases = [
+    { title: "Synthetic title", artist: "Synthetic artist", genre: 0, license: 0, source: "https://example.test/track", expectedTitle: "Synthetic title", meta: "Synthetic artist · Rock" },
+    { title: "", artist: "Synthetic artist", genre: -1, license: -1, source: "https://example.test/track", expectedTitle: "Track 100", meta: "Synthetic artist" },
+    { title: "Synthetic title", artist: "", genre: 0, license: 0, source: "", expectedTitle: "Synthetic title", meta: "Rock" },
+    { title: "", artist: "", genre: -1, license: -1, source: "", expectedTitle: "Track 100", meta: "" },
+  ];
+  for (const isStudy of [false, true]) {
+    test(`${isStudy ? "study" : "demo"} preserves result markup, missing metadata, links and rating names`, async () => {
+      const { context, page } = await (isStudy ? study() : open());
+      await page.waitForFunction(() => document.querySelector(".md-source-status").textContent === "Source links loaded.");
+      const actual = await page.evaluate(({ isStudy, cases }) => {
+        const root = document.querySelector(isStudy ? "#music-discovery-study" : "#music-discovery-demo");
+        const app = root[isStudy ? "study" : "demo"];
+        const nodes = [];
+        const registrations = [];
+        const fill = app.sources.fill.bind(app.sources);
+        app.sources.fill = (box, row) => {
+          registrations.push({ row, detached: !box.isConnected });
+          fill(box, row);
+        };
+        const snapshots = cases.map((sample, index) => {
+          Object.assign(app.data, { ids: [100], titles: [sample.title], artists: [sample.artist], artist: [0],
+            genres: ["Rock"], genre: [sample.genre], licenses: ["https://example.test/license"], license: [sample.license], sources: [sample.source] });
+          const item = isStudy
+            ? app.resultItem({ label: "A" }, { row: 0, trackId: 100, rating: null, newToMe: false }, index + 1, () => {})
+            : app.resultItem({ row: 0, id: 100, explanations: ["Synthetic explanation"] }, index + 1, { seeds: [101], likes: [], dislikes: [] }, "synthetic");
+          const head = item.querySelector(".md-result-head");
+          const box = item.querySelector(".md-links");
+          nodes.push(item, head, box, ...head.querySelectorAll("*"), ...box.children);
+          root.append(item);
+          return { header: head.outerHTML, registration: box.dataset.sourceRow,
+            children: [...item.children].map((el) => el.className),
+            links: [...box.children].map((a) => ({ text: a.textContent, href: a.getAttribute("href"), target: a.target, rel: a.rel, source: a.hasAttribute("data-source-link") })),
+            group: item.querySelector(".md-rates").getAttribute("aria-label"),
+            buttons: [...item.querySelectorAll(".md-rate")].map((b) => ({ text: b.textContent, pressed: b.getAttribute("aria-pressed") })) };
+        });
+        return { snapshots, registrations, distinct: new Set(nodes).size === nodes.length };
+      }, { isStudy, cases });
+      assert.equal(actual.distinct, true);
+      assert.deepEqual(actual.registrations, cases.map(() => ({ row: 0, detached: true })));
+      for (const [index, sample] of cases.entries()) {
+        const links = [];
+        if (sample.source) links.push({ text: "Source page (FMA)", href: sample.source, target: "_blank", rel: "noopener noreferrer", source: true });
+        if (sample.license >= 0) links.push({ text: "License", href: "https://example.test/license", target: "_blank", rel: "noopener noreferrer", source: false });
+        assert.deepEqual(actual.snapshots[index], {
+          header: `<div class="md-result-head"><span class="md-rank" aria-hidden="true">${index + 1}</span><div><p class="md-title">${sample.expectedTitle}</p><p class="md-meta">${sample.meta}</p></div></div>`,
+          registration: "0", children: isStudy ? ["md-result-head", "md-result-foot", "md-new"] : ["md-result-head", "md-why", "md-result-foot"],
+          links, group: `Rate ${sample.expectedTitle}`,
+          buttons: ["Thumbs up", "Thumbs down"].map((label) => ({ text: `${label} for ${sample.expectedTitle}`, pressed: "false" })),
+        });
+        // Role queries check the accessible names, including the fallback title.
+        assert.ok(await page.getByRole("button", { name: `Thumbs up for ${sample.expectedTitle}`, exact: true }).count());
+        assert.ok(await page.getByRole("button", { name: `Thumbs down for ${sample.expectedTitle}`, exact: true }).count());
+        if (isStudy) assert.ok(await page.getByRole("checkbox", { name: `New to me for ${sample.expectedTitle}`, exact: true }).count());
+      }
+      await close(page, context);
+    });
+  }
+});
+
 // --- shared catalog mounting -----------------------------------------------------
 
 describe("catalog load failures", () => {

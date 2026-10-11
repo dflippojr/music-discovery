@@ -152,6 +152,18 @@ export class DeferredSources {
   }
 }
 
+/** Fresh title, header and deferred source/license links for one catalog result. */
+export function resultPresentation(data, row, rank, sources) {
+  const title = data.titles[row] || `Track ${data.ids[row]}`;
+  const genre = data.genre[row] >= 0 ? data.genres[data.genre[row]] : "";
+  const links = [];
+  if (data.licenses[data.license[row]]) links.push(h("a", { href: data.licenses[data.license[row]], target: "_blank", rel: "noopener noreferrer", text: "License" }));
+  const linkBox = h("span", { class: "md-links" }, links);
+  sources.fill(linkBox, row);
+  const header = h("div", { class: "md-result-head" }, h("span", { class: "md-rank", "aria-hidden": "true", text: String(rank) }), h("div", {}, h("p", { class: "md-title", text: title }), h("p", { class: "md-meta", text: [data.artists[data.artist[row]], genre].filter(Boolean).join(" · ") })));
+  return { title, header, linkBox };
+}
+
 export function trackLabel(data, row) {
   const { titles, artists, artist, ids } = data;
   return `${titles[row] || `Track ${ids[row]}`} — ${artists[artist[row]] || "Unknown artist"}`;
