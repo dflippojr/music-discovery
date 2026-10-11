@@ -10,8 +10,10 @@ import threading
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.request import Request, urlopen
 
+import psutil
 import pytest
 
 
@@ -62,7 +64,7 @@ def seeding(launcher, monkeypatch):
     original_server = launcher.ThreadingHTTPServer
     original_popen = subprocess.Popen
     unrelated = launcher.DATA / "run-unrelated"
-    unrelated.mkdir(parents=True)
+    unrelated.mkdir(parents=True, exist_ok=True)
     (unrelated / "keep.txt").write_text("keep")
 
     def server(*args, **kwargs):
@@ -123,7 +125,8 @@ def seeding(launcher, monkeypatch):
     original_remove = launcher.remove_bundle
 
     def remove(bundle):
-        assert children[-1].poll() is not None
+        if children:
+            assert children[-1].poll() is not None
         original_remove(bundle)
 
     monkeypatch.setattr(launcher, "remove_bundle", remove)
@@ -276,11 +279,7 @@ def test_cleanup_refuses_nested_unexpected_data(launcher):
     assert unexpected.is_dir()
 
 
-def test_stop_refuses_another_instance_on_the_same_port(launcher, monkeypatch):
-    launcher.DATA.mkdir()
-    launcher.HANDLE.write_text(
-        json.dumps({"instance": "run-owned", "port": 4173, "token": "synthetic"})
-    )
+def test_stop_refuses_another_instance_on_the_same_port(launcher, monkeypatch, stale):
 
     class Response:
         def __enter__(self):
@@ -303,3 +302,305 @@ def test_stop_refuses_another_instance_on_the_same_port(launcher, monkeypatch):
         launcher.stop()
     assert len(requests) == 1
     assert launcher.HANDLE.exists()
+
+
+def test_stop_accepts_authenticated_legacy_handle(launcher, monkeypatch, stale):
+    metadata, bundle = stale
+    del metadata["created"]
+    del metadata["phase"]
+    launcher.HANDLE.write_text(json.dumps(metadata))
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return json.dumps({"instance": metadata["instance"]}).encode()
+
+    def request(url, **kwargs):
+        requests.append(url)
+        if isinstance(url, Request):
+            assert url.get_header("X-ui-token") == metadata["token"]
+            launcher.remove_bundle(bundle)
+            launcher.HANDLE.unlink()
+        return Response()
+
+    monkeypatch.setattr(launcher, "urlopen", request)
+    launcher.stop()
+    assert len(requests) == 2
+    assert not launcher.HANDLE.exists()
+    assert not bundle.exists()
+
+
+@pytest.fixture
+def stale(launcher, monkeypatch):
+    """A synthetic exited process ledger and an unrelated directory sentinel."""
+    launcher.DATA.mkdir()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    metadata = {
+        "instance": "run-0123456789abcdef",
+        "pid": 12345,
+        "created": 123456.0,
+        "port": port,
+        "token": "synthetic-token-0123456789",
+        "phase": "ready",
+    }
+    launcher.HANDLE.write_text(json.dumps(metadata))
+    bundle = launcher.DATA / metadata["instance"]
+    bundle.mkdir()
+    (bundle / "synthetic.txt").write_text("synthetic")
+    unrelated = launcher.DATA / "run-unrelated"
+    unrelated.mkdir()
+    (unrelated / "keep.txt").write_text("keep")
+
+    def exited(pid):
+        raise launcher.psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(
+        launcher,
+        "psutil",
+        SimpleNamespace(
+            Process=exited,
+            NoSuchProcess=psutil.NoSuchProcess,
+            AccessDenied=psutil.AccessDenied,
+            Error=psutil.Error,
+        ),
+    )
+    return metadata, bundle
+
+
+def assert_preserved(launcher, bundle):
+    assert launcher.HANDLE.exists()
+    assert (bundle / "synthetic.txt").read_text() == "synthetic"
+    assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
+
+
+def test_recover_dead_process_free_port_and_repeat(launcher, stale, capsys):
+    metadata, bundle = stale
+    launcher.recover()
+    launcher.recover()
+    assert not launcher.HANDLE.exists()
+    assert not bundle.exists()
+    assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
+    assert "Recovered" in capsys.readouterr().out
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", metadata["port"]))
+
+
+def test_recover_allows_normal_restart(launcher, monkeypatch, stale, seeding):
+    launcher.recover()
+    monkeypatch.setattr(launcher, "psutil", psutil)
+    metadata, _ = stale
+    # assert_restart expects a previous port in the seeding fixture ledger.
+    seed, children, ports = seeding
+    ports.append(metadata["port"])
+    assert_restart(launcher, monkeypatch, (seed, children, ports))
+
+
+@pytest.mark.parametrize("phase", ["starting", "seeding", "ready"])
+def test_recover_refuses_live_process_even_before_health(
+    launcher, monkeypatch, stale, phase
+):
+    metadata, bundle = stale
+    metadata["phase"] = phase
+    launcher.HANDLE.write_text(json.dumps(metadata))
+    monkeypatch.setattr(
+        launcher.psutil,
+        "Process",
+        lambda pid: SimpleNamespace(create_time=lambda: metadata["created"]),
+    )
+    with pytest.raises(ValueError, match="still live"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_recover_refuses_reused_or_unverifiable_pid(
+    launcher, monkeypatch, stale, unknown
+):
+    _, bundle = stale
+
+    def process(pid):
+        if unknown:
+            raise launcher.psutil.AccessDenied(pid)
+        return SimpleNamespace(create_time=lambda: 999999.0)
+
+    monkeypatch.setattr(launcher.psutil, "Process", process)
+    with pytest.raises(ValueError, match="identity|PID reused"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+def test_recover_refuses_another_server_on_port(launcher, stale):
+    metadata, bundle = stale
+    server = ThreadingHTTPServer(("127.0.0.1", metadata["port"]), launcher.Handler)
+    server.instance = "run-other"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(ValueError, match="another instance"):
+            launcher.recover()
+        assert_preserved(launcher, bundle)
+        with urlopen(f"http://127.0.0.1:{metadata['port']}/__ui_health") as response:
+            assert json.load(response) == {"instance": "run-other"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("instance", "../run-unrelated"),
+        ("instance", "run-/../../outside"),
+        ("instance", 1),
+        ("pid", True),
+        ("pid", -1),
+        ("pid", "12345"),
+        ("pid", 10**1000),
+        ("created", None),
+        ("created", float("nan")),
+        ("created", float("inf")),
+        ("created", 10**1000),
+        ("port", 0),
+        ("port", 65536),
+        ("port", "4173"),
+        ("port", True),
+        ("token", "bad\r\nheader"),
+        ("token", None),
+    ],
+)
+@pytest.mark.parametrize("action", ["recover", "stop"])
+def test_malformed_handle_preserves_resources(launcher, stale, field, value, action):
+    metadata, bundle = stale
+    metadata[field] = value
+    launcher.HANDLE.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="Invalid"):
+        getattr(launcher, action)()
+    assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize("raw", ["{", "null", "[]", "{}"])
+def test_recover_invalid_json_handle(launcher, stale, raw):
+    _, bundle = stale
+    launcher.HANDLE.write_text(raw)
+    with pytest.raises(ValueError):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize("phase", ["starting", "seeding", None])
+def test_recover_unknown_fixture_identity(launcher, stale, phase):
+    metadata, bundle = stale
+    metadata["phase"] = phase
+    launcher.HANDLE.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="identity|ownership"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize("live_child", [False, True])
+def test_recover_requires_fixture_child_exit(launcher, monkeypatch, stale, live_child):
+    metadata, bundle = stale
+    metadata.update(phase="seeding", fixture={"pid": 54321, "created": 123456.0})
+    launcher.HANDLE.write_text(json.dumps(metadata))
+
+    def process(pid):
+        if live_child and pid == 54321:
+            return SimpleNamespace(create_time=lambda: 123456.0)
+        raise launcher.psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(launcher.psutil, "Process", process)
+    if live_child:
+        with pytest.raises(ValueError, match="still live"):
+            launcher.recover()
+        assert_preserved(launcher, bundle)
+    else:
+        launcher.recover()
+        assert not launcher.HANDLE.exists()
+        assert not bundle.exists()
+
+
+def test_recover_preflights_all_bundle_entries(launcher, stale):
+    _, bundle = stale
+    (bundle / "nested").mkdir()
+    with pytest.raises(ValueError, match="Unexpected"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize("target", ["bundle", "entry", "handle", "data"])
+def test_recover_refuses_symlinks(launcher, stale, tmp_path, monkeypatch, target):
+    _, bundle = stale
+    if target == "bundle":
+        path = bundle
+    elif target == "entry":
+        path = bundle / "synthetic.txt"
+    elif target == "handle":
+        path = launcher.HANDLE
+    else:
+        path = launcher.DATA
+    destination = tmp_path / "outside"
+    path.rename(destination)
+    try:
+        path.symlink_to(destination, target_is_directory=destination.is_dir())
+    except OSError:
+        destination.rename(path)
+        # Windows hosts without symlink privileges still exercise refusal;
+        # Linux CI exercises actual filesystem symlinks.
+        original = Path.is_symlink
+        monkeypatch.setattr(
+            Path, "is_symlink", lambda self: self == path or original(self)
+        )
+    with pytest.raises(ValueError, match="outside|Unexpected|Symlinked"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+def test_recover_missing_bundle_is_safe(launcher, stale):
+    _, bundle = stale
+    (bundle / "synthetic.txt").unlink()
+    bundle.rmdir()
+    launcher.recover()
+    assert not launcher.HANDLE.exists()
+
+
+def test_recover_refuses_changed_handle(launcher, monkeypatch, stale):
+    metadata, bundle = stale
+    original = launcher.require_exited
+
+    def changed(identity):
+        original(identity)
+        metadata["instance"] = "run-fedcba9876543210"
+        launcher.HANDLE.write_text(json.dumps(metadata))
+
+    monkeypatch.setattr(launcher, "require_exited", changed)
+    with pytest.raises(ValueError, match="handle changed"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+def test_start_preserves_stale_handle_until_explicit_recovery(launcher, stale):
+    metadata, bundle = stale
+    with pytest.raises(ValueError, match="verified recover"):
+        launcher.start(metadata["port"])
+    assert_preserved(launcher, bundle)
+
+
+def test_recover_cli_reports_failure_without_cleanup(
+    launcher, monkeypatch, stale, capsys
+):
+    metadata, bundle = stale
+    del metadata["created"]  # old handles cannot establish process identity
+    launcher.HANDLE.write_text(json.dumps(metadata))
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "recover"])
+    assert launcher.main() == 1
+    assert "preserve handle for investigation" in capsys.readouterr().err
+    assert_preserved(launcher, bundle)
