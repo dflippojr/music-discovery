@@ -35,7 +35,7 @@ class Demo {
     this.id = makeIds();
     this.excludeSeedArtist = h("input", { type: "checkbox", id: this.id("exclude-seed-artist") });
     this.excludeSeedArtist.addEventListener("change", () => this.render());
-    this.picker.element.append(h("div", { class: "md-row" }, this.excludeSeedArtist, h("label", { for: this.id("exclude-seed-artist"), text: "Exclude the seed artist" })));
+    this.picker.element.append(h("label", { class: "md-check", for: this.id("exclude-seed-artist") }, this.excludeSeedArtist, "Exclude the seed artist"));
     this.root.classList.add("md-demo");
     this.root.replaceChildren(
       h("p", { class: "md-lead", text: "Start from a track you like, say what you want more or less of, and see why each track was picked." }),

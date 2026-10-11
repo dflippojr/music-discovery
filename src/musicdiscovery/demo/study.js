@@ -138,7 +138,7 @@ class Study {
       { class: "md-result" },
       header,
       h("div", { class: "md-result-foot" }, linkBox, h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
-      h("div", { class: "md-new" }, fresh, h("label", { for: fresh.id }, "New to me", h("span", { class: "md-sr", text: ` for ${title}` }))),
+      h("label", { class: "md-new", for: fresh.id }, fresh, "New to me", h("span", { class: "md-sr", text: ` for ${title}` })),
     );
   }
 
