@@ -42,6 +42,11 @@ let base;
 before(async () => {
   server = createServer((req, res) => {
     const name = req.url === "/" ? "index.html" : normalize(decodeURIComponent(req.url.slice(1))).replace(/^(\.\.[/\\])+/, "");
+    if (name === "stalled-body.json") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("{"); // Headers arrive, but the synthetic JSON body never ends.
+      return;
+    }
     try {
       const body = readFileSync(join(bundle, name));
       res.writeHead(200, { "content-type": TYPES[extname(name)] ?? "application/octet-stream", "content-security-policy": CSP });
@@ -89,6 +94,60 @@ async function pickSeed(page, text = "Synthetic track 10") {
 async function close(page, context) {
   await collect(await page.coverage.stopJSCoverage());
   await context.close();
+}
+
+// Only application deadlines use this clock; UI and Playwright timers run normally.
+async function deadlineProbe(page, { target, stall, holdRetry = false } = {}) {
+  const body = target ? JSON.parse(readFileSync(join(bundle, target), "utf8")) : null;
+  await page.addInitScript(({ target, stall, holdRetry, body }) => {
+    const nativeSetTimeout = globalThis.setTimeout;
+    const nativeClearTimeout = globalThis.clearTimeout;
+    const nativeFetch = globalThis.fetch;
+    const timers = new Map();
+    const attempts = [];
+    let nextTimer = 0;
+    const probe = globalThis.deadlineProbe = {
+      timers, attempts, cleared: 0,
+      expire() {
+        for (const callback of [...timers.values()]) callback();
+      },
+      finish(index, fail = false, stale = false) {
+        const attempt = attempts[index];
+        if (fail) attempt.reject(new Error("Late failure"));
+        else {
+          const value = stale ? { sources: body.sources.map(() => "https://example.test/stale") } : body;
+          attempt.resolve(attempt.stage === "body" ? value : { ok: true, json: async () => value });
+        }
+      },
+    };
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 30_000) return nativeSetTimeout(callback, delay, ...args);
+      const id = `deadline-${++nextTimer}`;
+      timers.set(id, callback);
+      return id;
+    };
+    globalThis.clearTimeout = (id) => {
+      if (timers.delete(id)) probe.cleared += 1;
+      else nativeClearTimeout(id);
+    };
+    globalThis.fetch = async (url, options) => {
+      if (!target || !String(url).endsWith(target)) return nativeFetch(url, options);
+      const index = attempts.length;
+      const attempt = { signal: options?.signal, aborted: 0, stage: "request" };
+      attempts.push(attempt);
+      attempt.signal?.addEventListener("abort", () => { attempt.aborted += 1; });
+      if ((index === 0 && stall) || (index === 1 && holdRetry)) {
+        const pending = new Promise((resolve, reject) => Object.assign(attempt, { resolve, reject }));
+        if (index === 0 && stall === "body") {
+          attempt.stage = "body";
+          return { ok: true, json: () => pending };
+        }
+        // Deliberately ignore abort to exercise late success/rejection isolation.
+        return pending;
+      }
+      return nativeFetch(url, options);
+    };
+  }, { target, stall, holdRetry, body });
 }
 
 const titles = (page) => page.locator(".md-result .md-title").allTextContents();
@@ -496,6 +555,7 @@ describe("deferred source recovery", () => {
         const errors = [];
         page.on("pageerror", (error) => errors.push(String(error)));
         await page.coverage.startJSCoverage();
+        await deadlineProbe(page);
         let requests = 0;
         await page.route("**/sources.json", (route) => {
           requests += 1;
@@ -515,6 +575,7 @@ describe("deferred source recovery", () => {
         await retry.click();
         await page.waitForFunction((root) => document.querySelector(root)[root.includes("study") ? "study" : "demo"].sources.state === "failed", root);
         assert.equal(requests, 2);
+        assert.deepEqual(await page.evaluate(() => ({ timers: deadlineProbe.timers.size, cleared: deadlineProbe.cleared })), { timers: 0, cleared: 3 });
         assert.equal(await retry.isEnabled(), true);
         assert.deepEqual(errors, []);
         await close(page, context);
@@ -685,6 +746,7 @@ describe("catalog load failures", () => {
       test(`${name} shows its alert and clears aria-busy on ${label}`, async () => {
         const context = await browser.newContext();
         const page = await context.newPage();
+        await deadlineProbe(page);
         let catalogRequests = 0;
         await page.route("**/catalog.json", (r) => {
           catalogRequests += 1;
@@ -697,8 +759,159 @@ describe("catalog load failures", () => {
         assert.match(await alert.textContent(), message);
         assert.equal(await page.locator(root).getAttribute("aria-busy"), null);
         assert.equal(catalogRequests, 1);
+        assert.deepEqual(await page.evaluate(() => ({ timers: deadlineProbe.timers.size, cleared: deadlineProbe.cleared })), { timers: 0, cleared: 1 });
         await context.close();
       });
+    }
+  }
+});
+
+// The fake clock expires immediately; stalled fetches deliberately ignore their signal.
+describe("application fetch deadlines", () => {
+  for (const isStudy of [false, true]) {
+    const name = isStudy ? "study" : "demo";
+    const path = isStudy ? "study.html" : "";
+    const root = isStudy ? "#music-discovery-study" : "#music-discovery-demo";
+    test(`${name}: expiry aborts a real fetch while its JSON body is stalled`, async () => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.coverage.startJSCoverage();
+      await deadlineProbe(page);
+      await page.route(base + path, (route) => {
+        const html = readFileSync(join(bundle, path || "index.html"), "utf8");
+        const marker = isStudy ? "data-music-discovery-study" : "data-music-discovery";
+        return route.fulfill({ contentType: "text/html", headers: { "content-security-policy": CSP },
+          body: html.replace(marker, `${marker} data-sources="stalled-body.json"`) });
+      });
+      const response = page.waitForResponse((r) => r.url() === base + "stalled-body.json");
+      await page.goto(base + path);
+      await response;
+      const aborted = page.waitForEvent("requestfailed", { predicate: (r) => r.url() === base + "stalled-body.json" });
+      await page.evaluate(() => deadlineProbe.expire());
+      assert.match((await aborted).failure().errorText, /ABORTED/);
+      await page.getByRole("button", { name: "Retry source links" }).waitFor();
+      assert.match(await page.locator(".md-source-status").textContent(), /unavailable/);
+      assert.equal(await page.locator(root).getAttribute("aria-busy"), null);
+      assert.deepEqual(await page.evaluate(() => ({ timers: deadlineProbe.timers.size, cleared: deadlineProbe.cleared })),
+        { timers: 0, cleared: 2 });
+      await close(page, context);
+    });
+
+    for (const stall of ["request", "body"]) {
+      test(`${name}: stalled catalog ${stall} times out and ignores late completion`, async () => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.coverage.startJSCoverage();
+        await deadlineProbe(page, { target: "catalog.json", stall });
+        await page.goto(base + path);
+        await page.waitForFunction(() => deadlineProbe.attempts.length === 1);
+        assert.equal(await page.locator(root).getAttribute("aria-busy"), "true");
+        await page.evaluate(() => deadlineProbe.expire());
+        const alert = page.locator(`${root} [role=alert]`);
+        await alert.waitFor();
+        assert.equal(await alert.textContent(), `The ${name} could not load its catalog (Request timed out after 30 seconds).`);
+        assert.equal(await page.locator(root).getAttribute("aria-busy"), null);
+        assert.deepEqual(await page.evaluate(() => ({ count: deadlineProbe.attempts.length,
+          aborted: deadlineProbe.attempts[0].signal.aborted, events: deadlineProbe.attempts[0].aborted,
+          timers: deadlineProbe.timers.size, cleared: deadlineProbe.cleared })),
+        { count: 1, aborted: true, events: 1, timers: 0, cleared: 1 });
+        // Flush the losing promise to prove it cannot replace the alert.
+        await page.evaluate(async () => {
+          deadlineProbe.finish(0);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        assert.equal(await alert.count(), 1);
+        assert.equal(await page.evaluate(({ root, name }) => !!document.querySelector(root)[name], { root, name }), false);
+        await close(page, context);
+      });
+
+      for (const lateFailure of [false, true]) {
+        test(`${name}: stalled source ${stall} recovers once despite late ${lateFailure ? "failure" : "success"}`, async () => {
+          const context = await browser.newContext();
+          const page = await context.newPage();
+          const errors = [];
+          page.on("pageerror", (error) => errors.push(String(error)));
+          await page.coverage.startJSCoverage();
+          await deadlineProbe(page, { target: "sources.json", stall, holdRetry: true });
+          await page.goto(base + path);
+          if (isStudy) await page.getByRole("button", { name: "I agree, start" }).click();
+          await page.getByRole("button", { name: "Pick a random track" }).click();
+          await page.getByRole("button", { name: /^Calmer/ }).click();
+          if (isStudy) await page.getByRole("button", { name: "Show the two lists" }).click();
+          await page.getByRole("button", { name: /Thumbs up/ }).first().click();
+          if (isStudy) {
+            await page.getByRole("checkbox", { name: /New to me/ }).first().check();
+            await page.getByRole("radio", { name: "List B" }).check();
+          }
+          assert.equal(await page.getByRole("link", { name: "License" }).count(), 10);
+          assert.equal(await page.locator(root).getAttribute("aria-busy"), null);
+          await page.evaluate(() => deadlineProbe.expire());
+          const retry = page.getByRole("button", { name: "Retry source links" });
+          await retry.waitFor();
+          assert.equal(await retry.isEnabled(), true);
+          assert.deepEqual(await page.evaluate(() => ({ aborted: deadlineProbe.attempts[0].signal.aborted,
+            timers: deadlineProbe.timers.size, cleared: deadlineProbe.cleared })),
+          { aborted: true, timers: 0, cleared: 2 }); // catalog success and source expiry
+          const snapshot = () => page.evaluate(({ root, name }) => {
+            const app = document.querySelector(root)[name];
+            return { seed: app.seed.row, qualities: app.picker.qualities, session: app.session,
+              orders: app.orders, ratings: app.ratings ? [...app.ratings] : null,
+              results: [...document.querySelectorAll(".md-result")].map((el) => {
+                const clone = el.cloneNode(true);
+                clone.querySelectorAll("[data-source-link]").forEach((link) => link.remove());
+                return clone.outerHTML;
+              }), preferred: document.querySelector('input[type="radio"]:checked')?.value };
+          }, { root, name });
+          const beforeRecovery = await snapshot();
+          await page.evaluate(({ root, name }) => {
+            const app = document.querySelector(root)[name];
+            globalThis.originalApp = app;
+            app.sources.retry.click();
+            globalThis.retryReady = app.sources.ready;
+            for (let i = 0; i < 10; i += 1) {
+              if (app.sources.load(app.sources.url) !== retryReady) throw new Error("Duplicate attempt");
+              app.sources.retry.click();
+            }
+          }, { root, name });
+          assert.equal(await retry.isDisabled(), true);
+          assert.equal(await page.evaluate(() => deadlineProbe.attempts.length), 2);
+          assert.equal(await page.evaluate(() => deadlineProbe.attempts[1].signal.aborted), false);
+          // Old success arrives while the new request is still in flight.
+          if (!lateFailure) await page.evaluate(async () => {
+            deadlineProbe.finish(0, false, true);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          });
+          assert.match(await page.locator(".md-source-status").textContent(), /Loading/);
+          assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 0);
+          await page.evaluate(async () => {
+            deadlineProbe.finish(1);
+            await retryReady;
+          });
+          // Old rejection arrives after recovery and must not reset the state.
+          if (lateFailure) await page.evaluate(async () => {
+            deadlineProbe.finish(0, true);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          });
+          assert.equal(await page.locator(".md-source-status").textContent(), "Source links recovered.");
+          assert.equal(await retry.isVisible(), false);
+          assert.deepEqual(await snapshot(), beforeRecovery);
+          const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+          const { sources } = JSON.parse(readFileSync(join(bundle, "sources.json"), "utf8"));
+          for (const item of await page.locator(".md-result").all()) {
+            const links = item.getByRole("link", { name: /Source page/ });
+            assert.equal(await links.count(), 1);
+            const row = catalog.titles.indexOf(await item.locator(".md-title").textContent());
+            assert.equal(await links.getAttribute("href"), sources[row]);
+          }
+          assert.deepEqual(await page.evaluate(({ root, name }) => ({
+            sameApp: document.querySelector(root)[name] === originalApp,
+            attempts: deadlineProbe.attempts.length, timers: deadlineProbe.timers.size,
+            cleared: deadlineProbe.cleared, state: originalApp.sources.state }), { root, name }),
+          { sameApp: true, attempts: 2, timers: 0, cleared: 3, state: "loaded" });
+          assert.deepEqual(errors, []);
+          await close(page, context);
+        });
+      }
     }
   }
 });

@@ -2,6 +2,7 @@
 // quality chips and thumb buttons. No state beyond what each piece owns.
 
 const MAX_SUGGESTIONS = 8;
+const FETCH_DEADLINE_MS = 30_000;
 const NEXT_STATE = { neutral: "like", like: "dislike", dislike: "neutral" };
 const STATE_WORDS = { neutral: "not selected", like: "liked", dislike: "disliked" };
 const STATE_MARKS = { neutral: "", like: "+", dislike: "−" };
@@ -55,6 +56,28 @@ export function downloadJson(body, filename) {
   URL.revokeObjectURL(url);
 }
 
+/** Bound the whole JSON download, including the body, even if it ignores abort. */
+async function fetchJson(url) {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error("Request timed out after 30 seconds"));
+      controller.abort();
+    }, FETCH_DEADLINE_MS);
+  });
+  const download = async () => {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  };
+  try {
+    return await Promise.race([download(), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Load the catalog named by `data-catalog` (relative to `moduleUrl`), build `new Page(root, catalog)`
  * as `root[pageName]`, then start its deferred sources (`data-sources`, relative to the catalog).
@@ -64,9 +87,7 @@ export async function mountCatalog(root, Page, pageName, moduleUrl) {
   const url = new URL(root.dataset.catalog ?? "catalog.json", moduleUrl);
   root.setAttribute("aria-busy", "true");
   try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const page = new Page(root, await response.json());
+    const page = new Page(root, await fetchJson(url));
     root[pageName] = page;
     void page.sources.load(new URL(root.dataset.sources ?? "sources.json", url));
   } catch (error) {
@@ -117,8 +138,7 @@ export class DeferredSources {
     this.state = "loading";
     this.status.textContent = "Loading source links. License links and ratings remain available.";
     this.retry.disabled = true;
-    this.ready = fetch(url)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+    this.ready = fetchJson(url)
       .then((body) => {
         if (!Array.isArray(body?.sources) || body.sources.length !== this.data.count ||
             !body.sources.every((href) => typeof href === "string")) throw new Error("Invalid sources");
