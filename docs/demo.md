@@ -46,10 +46,16 @@ the data each ranker needs, as base64 little-endian integers:
 Source page links are in `sources.json` (`{"version", "sources"}`, in catalog order),
 which the page fetches after it is ready: results show their license link at once and
 gain the source link when the file arrives. Both pages announce loading and failure.
-If the file is unavailable (including HTTP, network or invalid JSON failures),
+Each catalog and source attempt has a 30-second application deadline covering
+the request and reading/parsing its JSON body. Expiry aborts the request; the
+deadline timer is cleared on success, failure or timeout. A catalog timeout shows
+the page’s catalog alert and clears its busy state, with no automatic retry.
+Source loading stays deferred and does not block the page.
+If the file is unavailable (including HTTP, network, invalid JSON or timeout failures),
 "Retry source links" fetches the same configured sources URL again. There are no
 automatic retries or per-track requests; the button is disabled during a retry.
 Recommendations, license links, ratings and study navigation remain usable.
+Late completion from a timed-out attempt is ignored.
 Successful recovery adds links once to the currently displayed results, announces
 recovery and removes the retry button. Seeds, qualities, ratings, list order and
 the study session id stay intact. You can retry again after another failure;
