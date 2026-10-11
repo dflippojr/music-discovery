@@ -5,7 +5,7 @@
 
 import { Rankers } from "./ranker.js";
 import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, newSessionId, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
-import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, SeedPicker, thumbButton } from "./ui.js";
+import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, resultPresentation, SeedPicker, thumbButton } from "./ui.js";
 
 const PREFERENCES = [
   { value: "A", text: "List A" },
@@ -116,14 +116,7 @@ class Study {
   }
 
   resultItem(list, result, rank, sync) {
-    const { data } = this;
-    const row = result.row;
-    const title = data.titles[row] || `Track ${result.trackId}`;
-    const genre = data.genre[row] >= 0 ? data.genres[data.genre[row]] : "";
-    const links = [];
-    if (data.licenses[data.license[row]]) links.push(h("a", { href: data.licenses[data.license[row]], target: "_blank", rel: "noopener noreferrer", text: "License" }));
-    const linkBox = h("span", { class: "md-links" }, links);
-    this.sources.fill(linkBox, row);
+    const { title, header, linkBox } = resultPresentation(this.data, result.row, rank, this.sources);
     const onRate = (value) => {
       result.rating = result.rating === value ? null : value;
       paint();
@@ -143,7 +136,7 @@ class Study {
     return h(
       "li",
       { class: "md-result" },
-      h("div", { class: "md-result-head" }, h("span", { class: "md-rank", "aria-hidden": "true", text: String(rank) }), h("div", {}, h("p", { class: "md-title", text: title }), h("p", { class: "md-meta", text: [data.artists[data.artist[row]], genre].filter(Boolean).join(" · ") }))),
+      header,
       h("div", { class: "md-result-foot" }, linkBox, h("span", { class: "md-rates", role: "group", "aria-label": `Rate ${title}` }, up, down)),
       h("div", { class: "md-new" }, fresh, h("label", { for: fresh.id }, "New to me", h("span", { class: "md-sr", text: ` for ${title}` }))),
     );
