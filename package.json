@@ -6,9 +6,13 @@
   "scripts": {
     "test:parity": "node --test tests/demo/parity.test.mjs",
     "test:study": "node --test tests/demo/study.test.mjs",
-    "test:browser": "node --test tests/demo/browser.test.mjs"
+    "test:browser": "node --test tests/demo/browser.test.mjs",
+    "test:ui": "playwright test --workers=1",
+    "ui:start": "node scripts/ui-command.mjs start",
+    "ui:stop": "node scripts/ui-command.mjs stop"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "axe-core": "^4.10.0",
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-report": "^3.0.1",

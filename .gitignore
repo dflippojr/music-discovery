@@ -22,3 +22,8 @@ test-results/
 coverage-js/
 ratings/
 .study-fixture/
+
+# Exploratory evidence and owned browser sessions
+output/
+.playwright-cli/
+playwright-report/
