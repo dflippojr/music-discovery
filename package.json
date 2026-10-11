@@ -12,7 +12,7 @@
     "ui:stop": "node scripts/ui-command.mjs stop"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1",
+    "@playwright/test": "^1.63.0",
     "axe-core": "^4.10.0",
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-report": "^3.0.1",
