@@ -15,7 +15,9 @@ precomputed features are used. No audio is downloaded, processed or hosted.
 
 The download uses a 30 s connect/read timeout and up to 3 attempts with
 exponential backoff for timeouts, connection drops and HTTP 5xx; 4xx fails at
-once. A failed download leaves no `.part` file and no archive behind.
+once. HTTP bodies shorter than their declared Content-Length are retried before
+checksum verification. A failed download leaves no `.part` file and no archive
+behind.
 
 Files read from the archive, with their SHA1 as listed in its `checksums` file:
 
