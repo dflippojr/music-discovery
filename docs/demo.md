@@ -110,3 +110,11 @@ and any header or cache rules, as well as where the demo is linked from.
 To embed it on another page, load `demo.css`, add `<div id="music-discovery-demo"
 data-music-discovery></div>` and `<script type="module" src="…/demo.js">`; the
 catalog is fetched from next to `demo.js` (or from `data-catalog`).
+
+## Disposable UI pass
+
+[UI testing contract](ui-testing.md) defines the synthetic-only launcher, journeys,
+mobile/theme matrix, responsive checks and teardown. After installing the test
+tools, use npm run ui:start for exploration, npm run ui:stop for cleanup, and
+npm run test:ui -- --workers=1 for the committed Playwright Test journeys.
+The test runner creates its own instance and refuses an occupied port.
