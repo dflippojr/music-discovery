@@ -42,11 +42,15 @@ async function activateLabel(locator, isMobile) {
 
 for (const path of ["/", "/study.html"]) {
   test("#50: " + path + " reflows readable ratings at 200% text size", async ({ page, isMobile }) => {
-    for (const width of [320, 375]) {
+    // A wider fallback font also exercises the space needed by Linux system fonts.
+    for (const { width, fontFamily } of [{ width: 320 }, { width: 375 }, { width: 320, fontFamily: "Verdana, sans-serif" }]) {
       await page.setViewportSize({ width, height: 667 });
       await results(page, path);
       // Change the loaded stylesheet through CSSOM so WebKit also keeps the CSP intact.
       await page.evaluate(() => { document.styleSheets[0].insertRule(":root { font-size: 200%; }"); });
+      if (fontFamily) await page.evaluate(family => {
+        document.styleSheets[0].insertRule(".md-demo { font-family: " + family + "; }");
+      }, fontFamily);
       await expect(page.locator("html")).toHaveCSS("font-size", "32px");
       await expectNoOverflow(page, width);
       const buttons = page.locator(".md-rate");

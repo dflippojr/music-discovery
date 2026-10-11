@@ -300,10 +300,12 @@ body.md-demo-page h1 {
 
 .md-result-head {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
 .md-result-head > div {
+  flex: 1 1 12rem;
   min-width: 0;
 }
 
