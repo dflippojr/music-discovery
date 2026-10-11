@@ -154,6 +154,7 @@ def assert_restart(launcher, monkeypatch, seeding):
     serving = threading.Event()
     original_serve = ThreadingHTTPServer.serve_forever
     errors = []
+    observed = {}
 
     def serve(server, **kwargs):
         serving.set()
@@ -161,17 +162,19 @@ def assert_restart(launcher, monkeypatch, seeding):
 
     def stop_when_ready():
         try:
-            assert serving.wait(5)
+            if not serving.wait(5):
+                raise TimeoutError("Restarted server did not become ready")
             metadata = json.loads(launcher.HANDLE.read_text())
+            observed["instance"] = metadata["instance"]
             origin = f"http://127.0.0.1:{metadata['port']}"
             with urlopen(origin + "/__ui_health", timeout=5) as response:
-                assert json.load(response)["instance"] == metadata["instance"]
+                observed["health"] = json.load(response)
             bundle = launcher.DATA / metadata["instance"]
-            assert json.loads((bundle / "catalog.json").read_text())["licenses"] == [
-                "/synthetic/license"
+            observed["licenses"] = json.loads((bundle / "catalog.json").read_text())[
+                "licenses"
             ]
-            assert json.loads((bundle / "sources.json").read_text())["sources"] == [
-                "/synthetic/track/100"
+            observed["sources"] = json.loads((bundle / "sources.json").read_text())[
+                "sources"
             ]
             request = Request(
                 origin + "/__ui_stop",
@@ -179,11 +182,13 @@ def assert_restart(launcher, monkeypatch, seeding):
                 headers={"X-UI-Token": metadata["token"]},
             )
             with urlopen(request, timeout=5) as response:
-                assert response.status == 204
+                observed["stop_status"] = response.status
         except Exception as error:
             errors.append(error)
-            # Bound the test if readiness or an assertion fails.
-            launcher_server.shutdown()
+        finally:
+            # Bound the test if readiness or an HTTP request fails.
+            if launcher_server is not None:
+                launcher_server.shutdown()
 
     # Capture the real server for failure teardown without signalling others.
     server_factory = launcher.ThreadingHTTPServer
@@ -202,6 +207,10 @@ def assert_restart(launcher, monkeypatch, seeding):
     worker.join(timeout=5)
     assert not worker.is_alive()
     assert not errors
+    assert observed["health"] == {"instance": observed["instance"]}
+    assert observed["licenses"] == ["/synthetic/license"]
+    assert observed["sources"] == ["/synthetic/track/100"]
+    assert observed["stop_status"] == 204
     assert_cleaned(launcher, children, ports)
 
 
