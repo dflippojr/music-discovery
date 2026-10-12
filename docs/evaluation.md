@@ -148,3 +148,47 @@ a ranker recovers the generator's taste, not that a listener would enjoy the
 results. Interactions are not listens, a weak play is not excluded from
 results, and the intervals do not cover the generator's settings. The listener
 study is still the test of preference.
+
+## Feedback logs from the demo
+
+The demo page keeps a feedback log in the visitor's browser (see
+[demo.md](demo.md#feedback-log)): one JSON line per thumbs action, with the
+ranker, seeds, qualities, the shown list (track ids and ranks), the rated track,
+its rating and the score terms behind the explanations it showed. A visitor can
+download it and send it on. It is never uploaded. Summarise a downloaded log with:
+
+```sh
+musicdiscovery feedback-report music-discovery-feedback.jsonl
+```
+
+As with the other commands' paths, the log must be inside the working directory.
+Each line is checked against `src/musicdiscovery/feedback-log.schema.json`. A
+line that is not JSON, does not match the schema, or names a rated track that is
+not at its rank in the shown list is reported on stderr with its line number and
+skipped. The command fails only when the file cannot be read or no line is valid.
+Within one shown list (same ranker, seeds, qualities, exclusion and track order)
+the latest action on a track counts, and a `rating` of 0 means that rating was
+taken back. The report then prints:
+
+- **Thumbs-up rate per ranker**: liked results over rated results, with a 95%
+  Wilson interval.
+- **MRR of the first thumbs-up** per ranker: for each shown list with at least
+  one rating, 1 / the rank of its highest-placed liked track, or 0 when none was
+  liked, averaged over lists.
+- **Explanation terms on liked and disliked results**: for each term kind
+  (`audio`, `metadata`, `popularity`, `variety`, `genre`, `tag`, `axis`), how
+  many liked results and how many disliked results showed it among their
+  explanations.
+
+Limits: these numbers describe whoever used the page, not listeners in general.
+Visitors choose which tracks to rate, so unrated results are missing rather than
+negative, and the rates lean towards tracks people felt strongly about. Only
+lists with at least one rating count towards MRR, and a visitor can see the top
+of the list first, so MRR favours tracks near the top regardless of ranker.
+Visitors know which ranker they picked, unlike the blind listener study, and
+nothing ties events to a person, so one visitor can dominate a log and events
+are not independent. Merging logs from several browsers cannot detect
+duplicates. Term counts show co-occurrence only: a term on liked results did not
+necessarily cause the like, and the hybrid shows `metadata` and `popularity`
+terms the baseline never has. Use the logs to find questions for the offline
+metrics and the [listener study](listener-study.md), not to rank the rankers.

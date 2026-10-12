@@ -190,6 +190,7 @@ export class Rankers {
       score: parts.reduce((sum, t) => sum + t.value, 0),
       terms: parts,
       explanations: explained.map((t) => t.text),
+      explained: explained.map((t) => t.name),
     };
   }
 

@@ -24,12 +24,15 @@ from musicdiscovery.evaluation import (
     write_profiles,
     write_queries,
 )
+from musicdiscovery.feedback import FeedbackError, read_log, render, summarise
 from musicdiscovery.hybrid import HybridConfigError
 from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, ingest
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
 from musicdiscovery.profiles import generate_profiles
 from musicdiscovery.study import DEFAULT_RATINGS_DIR, StudyError
 from musicdiscovery.study import run as run_study
+
+MAX_REPORTED_LINES = 20
 
 
 def _run_ingest(data_dir: Path) -> int:
@@ -142,6 +145,24 @@ def _run_analyze_study(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_feedback_report(args: argparse.Namespace) -> int:
+    try:
+        log = read_log(args.log)
+    except FeedbackError as error:
+        print(f"feedback-report: {error}", file=sys.stderr)
+        return 1
+    for problem in log.problems[:MAX_REPORTED_LINES]:
+        print(f"feedback-report: skipped {problem}", file=sys.stderr)
+    if len(log.problems) > MAX_REPORTED_LINES:
+        more = len(log.problems) - MAX_REPORTED_LINES
+        print(f"feedback-report: skipped {more} more malformed lines", file=sys.stderr)
+    print(render(summarise(log.events)), end="")
+    if not log.events:
+        print("feedback-report: no valid events in the log", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _make_streams_safe() -> None:
     """Degrade to ``?`` instead of crashing on consoles that cannot encode a name."""
     for stream in (sys.stdout, sys.stderr):
@@ -244,6 +265,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     study.add_argument("--out-dir", type=Path, default=DEFAULT_REPORT_DIR)
     study.add_argument("--date", help="report date, YYYY-MM-DD (default: today)")
 
+    feedback = subparsers.add_parser(
+        "feedback-report",
+        help="Summarise a feedback log downloaded from the demo page",
+    )
+    feedback.add_argument("log", type=Path, help="the downloaded .jsonl feedback log")
+
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -263,6 +290,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "analyze-study":
         return _run_analyze_study(args)
+
+    if args.command == "feedback-report":
+        return _run_feedback_report(args)
 
     print(f"{args.command}: not implemented yet", file=sys.stderr)
     return 1
