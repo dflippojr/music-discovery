@@ -9,7 +9,8 @@
     "test:browser": "node --test tests/demo/browser.test.mjs",
     "test:ui": "playwright test --workers=1",
     "ui:start": "node scripts/ui-command.mjs start",
-    "ui:stop": "node scripts/ui-command.mjs stop"
+    "ui:stop": "node scripts/ui-command.mjs stop",
+    "ui:recover": "node scripts/ui-command.mjs recover"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

@@ -59,6 +59,8 @@ Reset command: npm run ui:stop followed by npm run ui:start. For independent
 browser/device/theme cases, use fresh contexts and reload: all writes are
 in page memory, never shared with another context or saved on the server.
 Study order and session ID are intentionally random.
+If the owned launcher has already crashed and left a handle, follow the verified
+recovery procedure below before starting again.
 
 ## Journeys
 
@@ -106,6 +108,8 @@ light/dark projects. Command: npm run test:ui -- --workers=1. No retries/skips.
 webServer runs npm run ui:start with reuseExistingServer=false and local
 health readiness. Global teardown invokes npm run ui:stop; each fresh browser
 context rejects external requests. Run npm run ui:stop even after interruption.
+If stop cannot contact the owned instance, use the recovery procedure below;
+connection refusal by itself does not prove the process is dead.
 Each test starts from reload/fresh context; no shared mutating records exist.
 Reports: playwright-report/ and test-results/ (ignored), HTML/JUnit and traces
 on failure. Exploratory evidence: output/ui-pass/music-discovery/YYYY-MM-DD/.
@@ -132,3 +136,42 @@ Verify the ledger PID has exited, port 4173 no longer listens, and handle and
 run directory are absent. Preserve screenshots/reports. Close owned named
 playwright-cli sessions promptly; run playwright-cli close-all at completion
 in this dedicated worktree namespace. Never close another worker's sessions.
+
+## Recovery after a launcher crash
+
+After an abrupt process exit leaves data/ui-testing/instance.json behind, run:
+
+~~~sh
+npm run ui:recover
+~~~
+
+Recovery validates the handle's instance name, port, token, PID and process
+creation time using psutil (installed with the dev tools). It requires the
+recorded launcher PID to be absent. A live PID, a reused PID with a different
+creation time, or inaccessible process information preserves the handle and
+bundle. During seeding it also requires the recorded fixture child to have
+exited; a live writer or unknown child identity blocks recovery. A crash in the
+small startup window before child identity is saved requires investigation.
+Older handles without process creation times cannot be recovered automatically.
+Their ready, owned servers can still be stopped with npm run ui:stop.
+
+Recovery then exclusively reserves the recorded loopback port to verify that
+no instance is listening, and removes only the named flat run directory and
+handle. An occupied/unverifiable port, changed handle, symlink or unexpected
+nested directory is refused. No process is signalled. Successful recovery prints
+`Recovered run-...; handle and synthetic bundle removed`; repeating the command
+prints `No owned UI instance remains`.
+
+Verify that instance.json and its recorded run directory are absent, and that
+the recorded port is no longer listening. Run npm run ui:start in an owned
+terminal and verify its new UI_INSTANCE against GET /__ui_health. Finish with
+npm run ui:stop and verify the new handle and bundle are removed.
+
+If recovery refuses, preserve the files and investigate the recorded PID and
+creation time, any recorded fixture child, and the port's listener using the
+host's process/network tools. Cancel a still-seeding owned launcher with Ctrl+C
+in its terminal; use ui:stop for a ready owned instance. For PID reuse, missing
+identity or denied process access, ask the owner to establish which process and
+files belong to this run before any manual cleanup. Never terminate a process
+merely because its PID or port appears in a stale handle, and never include the
+handle token in evidence.
