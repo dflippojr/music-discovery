@@ -12,6 +12,17 @@ Output goes to `reports/offline-<date>.md` and `.json` (`--out-dir`, `--date`).
 With no `--ranker`, all four run. Generated reports are committed only in a
 pull request that is about results.
 
+`--benchmark` picks what is scored: `queries` (the default, described first
+below), `profiles` (the held-out preference benchmark at the end of this page)
+or `all`, which adds the "Held-out preferences" section to the query report.
+Without `--benchmark profiles` or `all`, reports are the same as before it
+existed.
+
+```sh
+musicdiscovery evaluate --generate-profiles         # once per catalog; writes eval/profiles.json
+musicdiscovery evaluate --benchmark all
+```
+
 ## Queries
 
 `eval/queries.json` is generated once with a fixed seed and committed, so
@@ -85,6 +96,58 @@ shows it as measured.
 The tests plant a tag structure in a synthetic catalog and check that no ranker
 is given a held-out tag, and that a ranker shown the full tags would score
 higher.
+
+## Held-out preferences
+
+`--benchmark profiles` asks whether a ranker, given part of a listener's
+history, finds the tracks that were held out of it. Real listening data is out
+of scope, so the listeners are synthetic.
+
+- **Profiles.** `eval/profiles.json` is generated once with a fixed seed
+  (`PROFILE_SEED`) by `--generate-profiles` and committed. Like `queries.json`
+  it records the catalog size: evaluation refuses a catalog of a different size,
+  and generation refuses to overwrite a profile file made for a catalog of another size. It holds 100
+  validation and 100 test profiles.
+- **Hidden taste.** Each profile has one top genre, two or three tags drawn from
+  that genre's 20 most common tags, and, for about half of the profiles, a
+  direction on a feature axis (`more:`/`less:`). Rankers never see the taste.
+- **Interactions.** Each profile has 20 distinct catalog tracks with a strength,
+  a synthetic play fraction from 0 to 1. Sixteen are taste draws: tracks are
+  sampled with weight `exp(3·genre match + 3·tags matched + 1·axis z)` (z
+  clipped to ±3), and their play fraction comes from Beta(5, 2) (mostly
+  strong). Four are noise: uniform tracks with a play fraction from Beta(2, 5)
+  (mostly weak). The weights were set on the validation split so that a ranker
+  can recover the taste at all; with weaker weights every ranker, `random`
+  included, scored near zero.
+- **Split.** 30% of each profile's interactions are held out at random. The
+  rest are the history. The split is redrawn until each side has a strong play.
+- **Weak-signal filtering.** Plays below `WEAK_SIGNAL_THRESHOLD` (0.3, recorded
+  in the report) are dropped from the history before ranking and never count
+  as held-out positives. The idea comes from Netflix GenRec, which drops very
+  short plays; nothing else of it is used.
+- **Ranker input.** The filtered history becomes a `Preference` whose seeds are
+  the history tracks, with no liked qualities and k = 10. Rankers are unchanged
+  and score the full catalog. Seeds are excluded from results, and a ranker that
+  returns a history track is an error. A profile track missing from the catalog
+  is an error too, not a skip.
+- **Metrics (k = 10).** MRR@10 is the reciprocal rank of the first held-out
+  positive in the list, 0 if none is in the top ten. nDCG@10 uses binary gains
+  over the held-out positives; the ideal list puts min(10, positives) of them
+  first. Both are averaged over profiles with the same bootstrap intervals and
+  splits as the query metrics.
+- **Report.** The "Held-out preferences" section gives the profile count, seed,
+  threshold, how many weak plays were dropped, both metrics per ranker and a
+  limits paragraph. The JSON report holds the same numbers under
+  `held_out_preferences`, with the profile file's SHA-256.
+
+Limits: synthetic tastes reward rankers that share the generator's features.
+The taste is built from `genre_top`, tags and a librosa axis, so `hybrid`, which
+scores on genre ids and tags, and `popular`, which filters on the top genre, see
+what the generator used; `baseline` sees only audio features. A high score means
+a ranker recovers the generator's taste, not that a listener would enjoy the
+results. Interactions are not listens, a weak play is not excluded from
+results, and the intervals do not cover the generator's settings. The listener
+study is still the test of preference.
 
 ## Feedback logs from the demo
 

@@ -12,6 +12,8 @@ from musicdiscovery import __version__
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.demo import TARGET_BYTES, DemoError, export_demo
 from musicdiscovery.evaluation import (
+    BENCHMARKS,
+    DEFAULT_PROFILES,
     DEFAULT_QUERIES,
     DEFAULT_REPORT_DIR,
     RANKERS,
@@ -19,12 +21,14 @@ from musicdiscovery.evaluation import (
     generate_queries,
     make_ranker,
     run,
+    write_profiles,
     write_queries,
 )
 from musicdiscovery.feedback import FeedbackError, read_log, render, summarise
 from musicdiscovery.hybrid import HybridConfigError
 from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, ingest
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
+from musicdiscovery.profiles import generate_profiles
 from musicdiscovery.study import DEFAULT_RATINGS_DIR, StudyError
 from musicdiscovery.study import run as run_study
 
@@ -75,6 +79,10 @@ def _run_evaluate(args: argparse.Namespace) -> int:
             write_queries(args.queries, generate_queries(catalog), catalog)
             print(f"evaluate: wrote queries to {args.queries}")
             return 0
+        if args.generate_profiles:
+            write_profiles(args.profiles, generate_profiles(catalog), catalog)
+            print(f"evaluate: wrote profiles to {args.profiles}")
+            return 0
         report_date = date.fromisoformat(args.date) if args.date else date.today()
         report, numbers = run(
             catalog,
@@ -83,6 +91,8 @@ def _run_evaluate(args: argparse.Namespace) -> int:
             args.out_dir,
             report_date,
             catalog_dir / MANIFEST_NAME,
+            args.benchmark,
+            args.profiles,
         )
     except (
         CatalogError,
@@ -222,6 +232,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--generate-queries",
         action="store_true",
         help="write the seeded query file for this catalog and exit",
+    )
+    evaluate.add_argument(
+        "--benchmark",
+        choices=BENCHMARKS,
+        default="queries",
+        help="queries (default), profiles (held-out preferences) or all",
+    )
+    evaluate.add_argument("--profiles", type=Path, default=DEFAULT_PROFILES)
+    evaluate.add_argument(
+        "--generate-profiles",
+        action="store_true",
+        help="write the seeded listener profile file for this catalog and exit",
     )
     export = subparsers.add_parser(
         "export-demo", help="Write the static demo bundle for the browser"
