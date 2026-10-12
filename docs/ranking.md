@@ -59,7 +59,9 @@ lower track id. The ranker has no randomness, so equal input gives equal output.
 Each recommendation carries its score terms. Its explanations are the texts of
 the top three positive terms, largest first, for example `similar sound to the
 seed`, `same genre: Folk`, `more energetic, as asked`. If no term is positive,
-the largest term is used, so every result has at least one explanation.
+the largest term is used, so every result has at least one explanation. The
+demo page can also show every term of a result with its signed contribution
+([demo.md](demo.md#score-detail)).
 
 ## Interface
 

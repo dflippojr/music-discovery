@@ -20,7 +20,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'";
 
 // Coverage of the demo and study scripts, merged over every test and written as lcov for
 // SonarCloud when COVERAGE_DIR is set.
-const sources = Object.fromEntries(["demo.js", "study.js", "study-lib.js", "ui.js", "ranker.js"].map((name) => [name, resolve("src/musicdiscovery/demo", name)]));
+const sources = Object.fromEntries(["demo.js", "study.js", "study-lib.js", "feedback-log.js", "ui.js", "ranker.js"].map((name) => [name, resolve("src/musicdiscovery/demo", name)]));
 const schema = JSON.parse(readFileSync(resolve("src/musicdiscovery/study-ratings.schema.json"), "utf8"));
 const coverage = libCoverage.createCoverageMap({});
 
@@ -358,6 +358,8 @@ describe("demo page", () => {
       await folk.click();
       await folk.click();
       await page.getByRole("button", { name: /^Thumbs up/ }).first().click();
+      await page.locator(".md-score summary").first().click();
+      await page.getByRole("button", { name: "Clear feedback log" }).click();
       assert.deepEqual(await axeViolations(page), []);
       assert.deepEqual(problems, []);
       await close(page, context);
@@ -393,6 +395,176 @@ describe("demo page", () => {
     assert.ok(requests.every((url) => url.startsWith(base) || url.startsWith("blob:")), requests.join());
     await close(page, context);
   });
+
+  test("each result can expand, from the keyboard, to show every score term with its signed contribution", async () => {
+    const { context, page, problems } = await open();
+    await pickSeed(page);
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    const details = page.locator(".md-result details.md-score");
+    assert.equal(await details.count(), 10);
+    assert.deepEqual(await details.evaluateAll((all) => all.filter((el) => el.open).length), 0);
+    assert.equal(await page.locator(".md-term").first().isVisible(), false);
+    const first = details.first();
+    const title = await page.locator(".md-result .md-title").first().textContent();
+    const summary = first.locator("summary");
+    assert.equal(await summary.textContent(), `How this was scored: ${title}`);
+    await summary.focus();
+    await page.keyboard.press("Enter");
+    assert.equal(await first.evaluate((el) => el.open), true);
+    const list = page.getByRole("list", { name: `Score terms for ${title}` });
+    const names = await list.locator(".md-term-name").allTextContents();
+    for (const name of ["Sounds like the seed", "Shares genres and tags with the seed", "Popular with listeners", "Sound you picked: calmer"]) {
+      assert.ok(names.includes(name), names.join());
+    }
+    const values = (await list.locator(".md-term-value").allTextContents()).map((text) => Number(text.replace("\u2212", "-")));
+    assert.deepEqual(values, [...values].sort((a, b) => b - a));
+    const total = Number((await first.locator(".md-help").textContent()).match(/^Score ([+\u22120-9.]+),/)[1].replace("\u2212", "-"));
+    assert.ok(Math.abs(total - values.reduce((a, b) => a + b, 0)) <= 0.03 * values.length);
+    const widths = await list.locator(".md-bar-fill").evaluateAll((fills) => fills.map((el) => el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width));
+    assert.ok(Math.abs(Math.max(...widths) - 0.5) < 0.01, widths.join());
+    assert.equal(await list.locator(".md-bar").first().getAttribute("aria-hidden"), "true");
+    await page.keyboard.press("Enter");
+    assert.equal(await first.evaluate((el) => el.open), false);
+
+    // Synthetic terms pin the labels, signs and bar directions exactly.
+    const synthetic = await page.evaluate(() => {
+      const app = document.querySelector("#music-discovery-demo").demo;
+      const terms = [
+        { name: "genre:Folk", value: -0.5 },
+        { name: "audio", value: 1 },
+        { name: "tag:punk", value: 0.001 },
+        { name: "axis:energy+", value: 0.25 },
+        { name: "axis:unknown-", value: 0.2 },
+        { name: "variety", value: 0.1 },
+        { name: "mystery", value: -0.0004 },
+      ];
+      const element = app.scoreDetail({ terms }, "Synthetic");
+      document.body.append(element);
+      element.open = true;
+      const rows = [...element.querySelectorAll(".md-term")].map((row) => {
+        const fill = row.querySelector(".md-bar-fill");
+        const bar = fill.parentElement.getBoundingClientRect();
+        const box = fill.getBoundingClientRect();
+        const centre = bar.left + bar.width / 2;
+        // Which edge of the fill sits on zero: on its left edge it grows right, on its right edge left.
+        const edges = [Math.abs(box.left - centre) < 1, Math.abs(box.right - centre) < 1];
+        return [row.querySelector(".md-term-name").textContent, row.querySelector(".md-term-value").textContent, fill.dataset.sign,
+          Math.round((100 * box.width) / bar.width), edges];
+      });
+      element.remove();
+      return { rows, help: element.querySelector(".md-help").textContent };
+    });
+    assert.deepEqual(synthetic.rows, [
+      ["Sounds like the seed", "+1.00", "positive", 50, [true, false]],
+      ["Sound you picked: more energetic", "+0.25", "positive", 13, [true, false]],
+      ["Sound you picked: unknown-", "+0.20", "positive", 10, [true, false]],
+      ["Adds variety to the list", "+0.10", "positive", 5, [true, false]],
+      ["Tag you picked: punk", "0.00", "positive", 0, [true, true]],
+      ["mystery", "0.00", "negative", 0, [true, true]],
+      ["Genre you picked: Folk", "\u22120.50", "negative", 25, [false, true]],
+    ]);
+    assert.match(synthetic.help, /^Score \+1\.05, the sum of these terms\./);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("thumbs actions go to a local feedback log that survives reloads, downloads as JSON Lines and clears", async () => {
+    const { context, page, problems } = await open();
+    const requests = [];
+    page.on("request", (r) => requests.push(r.url()));
+    const download = page.getByRole("button", { name: "Download feedback log" });
+    const clear = page.getByRole("button", { name: "Clear feedback log" });
+    const status = page.locator(".md-log-status");
+    assert.equal(await download.isDisabled(), true);
+    assert.equal(await clear.isDisabled(), true);
+    assert.equal(await status.textContent(), "0 entries in this browser's feedback log.");
+    await pickSeed(page);
+    const items = page.locator(".md-result");
+    const shown = await titles(page);
+    const why = await Promise.all([0, 2].map((i) => items.nth(i).locator(".md-why li").count()));
+    await items.nth(0).getByRole("button", { name: /Thumbs up/ }).click();
+    assert.equal(await status.textContent(), "1 entry in this browser's feedback log.");
+    await items.nth(2).getByRole("button", { name: /Thumbs down/ }).click();
+    await items.nth(2).getByRole("button", { name: /Thumbs down/ }).click();
+    assert.equal(await status.textContent(), "3 entries in this browser's feedback log.");
+
+    await page.reload();
+    await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+    assert.equal(await status.textContent(), "3 entries in this browser's feedback log.");
+    assert.equal(await page.getByRole("button", { name: "Export my ratings" }).isDisabled(), true);
+    const [file] = await Promise.all([page.waitForEvent("download"), download.click()]);
+    assert.equal(file.suggestedFilename(), "music-discovery-feedback.jsonl");
+    const text = readFileSync(await file.path(), "utf8");
+    assert.match(text, /^(\{.*\}\n){3}$/);
+    const events = text.trimEnd().split("\n").map((line) => JSON.parse(line));
+    const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+    const ids = shown.map((title) => catalog.ids[catalog.titles.indexOf(title)]);
+    const logSchema = JSON.parse(readFileSync(resolve("src/musicdiscovery/feedback-log.schema.json"), "utf8"));
+    assert.deepEqual(events.map((e) => [e.track_id, e.rank, e.rating, e.explanation_terms.length]), [
+      [ids[0], 1, 1, why[0]], [ids[2], 3, -1, why[1]], [ids[2], 3, 0, why[1]],
+    ]);
+    for (const event of events) {
+      assert.deepEqual(Object.keys(event).sort(), [...logSchema.required].sort());
+      assert.deepEqual(event.shown, ids.map((track_id, i) => ({ track_id, rank: i + 1 })));
+      assert.deepEqual([event.version, event.ranker, event.seed_track_ids, event.likes, event.dislikes, event.exclude_seed_artist], [1, "hybrid", [100], [], [], false]);
+      assert.match(event.time, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    }
+    assert.match(await status.textContent(), /^Downloaded 3 entries as music-discovery-feedback\.jsonl\.$/);
+
+    const confirm = page.locator(".md-confirm");
+    assert.equal(await confirm.isHidden(), true);
+    await clear.click();
+    assert.equal(await confirm.isVisible(), true);
+    assert.match(await confirm.textContent(), /Clear all 3 entries from this browser's feedback log\? This cannot be undone\./);
+    const keep = page.getByRole("button", { name: "Keep the log" });
+    assert.equal(await keep.evaluate((el) => el === document.activeElement), true);
+    await page.keyboard.press("Enter");
+    assert.equal(await confirm.isHidden(), true);
+    assert.equal(await clear.evaluate((el) => el === document.activeElement), true);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("music-discovery-feedback-log")).length), 3);
+    await clear.click();
+    await page.getByRole("button", { name: "Yes, clear the log" }).click();
+    assert.equal(await status.textContent(), "Feedback log cleared.");
+    assert.equal(await status.evaluate((el) => el === document.activeElement), true);
+    assert.equal(await download.isDisabled(), true);
+    await page.reload();
+    await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+    assert.equal(await status.textContent(), "0 entries in this browser's feedback log.");
+    assert.ok(requests.every((url) => url.startsWith(base) || url.startsWith("blob:")), requests.join());
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  for (const blocked of ["access", "writes"]) {
+    test(`the feedback log keeps working for the page when storage ${blocked} are blocked`, async () => {
+      const context = await browser.newContext({ acceptDownloads: true });
+      const page = await context.newPage();
+      const problems = [];
+      page.on("pageerror", (e) => problems.push(String(e)));
+      await page.addInitScript((blocked) => {
+        const deny = () => {
+          throw new DOMException("Synthetic denial", blocked === "access" ? "SecurityError" : "QuotaExceededError");
+        };
+        if (blocked === "access") Object.defineProperty(globalThis, "localStorage", { configurable: true, get: deny });
+        else Storage.prototype.setItem = deny;
+      }, blocked);
+      await page.coverage.startJSCoverage();
+      await page.goto(base);
+      await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+      await pickSeed(page);
+      await page.getByRole("button", { name: /^Thumbs up/ }).first().click();
+      await page.getByRole("button", { name: /^Thumbs down/ }).nth(1).click();
+      const status = page.locator(".md-log-status");
+      assert.match(await status.textContent(), /^2 entries in the feedback log\. This browser is not letting the page save it/);
+      const [file] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download feedback log" }).click()]);
+      assert.equal(readFileSync(await file.path(), "utf8").trimEnd().split("\n").length, 2);
+      await page.getByRole("button", { name: "Clear feedback log" }).click();
+      await page.getByRole("button", { name: "Yes, clear the log" }).click();
+      assert.equal(await page.getByRole("button", { name: "Download feedback log" }).isDisabled(), true);
+      assert.deepEqual(problems, []);
+      await close(page, context);
+    });
+  }
 
   test("reduced motion is respected", async () => {
     const { context, page } = await open({ reducedMotion: "reduce" });
@@ -434,6 +606,8 @@ describe("study page", () => {
     assert.deepEqual(await page.locator("h3.md-study-list").allTextContents(), ["List A", "List B"]);
     assert.equal(await page.locator(".md-result").count(), 10);
     assert.equal(await page.locator(".md-why").count(), 0);
+    assert.equal(await page.locator(".md-score, .md-terms").count(), 0);
+    assert.equal(await page.getByRole("button", { name: /feedback log/ }).count(), 0);
     const markup = (await page.content()).toLowerCase();
     assert.doesNotMatch(markup, /hybrid|baseline/);
     assert.equal(await page.getByRole("button", { name: "Next task" }).isDisabled(), true);
@@ -716,7 +890,7 @@ describe("result presentation", () => {
         if (sample.license >= 0) links.push({ text: "License", href: "https://example.test/license", target: "_blank", rel: "noopener noreferrer", source: false });
         assert.deepEqual(actual.snapshots[index], {
           header: `<div class="md-result-head"><span class="md-rank" aria-hidden="true">${index + 1}</span><div><p class="md-title">${sample.expectedTitle}</p><p class="md-meta">${sample.meta}</p></div></div>`,
-          registration: "0", children: isStudy ? ["md-result-head", "md-result-foot", "md-new"] : ["md-result-head", "md-why", "md-result-foot"],
+          registration: "0", children: isStudy ? ["md-result-head", "md-result-foot", "md-new"] : ["md-result-head", "md-why", "md-score", "md-result-foot"],
           links, group: `Rate ${sample.expectedTitle}`,
           buttons: ["Thumbs up", "Thumbs down"].map((label) => ({ text: `${label} for ${sample.expectedTitle}`, pressed: "false" })),
         });

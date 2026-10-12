@@ -35,6 +35,7 @@ STATIC_FILES = (
     "demo.js",
     "study.js",
     "study-lib.js",
+    "feedback-log.js",
     "ui.js",
     "ranker.js",
 )
