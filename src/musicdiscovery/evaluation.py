@@ -13,6 +13,16 @@ import pandas as pd
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
+from musicdiscovery.profiles import (
+    PROFILE_SEED,
+    SPLITS,
+    WEAK_SIGNAL_THRESHOLD,
+    Interaction,
+    Profile,
+    ProfileError,
+    ndcg,
+    reciprocal_rank,
+)
 from musicdiscovery.ranking import BaselineRanker, Ranker, Recommendation, _allowed
 
 K = 10
@@ -22,9 +32,10 @@ HOLDOUT_FRACTION = 0.5
 HOLDOUT_SEED = 20261006
 BOOTSTRAP_RESAMPLES = 1000
 QUERIES_PER_SPLIT = 100
-SPLITS = ("validation", "test")
 DATASET_VERSION = "FMA dataset v1 (archive files dated 2017-04-01), small subset"
 DEFAULT_QUERIES = Path("eval") / "queries.json"
+DEFAULT_PROFILES = Path("eval") / "profiles.json"
+BENCHMARKS = ("queries", "profiles", "all")
 DEFAULT_REPORT_DIR = Path("reports")
 
 
@@ -193,6 +204,94 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
     if any(q.split not in SPLITS for q in queries):
         raise EvaluationError(f"query splits must be one of {SPLITS}")
     return queries
+
+
+# --- listener profiles -------------------------------------------------------
+
+
+def _recorded_size(path: Path) -> int | None:
+    try:
+        return json.loads(path.read_text()).get("catalog_tracks")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def write_profiles(path: Path, profiles: Sequence[Profile], catalog: Catalog) -> None:
+    """Write profiles; refuse to replace a file made for a different catalog size."""
+    path = confined(path)
+    recorded = _recorded_size(path) if path.exists() else None
+    if recorded is not None and recorded != len(catalog):
+        raise EvaluationError(
+            f"{path} was made for a catalog of {recorded} tracks, this one has "
+            f"{len(catalog)}; remove it to generate profiles for this catalog"
+        )
+    payload = {
+        "profile_seed": PROFILE_SEED,
+        "k": K,
+        "catalog_tracks": len(catalog),
+        "profiles": [
+            {
+                "id": p.id,
+                "split": p.split,
+                "taste": {"genre": p.genre, "tags": list(p.tags), "axis": p.axis},
+                "history": [[i.track, i.strength] for i in p.history],
+                "heldout": [[i.track, i.strength] for i in p.heldout],
+            }
+            for p in profiles
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1) + "\n")
+
+
+def _profile(record: dict) -> Profile:
+    taste = record["taste"]
+    return Profile(
+        id=int(record["id"]),
+        split=str(record["split"]),
+        genre=str(taste["genre"]),
+        tags=tuple(str(t) for t in taste["tags"]),
+        axis=None if taste["axis"] is None else str(taste["axis"]),
+        history=tuple(Interaction(int(t), float(s)) for t, s in record["history"]),
+        heldout=tuple(Interaction(int(t), float(s)) for t, s in record["heldout"]),
+    )
+
+
+def load_profiles(path: Path, catalog: Catalog) -> list[Profile]:
+    """Read profiles and check that every interaction is a catalog track."""
+    path = confined(path)
+    if not path.exists():
+        raise EvaluationError(
+            f"no profiles at {path}; create them with `musicdiscovery evaluate "
+            "--generate-profiles`"
+        )
+    try:
+        payload = json.loads(path.read_text())
+        profiles = [_profile(record) for record in payload["profiles"]]
+        expected = payload["catalog_tracks"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise EvaluationError(f"cannot read profiles at {path}: {error!r}") from error
+    if expected != len(catalog):
+        raise EvaluationError(
+            f"profiles were made for a catalog of {expected} tracks, "
+            f"this one has {len(catalog)}"
+        )
+    for split in SPLITS:
+        if not any(p.split == split for p in profiles):
+            raise EvaluationError(f"profiles have no {split} split")
+    if any(p.split not in SPLITS for p in profiles):
+        raise EvaluationError(f"profile splits must be one of {SPLITS}")
+    for profile in profiles:
+        missing = [
+            i.track
+            for i in (*profile.history, *profile.heldout)
+            if i.track not in catalog.position
+        ]
+        if missing:
+            raise EvaluationError(
+                f"profile {profile.id} names tracks missing from the catalog: {missing}"
+            )
+    return profiles
 
 
 # --- metrics -----------------------------------------------------------------
@@ -464,6 +563,94 @@ def evaluate(
     }
 
 
+PROFILE_METRICS: dict[str, str] = {
+    "mrr": "MRR@10 (reciprocal rank of the first held-out liked track)",
+    "ndcg": "nDCG@10 (binary gains over held-out liked tracks)",
+}
+
+
+def _profile_scores(
+    profile: Profile, results: Sequence[Recommendation], k: int, threshold: float
+) -> tuple[float, float]:
+    """MRR and nDCG of one ranked list against the profile's held-out positives."""
+    ranked = [r.track_id for r in results]
+    seen = set(profile.seeds(threshold)) & set(ranked)
+    if seen:
+        raise EvaluationError(
+            f"a ranker returned history tracks {sorted(seen)} for profile {profile.id}"
+        )
+    positives = profile.positives(threshold)
+    return reciprocal_rank(ranked, positives, k), ndcg(ranked, positives, k)
+
+
+def evaluate_profiles(
+    catalog: Catalog,
+    profiles: Sequence[Profile],
+    ranker_names: Sequence[str],
+    k: int = K,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    threshold: float = WEAK_SIGNAL_THRESHOLD,
+) -> dict:
+    """Rank from each profile's filtered history; score against held-out positives."""
+    for profile in profiles:
+        if not profile.positives(threshold):
+            raise EvaluationError(
+                f"profile {profile.id} has no held-out track above {threshold}"
+            )
+    table: dict[str, dict] = {}
+    for name in ranker_names:
+        ranker = make_ranker(name)
+        per_profile = {m: np.full(len(profiles), np.nan) for m in PROFILE_METRICS}
+        for i, profile in enumerate(profiles):
+            try:
+                preference = profile.preference(k, threshold)
+            except ProfileError as error:
+                raise EvaluationError(str(error)) from error
+            results = ranker.rank(preference, catalog)
+            mrr, gain = _profile_scores(profile, results, k, threshold)
+            per_profile["mrr"][i] = mrr
+            per_profile["ndcg"][i] = gain
+        table[name] = {}
+        for split in SPLITS:
+            index = np.flatnonzero([p.split == split for p in profiles])
+            rng = np.random.default_rng(BOOTSTRAP_SEED)
+            draws = rng.integers(len(index), size=(resamples, len(index)))
+            table[name][split] = {}
+            for metric, values in per_profile.items():
+                mean, lo, hi = _interval(values[index], draws)
+                table[name][split][metric] = {
+                    "mean": _round(mean),
+                    "lo": _round(lo),
+                    "hi": _round(hi),
+                }
+
+    def total(split: str, count: Callable[[Profile], int]) -> int:
+        return sum(count(p) for p in profiles if p.split == split)
+
+    return {
+        "k": k,
+        "bootstrap_resamples": resamples,
+        "profile_seed": PROFILE_SEED,
+        "weak_signal_threshold": threshold,
+        "profiles": {s: total(s, lambda _: 1) for s in SPLITS},
+        "history_tracks": {
+            s: total(s, lambda p: len(p.seeds(threshold))) for s in SPLITS
+        },
+        "weak_history_dropped": {
+            s: total(s, lambda p: len(p.history) - len(p.seeds(threshold)))
+            for s in SPLITS
+        },
+        "positives": {
+            s: total(s, lambda p: len(p.positives(threshold))) for s in SPLITS
+        },
+        "weak_heldout_dropped": {
+            s: total(s, lambda p: len(p.heldout) - len(p.positives(threshold)))
+            for s in SPLITS
+        },
+        "rankers": table,
+    }
+
+
 # --- catalog version and report ----------------------------------------------
 
 
@@ -540,9 +727,30 @@ def _sparsity_note(results: dict) -> list[str]:
     ]
 
 
+def _version_lines(version: dict) -> list[str]:
+    lines = [
+        "## Catalog version",
+        "",
+        f"- Dataset: {version['dataset']} (see `docs/catalog.md`)",
+        f"- Tracks: {version['tracks']}",
+    ]
+    if "ingest_version" in version:
+        lines += [
+            f"- Ingest version: {version['ingest_version']}",
+            f"- Source archive SHA1: `{version['source_sha1']}`",
+        ]
+    lines.append("")
+    return lines
+
+
 def render_report(
-    results: dict, version: dict, report_date: date, queries_path: str
+    results: dict,
+    version: dict,
+    report_date: date,
+    queries_path: str,
+    extra: Sequence[str] = (),
 ) -> str:
+    """The query benchmark report; `extra` lines go just before the limits."""
     names = list(results["rankers"])
     lines = [
         f"# Offline evaluation, {report_date.isoformat()}",
@@ -560,17 +768,8 @@ def render_report(
         f"{results['heldout']['queries_skipped']['test']} test.",
         "",
         *_sparsity_note(results),
-        "## Catalog version",
-        "",
-        f"- Dataset: {version['dataset']} (see `docs/catalog.md`)",
-        f"- Tracks: {version['tracks']}",
+        *_version_lines(version),
     ]
-    if "ingest_version" in version:
-        lines += [
-            f"- Ingest version: {version['ingest_version']}",
-            f"- Source archive SHA1: `{version['source_sha1']}`",
-        ]
-    lines.append("")
     for metric, title in METRICS.items():
         lines += [
             f"## {title}",
@@ -596,8 +795,81 @@ def render_report(
                 "direction.",
             ]
         lines.append("")
-    lines += ["## Limits", "", LIMITS]
+    lines += [*extra, "## Limits", "", LIMITS]
     return "\n".join(lines)
+
+
+PROFILE_LIMITS = """Limits of the held-out preference benchmark:
+
+- **Synthetic tastes reward rankers that share the generator's features.** Each
+  profile's interactions are drawn from a hidden taste built from a top genre,
+  catalog tags and a librosa feature axis, so a ranker that scores on those same
+  columns (`hybrid` uses genre ids and tags, `popular` filters on the top genre)
+  is favoured by construction. A high score shows that a ranker recovers the
+  generator's taste, not that a listener would like the results.
+- **Interactions are not listens.** Strengths are synthetic play fractions: taste
+  draws are mostly strong and noise draws mostly weak. The weak-signal threshold
+  drops plays below it from the history and from the positives; a dropped weak
+  play is not shown to rankers and is not excluded from their results.
+- **Rankers see the full catalog**, including the tags the generator used, and
+  get the filtered history as seeds with no liked qualities.
+- **Intervals** are bootstrap 95% intervals over profiles only; they do not cover
+  the generator's settings or the choice of catalog.
+- Listener studies are the next step (issue #8); this benchmark does not replace
+  them.
+"""
+
+
+def render_profiles_section(section: dict) -> list[str]:
+    """The "Held-out preferences" section of the report."""
+    names = list(section["rankers"])
+    count = section["profiles"]
+    lines = [
+        "## Held-out preferences",
+        "",
+        f"Profiles: {count['validation']} validation and {count['test']} test, from "
+        f"`{section['profiles_path']}` (profile seed {section['profile_seed']}). "
+        f"Rankers: {', '.join(names)}. k = {section['k']}. Each ranker gets a "
+        "profile's history as seeds and is scored on the profile's held-out liked "
+        "tracks. Cells are the mean with a bootstrap 95% interval "
+        f"({section['bootstrap_resamples']} resamples over profiles).",
+        "",
+        f"Weak-signal threshold: interactions with a play fraction below "
+        f"{section['weak_signal_threshold']} are dropped from history and positives. "
+        "Dropped: "
+        f"{section['weak_history_dropped']['validation']} validation and "
+        f"{section['weak_history_dropped']['test']} test history plays, "
+        f"{section['weak_heldout_dropped']['validation']} validation and "
+        f"{section['weak_heldout_dropped']['test']} test held-out plays. Kept: "
+        f"{section['history_tracks']['validation']} and "
+        f"{section['history_tracks']['test']} history seeds, "
+        f"{section['positives']['validation']} and {section['positives']['test']} "
+        "held-out positives.",
+        "",
+    ]
+    for metric, title in PROFILE_METRICS.items():
+        lines += [
+            f"### {title}",
+            "",
+            "| Ranker | Validation | Test |",
+            "| --- | --- | --- |",
+        ]
+        for name in names:
+            scores = section["rankers"][name]
+            lines.append(
+                f"| {name} | {_cell(scores['validation'][metric])} "
+                f"| {_cell(scores['test'][metric])} |"
+            )
+        lines.append("")
+    return [*lines, PROFILE_LIMITS]
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _relative(path: Path) -> str:
+    return path.relative_to(Path.cwd().resolve()).as_posix()
 
 
 def run(
@@ -607,26 +879,45 @@ def run(
     out_dir: Path,
     report_date: date,
     manifest_path: Path | None = None,
+    benchmark: str = "queries",
+    profiles_path: Path = DEFAULT_PROFILES,
 ) -> tuple[Path, Path]:
-    """Evaluate and write `offline-<date>.md` and `.json`; return their paths."""
-    queries_path = confined(queries_path)
+    """Evaluate and write `offline-<date>.md` and `.json`; return their paths.
+
+    `benchmark` is `queries` (the default), `profiles` (held-out preferences) or
+    `all`, which adds the held-out preferences section to the query report.
+    """
+    if benchmark not in BENCHMARKS:
+        raise EvaluationError(f"unknown benchmark {benchmark!r}; choose {BENCHMARKS}")
     out_dir = confined(out_dir)
-    queries = load_queries(queries_path, catalog)
-    results = evaluate(catalog, queries, list(dict.fromkeys(ranker_names)))
+    names = list(dict.fromkeys(ranker_names))
     version = catalog_version(manifest_path, catalog)
+    results: dict = {}
+    extra: list[str] = []
+    if benchmark != "queries":
+        profiles_path = confined(profiles_path)
+        profiles = load_profiles(profiles_path, catalog)
+        section = evaluate_profiles(catalog, profiles, names)
+        section["profiles_path"] = _relative(profiles_path)
+        section["profiles_sha256"] = _sha256(profiles_path)
+        results["held_out_preferences"] = section
+        extra = render_profiles_section(section)
+    if benchmark == "profiles":
+        heading = [f"# Offline evaluation, {report_date.isoformat()}", ""]
+        text = "\n".join([*heading, *_version_lines(version), *extra])
+    else:
+        queries_path = confined(queries_path)
+        queries = load_queries(queries_path, catalog)
+        results.update(evaluate(catalog, queries, names))
+        results["queries_sha256"] = _sha256(queries_path)
+        text = render_report(
+            results, version, report_date, _relative(queries_path), extra
+        )
     results["catalog"] = version
-    results["queries_sha256"] = hashlib.sha256(queries_path.read_bytes()).hexdigest()
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"offline-{report_date.isoformat()}"
     json_path = out_dir / f"{stem}.json"
     md_path = out_dir / f"{stem}.md"
     json_path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
-    md_path.write_text(
-        render_report(
-            results,
-            version,
-            report_date,
-            queries_path.relative_to(Path.cwd().resolve()).as_posix(),
-        )
-    )
+    md_path.write_text(text)
     return md_path, json_path

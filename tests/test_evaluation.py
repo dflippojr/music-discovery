@@ -20,15 +20,31 @@ from musicdiscovery.evaluation import (
     RandomRanker,
     _bare,
     evaluate,
+    evaluate_profiles,
     generate_queries,
+    load_profiles,
     load_queries,
     make_ranker,
     query_metrics,
+    render_profiles_section,
     render_report,
     run,
+    write_profiles,
     write_queries,
 )
 from musicdiscovery.preference import Preference
+from musicdiscovery.profiles import (
+    INTERACTIONS_PER_PROFILE,
+    PROFILE_SEED,
+    WEAK_SIGNAL_THRESHOLD,
+    Interaction,
+    Profile,
+    ProfileError,
+    _split,
+    generate_profiles,
+    ndcg,
+    reciprocal_rank,
+)
 
 GENRES = ["Folk", "Rock", "Jazz"]
 
@@ -472,3 +488,246 @@ def test_report_warns_when_tags_are_too_sparse(tmp_path, tagged, tagged_queries)
     write_queries(path, generate_queries(tagged, per_split=60), tagged)
     md, _ = run(tagged, path, ["random"], tmp_path, date(2026, 10, 5))
     assert "Tags are sparse" not in md.read_text()
+
+
+# --- held-out preferences ----------------------------------------------------
+
+
+def test_reciprocal_rank_on_hand_built_rankings():
+    positives = frozenset({7})
+    assert reciprocal_rank([7, 1, 2], positives, 10) == 1.0
+    assert reciprocal_rank([*range(100, 109), 7], positives, 10) == pytest.approx(0.1)
+    assert reciprocal_rank([*range(100, 110), 7], positives, 10) == 0.0
+    assert reciprocal_rank([1, 2, 3], positives, 10) == 0.0
+    assert reciprocal_rank([1, 7, 8], frozenset({7, 8}), 10) == 0.5
+
+
+def test_ndcg_with_several_positives():
+    positives = frozenset({1, 2, 3})
+    ideal = 1 + 1 / np.log2(3) + 1 / np.log2(4)
+    assert ndcg([1, 9, 2], positives, 10) == pytest.approx((1 + 0.5) / ideal)
+    assert ndcg([3, 2, 1, 9], positives, 10) == pytest.approx(1.0)
+    assert ndcg([9, 8], positives, 10) == 0.0
+    # Only k positives fit in the list, so a top-k list of positives is ideal.
+    assert ndcg([1, 2], positives, 2) == pytest.approx(1.0)
+    with pytest.raises(ProfileError):
+        ndcg([1], frozenset(), 10)
+
+
+@pytest.fixture(scope="module")
+def profiles(catalog):
+    return generate_profiles(catalog, per_split=15)
+
+
+def test_profiles_are_deterministic_and_split(catalog, profiles):
+    assert generate_profiles(catalog, per_split=15) == profiles
+    assert generate_profiles(catalog, per_split=15, seed=1) != profiles
+    assert [p.split for p in profiles].count("validation") == 15
+    assert [p.split for p in profiles].count("test") == 15
+    for profile in profiles:
+        history = {i.track for i in profile.history}
+        heldout = {i.track for i in profile.heldout}
+        assert not history & heldout
+        assert len(history) + len(heldout) == INTERACTIONS_PER_PROFILE
+        assert (history | heldout) <= set(catalog.position)
+        assert profile.seeds() and profile.positives()
+        assert len(profile.tags) == 2  # the fixture has two tags per genre
+        assert all(0 <= i.strength <= 1 for i in (*profile.history, *profile.heldout))
+    with pytest.raises(ProfileError, match="too small"):
+        generate_profiles(catalog, interactions=len(catalog) + 1)
+    unlabelled = Catalog(catalog.frame.assign(genre_top=None))
+    with pytest.raises(ProfileError, match="no top genres"):
+        generate_profiles(unlabelled, per_split=1)
+
+
+def _profile(history, heldout, split="test", index=0):
+    return Profile(
+        id=index,
+        split=split,
+        genre="Folk",
+        tags=(),
+        axis=None,
+        history=tuple(Interaction(t, s) for t, s in history),
+        heldout=tuple(Interaction(t, s) for t, s in heldout),
+    )
+
+
+def test_weak_signals_leave_history_and_positives():
+    profile = _profile([(100, 0.9), (101, 0.1)], [(102, 0.8), (103, 0.29)])
+    assert profile.seeds() == (100,)
+    assert profile.positives() == frozenset({102})
+    assert profile.preference(10).seeds == (100,)
+    assert profile.positives(threshold=0.2) == frozenset({102, 103})
+    with pytest.raises(ProfileError, match="no history"):
+        _profile([(101, 0.1)], [(102, 0.8)]).preference(10)
+
+
+class Fixed:
+    """A ranker that returns fixed tracks, minus the seeds, and records the seeds."""
+
+    def __init__(self, tracks, drop_seeds=True):
+        self.tracks = tracks
+        self.drop_seeds = drop_seeds
+        self.seen = []
+
+    def rank(self, preference, catalog):
+        self.seen.append(preference.seeds)
+        rows = [catalog.position[t] for t in self.tracks]
+        return [
+            r
+            for r in _bare(catalog, rows)
+            if not self.drop_seeds or r.track_id not in preference.seeds
+        ]
+
+
+def test_evaluation_drops_weak_signals(monkeypatch, catalog):
+    from musicdiscovery import evaluation
+
+    # 103 is a weak held-out play, so ranking it first is not a hit.
+    fixed = Fixed([103, 104, 102])
+    monkeypatch.setattr(evaluation, "RANKERS", {"fixed": lambda: fixed})
+    profiles = [
+        _profile([(100, 0.9), (101, 0.1)], [(102, 0.8), (103, 0.2)], split, i)
+        for i, split in enumerate(["validation", "test"])
+    ]
+    section = evaluate_profiles(catalog, profiles, ["fixed"], resamples=10)
+    assert fixed.seen == [(100,), (100,)]
+    scores = section["rankers"]["fixed"]["test"]
+    assert scores["mrr"]["mean"] == pytest.approx(1 / 3)
+    assert scores["ndcg"]["mean"] == pytest.approx(0.5)
+    assert section["weak_signal_threshold"] == WEAK_SIGNAL_THRESHOLD
+    assert section["weak_history_dropped"] == {"validation": 1, "test": 1}
+    assert section["weak_heldout_dropped"] == {"validation": 1, "test": 1}
+    assert section["positives"] == {"validation": 1, "test": 1}
+
+
+def test_evaluation_refuses_unusable_profiles(monkeypatch, catalog):
+    from musicdiscovery import evaluation
+
+    leaky = Fixed([100, 102], drop_seeds=False)
+    monkeypatch.setattr(evaluation, "RANKERS", {"fixed": lambda: leaky})
+    profile = [_profile([(100, 0.9)], [(102, 0.8)])]
+    with pytest.raises(EvaluationError, match="history tracks"):
+        evaluate_profiles(catalog, profile, ["fixed"], resamples=10)
+    weak = [_profile([(100, 0.9)], [(102, 0.1)])]
+    with pytest.raises(EvaluationError, match="no held-out track"):
+        evaluate_profiles(catalog, weak, ["fixed"], resamples=10)
+    empty = [_profile([(100, 0.1)], [(102, 0.9)])]
+    with pytest.raises(EvaluationError, match="no history"):
+        evaluate_profiles(catalog, empty, ["fixed"], resamples=10)
+
+
+def test_profile_ranking_orders_rankers(catalog, profiles):
+    section = evaluate_profiles(
+        catalog, profiles, ["baseline", "hybrid", "random"], resamples=100
+    )
+    rankers = section["rankers"]
+    for split in ("validation", "test"):
+        for metric in ("mrr", "ndcg"):
+            random = rankers["random"][split][metric]["mean"]
+            for name in ("baseline", "hybrid"):
+                score = rankers[name][split][metric]
+                assert score["lo"] <= score["mean"] <= score["hi"]
+                assert score["mean"] > random, (name, split, metric)
+    assert section["profiles"] == {"validation": 15, "test": 15}
+
+
+def test_profile_file_round_trip_and_errors(tmp_path, catalog, profiles):
+    path = tmp_path / "profiles.json"
+    write_profiles(path, profiles, catalog)
+    assert load_profiles(path, catalog) == profiles
+    smaller = Catalog(make_frame(per_genre=30))
+    with pytest.raises(EvaluationError, match="catalog of"):
+        load_profiles(path, smaller)
+    with pytest.raises(EvaluationError, match="remove it"):
+        write_profiles(path, generate_profiles(smaller, per_split=5), smaller)
+    with pytest.raises(EvaluationError, match="no profiles"):
+        load_profiles(tmp_path / "missing.json", catalog)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}")
+    with pytest.raises(EvaluationError, match="cannot read"):
+        load_profiles(bad, catalog)
+    write_profiles(bad, profiles, catalog)  # a file without a size may be replaced
+    bad.write_text("not json")
+    write_profiles(bad, profiles, catalog)
+    payload = json.loads(path.read_text())
+    payload["profiles"][0]["heldout"][0][0] = 99_999
+    path.write_text(json.dumps(payload))
+    with pytest.raises(EvaluationError, match="missing from the catalog"):
+        load_profiles(path, catalog)
+    payload["profiles"] = [p for p in payload["profiles"] if p["split"] == "test"]
+    path.write_text(json.dumps(payload))
+    with pytest.raises(EvaluationError, match="no validation"):
+        load_profiles(path, catalog)
+    payload["profiles"][0]["split"] = "train"
+    payload["profiles"].append({**payload["profiles"][1], "split": "validation"})
+    path.write_text(json.dumps(payload))
+    with pytest.raises(EvaluationError, match="splits must be"):
+        load_profiles(path, catalog)
+
+
+def test_split_needs_a_strong_play_on_each_side():
+    weak = [Interaction(i, 0.1) for i in range(10)]
+    with pytest.raises(ProfileError, match="strong play"):
+        _split(np.random.default_rng(0), weak)
+
+
+def test_cli_profile_benchmark_end_to_end(tmp_path, data_dir):
+    out = tmp_path / "reports"
+    base = [
+        "evaluate",
+        "--data-dir",
+        str(data_dir),
+        "--queries",
+        "q.json",
+        "--profiles",
+        "p.json",
+        "--out-dir",
+        str(out),
+        "--ranker",
+        "baseline",
+        "--ranker",
+        "random",
+    ]
+    assert main([*base, "--generate-queries"]) == 0
+    assert main([*base, "--generate-profiles"]) == 0
+
+    assert main([*base, "--date", "2026-10-01", "--benchmark", "profiles"]) == 0
+    text = (out / "offline-2026-10-01.md").read_text()
+    assert "## Held-out preferences" in text
+    assert "### MRR@10" in text
+    assert "### nDCG@10" in text
+    assert text.count("| baseline |") == 2
+    assert f"below {WEAK_SIGNAL_THRESHOLD} are dropped" in text
+    assert f"profile seed {PROFILE_SEED}" in text
+    assert "Synthetic tastes reward rankers that share the generator's" in text
+    assert "## Same-genre rate@10" not in text
+    numbers = json.loads((out / "offline-2026-10-01.json").read_text())
+    section = numbers["held_out_preferences"]
+    assert section["weak_signal_threshold"] == WEAK_SIGNAL_THRESHOLD
+    assert section["profiles_path"] == "p.json"
+    assert len(section["profiles_sha256"]) == 64
+    assert "queries" not in numbers
+
+    assert main([*base, "--date", "2026-10-02", "--benchmark", "all"]) == 0
+    text = (out / "offline-2026-10-02.md").read_text()
+    assert "## Same-genre rate@10" in text
+    assert text.index("## Held-out preferences") < text.index("## Limits")
+    both = json.loads((out / "offline-2026-10-02.json").read_text())
+    assert both["held_out_preferences"]["rankers"] == section["rankers"]
+
+    # Without --benchmark the report is the query report alone.
+    assert main([*base, "--date", "2026-10-03"]) == 0
+    default = (out / "offline-2026-10-03.md").read_text()
+    assert "Held-out preferences" not in default
+    numbers = json.loads((out / "offline-2026-10-03.json").read_text())
+    assert "held_out_preferences" not in numbers
+    del both["held_out_preferences"]
+    assert numbers == both
+    added = "\n".join(render_profiles_section(section)) + "\n"
+    assert default == text.replace("2026-10-02", "2026-10-03").replace(added, "")
+
+
+def test_unknown_benchmark_is_refused(tmp_path, catalog):
+    with pytest.raises(EvaluationError, match="unknown benchmark"):
+        run(catalog, Path("q.json"), ["random"], tmp_path, date.today(), None, "x")
