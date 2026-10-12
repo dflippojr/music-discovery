@@ -40,6 +40,17 @@ are git-ignored. Columns: `track_id`, `title`, `artist`, `album`, `genre_top`,
 `source_url`, then 518 feature columns named `<feature>_<statistic>_<nn>`
 (for example `mfcc_mean_01`) as `float32`.
 
+A second run skips rebuilding only when the manifest has valid counts and the
+parquet catalog is readable, has the expected columns and unique track ids, and
+contains the recorded number of kept tracks. Malformed metadata or damaged
+catalogs are rebuilt from the checksum-verified cached archive without another
+download when that archive is usable.
+
+Regeneration stages both files before replacing the catalog. The old manifest
+is removed before publication and the new manifest is installed last, so an
+interrupted replacement forces recovery on the next run. Failures while staging
+leave the previous cache intact.
+
 ## Filters
 
 1. Keep only tracks in the `small` subset.
