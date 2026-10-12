@@ -161,6 +161,7 @@ download it and send it on. It is never uploaded. Summarise a downloaded log wit
 musicdiscovery feedback-report music-discovery-feedback.jsonl
 ```
 
+As with the other commands' paths, the log must be inside the working directory.
 Each line is checked against `src/musicdiscovery/feedback-log.schema.json`. A
 line that is not JSON, does not match the schema, or names a rated track that is
 not at its rank in the shown list is reported on stderr with its line number and

@@ -15,6 +15,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from musicdiscovery.evaluation import EvaluationError, confined
 from musicdiscovery.study import Interval, wilson
 
 SCHEMA_NAME = "feedback-log.schema.json"
@@ -71,9 +72,14 @@ def _line_problem(validator: Draft202012Validator, body: Any) -> str | None:
 
 
 def read_log(path: Path) -> LogRead:
-    """Read every line of `path`; good events are kept and bad lines described."""
+    """Read every line of `path`; good events are kept and bad lines described.
+
+    Like the other commands' paths, `path` must be inside the working directory.
+    """
     try:
-        text = path.read_text("utf-8")
+        text = confined(path).read_text("utf-8")
+    except EvaluationError as error:
+        raise FeedbackError(str(error)) from error
     except (OSError, UnicodeDecodeError) as error:
         raise FeedbackError(f"cannot read {path} ({error})") from error
     validator = Draft202012Validator(_schema())

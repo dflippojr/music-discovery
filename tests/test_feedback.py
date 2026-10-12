@@ -38,6 +38,22 @@ def write_log(path, *items):
     return path
 
 
+@pytest.fixture(autouse=True)
+def work_in_tmp(tmp_path, monkeypatch):
+    """Logs must be inside the working directory, so work where they are written."""
+    monkeypatch.chdir(tmp_path)
+
+
+def test_cli_refuses_a_log_outside_the_working_directory(tmp_path, capsys, monkeypatch):
+    outside = write_log(tmp_path / "feedback.jsonl", event(100, 1))
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    assert main(["feedback-report", str(outside)]) == 1
+    assert "outside the working directory" in capsys.readouterr().err
+    assert main(["feedback-report", "../feedback.jsonl"]) == 1
+
+
 @pytest.fixture
 def log(tmp_path):
     return write_log(
