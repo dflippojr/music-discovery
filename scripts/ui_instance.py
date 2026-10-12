@@ -2,9 +2,12 @@
 
 import argparse
 import json
+import math
 import os
+import re
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -14,6 +17,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+import psutil
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "ui-testing"
@@ -49,11 +54,97 @@ def remove_bundle(bundle):
     ):
         raise ValueError("Disposable bundle is outside data/ui-testing")
     if bundle.exists():
-        for path in bundle.iterdir():
+        entries = list(bundle.iterdir())
+        for path in entries:
             if path.is_symlink() or not path.is_file():
                 raise ValueError("Unexpected entry in disposable bundle")
+        for path in entries:
             path.unlink()
         bundle.rmdir()
+
+
+def process_identity(pid):
+    return {"pid": pid, "created": psutil.Process(pid).create_time()}
+
+
+def validate_identity(identity):
+    if (
+        not isinstance(identity, dict)
+        or type(identity.get("pid")) is not int
+        or not 0 < identity["pid"] <= 2**31 - 1
+        or type(identity.get("created")) not in (int, float)
+        or not 0 < identity["created"] < 1e11
+        or not math.isfinite(identity["created"])
+    ):
+        raise ValueError("Invalid process identity; preserve handle for investigation")
+
+
+def read_handle():
+    if DATA.is_symlink() or HANDLE.is_symlink():
+        raise ValueError("Symlinked instance storage; preserve for investigation")
+    raw = HANDLE.read_bytes()
+    metadata = json.loads(raw)
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(metadata.get("instance"), str)
+        or re.fullmatch(r"run-[0-9a-f]{16}", metadata["instance"]) is None
+        or type(metadata.get("pid")) is not int
+        or not 0 < metadata["pid"] <= 2**31 - 1
+        or type(metadata.get("port")) is not int
+        or not 1 <= metadata["port"] <= 65535
+        or not isinstance(metadata.get("token"), str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{20,128}", metadata["token"]) is None
+    ):
+        raise ValueError("Invalid instance handle; preserve for investigation")
+    # Old launchers can still be stopped through their authenticated endpoint;
+    # only recovery needs creation time as proof against PID reuse.
+    if "created" in metadata:
+        validate_identity(metadata)
+    return metadata, raw
+
+
+def require_exited(identity):
+    validate_identity(identity)
+    try:
+        created = psutil.Process(identity["pid"]).create_time()
+    except psutil.NoSuchProcess:
+        return
+    except psutil.Error as error:
+        raise ValueError(
+            "Cannot establish process identity; investigate handle"
+        ) from error
+    if created != identity["created"]:
+        raise ValueError("PID reused by a different process; investigate handle")
+    raise ValueError("Recorded process is still live; preserve handle and bundle")
+
+
+def recover():
+    """Remove stale files only with proof of exit and an exclusively free port."""
+    if not HANDLE.exists() and not HANDLE.is_symlink():
+        print("No owned UI instance remains")
+        return
+    metadata, raw = read_handle()
+    require_exited(metadata)
+    if metadata.get("phase") == "seeding":
+        require_exited(metadata.get("fixture"))
+    elif metadata.get("phase") != "ready":
+        raise ValueError("Fixture ownership unknown; preserve handle for investigation")
+    with socket.socket() as probe:
+        if os.name == "nt":
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            probe.bind(("127.0.0.1", metadata["port"]))
+            probe.listen()
+        except OSError as error:
+            raise ValueError(
+                "Port is occupied or unverifiable; "
+                "refusing recovery of another instance"
+            ) from error
+        if HANDLE.is_symlink() or HANDLE.read_bytes() != raw:
+            raise ValueError("Instance handle changed; preserve for investigation")
+        remove_bundle(DATA / metadata["instance"])
+        HANDLE.unlink()
+    print(f"Recovered {metadata['instance']}; handle and synthetic bundle removed")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -129,9 +220,12 @@ def start(port):
     validate_environment()
     DATA.mkdir(parents=True, exist_ok=True)
     if HANDLE.exists():
-        raise ValueError("An instance handle exists; stop that owned instance first")
+        raise ValueError(
+            "An instance handle exists; use stop or verified recover first"
+        )
     instance = "run-" + secrets.token_hex(8)
     bundle = DATA / instance
+    identity = process_identity(os.getpid())
     # Bind first: an occupied port fails before creating any synthetic data.
     server = ThreadingHTTPServer(
         ("127.0.0.1", port), partial(Handler, directory=str(bundle))
@@ -140,9 +234,10 @@ def start(port):
     server.token = secrets.token_urlsafe(32)
     metadata = {
         "instance": instance,
-        "pid": os.getpid(),
-        "port": port,
+        **identity,
+        "port": server.server_port,
         "token": server.token,
+        "phase": "starting",
     }
     stopping = threading.Event()
     serving = threading.Event()
@@ -162,6 +257,14 @@ def start(port):
             [sys.executable, str(ROOT / "scripts/build_demo_fixture.py"), str(bundle)],
             cwd=ROOT,
         )
+        try:
+            fixture = process_identity(child.pid)
+        except psutil.NoSuchProcess:
+            if child.poll() is None:
+                raise
+        else:
+            metadata.update(phase="seeding", fixture=fixture)
+            HANDLE.write_text(json.dumps(metadata), encoding="utf-8")
         if not wait_for_fixture(child, stopping):
             print("UI startup cancelled during fixture generation", file=sys.stderr)
             return
@@ -176,8 +279,10 @@ def start(port):
         if stopping.is_set():
             print("UI startup cancelled", file=sys.stderr)
             return
+        metadata["phase"] = "ready"
+        HANDLE.write_text(json.dumps(metadata), encoding="utf-8")
         # The socket is bound and every file exists before announcing readiness.
-        print(f"UI_URL=http://127.0.0.1:{port}/", flush=True)
+        print(f"UI_URL=http://127.0.0.1:{server.server_port}/", flush=True)
         print(
             f"UI_INSTANCE={instance} PID={os.getpid()} "
             "HANDLE=data/ui-testing/instance.json",
@@ -201,10 +306,10 @@ def start(port):
 
 
 def stop():
-    if not HANDLE.exists():
+    if not HANDLE.exists() and not HANDLE.is_symlink():
         print("No owned UI instance remains")
         return
-    metadata = json.loads(HANDLE.read_text(encoding="utf-8"))
+    metadata, _ = read_handle()
     origin = f"http://127.0.0.1:{int(metadata['port'])}"
     with urlopen(origin + "/__ui_health", timeout=5) as response:
         if json.load(response)["instance"] != metadata["instance"]:
@@ -224,20 +329,23 @@ def stop():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("start", "stop"))
+    parser.add_argument("action", choices=("start", "stop", "recover"))
     parser.add_argument("--port", type=int, default=4173)
     args = parser.parse_args()
     try:
         if args.action == "start":
             start(args.port)
-        else:
+        elif args.action == "stop":
             stop()
+        else:
+            recover()
     except (
         OSError,
         ValueError,
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
         URLError,
+        psutil.Error,
     ) as error:
         print(f"UI instance failed: {error}", file=sys.stderr)
         return 1
