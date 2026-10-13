@@ -24,6 +24,8 @@ const TERM_LABELS = {
 };
 const QUALITY_LABELS = { genre: "Genre you picked", tag: "Tag you picked", axis: "Sound you picked" };
 const LOG_FILE = "music-discovery-feedback.jsonl";
+const LINK_KEYS = ["seed", "like", "dislike", "ranker", "exclude"];
+const IGNORED_LINK = "Some settings in this link are not available here and were ignored.";
 
 /** Plain language for a score term name such as "audio", "genre:Folk" or "axis:energy+". */
 function termLabel(data, name) {
@@ -61,8 +63,84 @@ class Demo {
     this.log = new FeedbackLog(() => globalThis.localStorage);
     this.seed = new SeedPicker(data, { heading: "1. Seed track", onChange: () => this.render() });
     this.picker = new QualityPicker(data, { heading: "2. Qualities (optional)", onChange: () => this.render() });
+    // Links to results live in the URL fragment, which only a page's single demo can own.
+    this.linkable = document.querySelectorAll("[data-music-discovery]").length === 1;
+    this.linked = false; // whether the fragment currently holds this demo's state
     this.build();
+    const ignored = this.linkable && this.restoreLink();
     this.render();
+    if (ignored) this.status.textContent = `${this.status.textContent} ${IGNORED_LINK}`;
+  }
+
+  // --- links to results -----------------------------------------------------
+
+  /**
+   * Apply the settings a `#seed=…&like=…` fragment names that this page can show, without
+   * rendering. Returns true if any of them had to be ignored. Fragments without these keys,
+   * such as an ordinary in-page anchor, are left alone.
+   */
+  restoreLink() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    if (!LINK_KEYS.some((key) => params.has(key))) return false;
+    let ignored = false;
+    const seeds = params.getAll("seed");
+    const row = seeds.length === 1 ? this.data.ids.findIndex((id) => String(id) === seeds[0]) : -1;
+    if (row >= 0) {
+      this.seed.select(row);
+      this.linked = true;
+    } else ignored = true;
+    const named = new Set();
+    for (const [key, state] of [["like", "like"], ["dislike", "dislike"]]) {
+      for (const quality of params.getAll(key)) {
+        // A quality named twice keeps its first state, so the list matches the earlier mention.
+        if (named.has(quality) || !this.picker.setQuality(quality, state)) ignored = true;
+        named.add(quality);
+      }
+    }
+    const ranker = params.get("ranker");
+    if (ranker !== null) {
+      if (Object.hasOwn(RANKER_LABELS, ranker)) {
+        this.ranker = ranker;
+        this.rankerInputs[ranker].checked = true;
+      } else ignored = true;
+    }
+    const exclude = params.get("exclude");
+    if (exclude === "1" || exclude === "0") this.excludeSeedArtist.checked = exclude === "1";
+    else if (exclude !== null) ignored = true;
+    return ignored;
+  }
+
+  /** Replace the fragment with the state behind `preference`, or clear it when there is none. */
+  writeLink(preference) {
+    if (!this.linkable || (!preference && !this.linked)) return;
+    let hash = "";
+    if (preference) {
+      const params = new URLSearchParams({ seed: String(preference.seeds[0]) });
+      for (const like of preference.likes) params.append("like", like);
+      for (const dislike of preference.dislikes) params.append("dislike", dislike);
+      params.append("ranker", this.ranker);
+      if (preference.excludeSeedArtist) params.append("exclude", "1");
+      hash = `#${params}`;
+    }
+    this.linked = Boolean(preference);
+    // replaceState, not pushState: Back still leaves the page rather than stepping through settings.
+    history.replaceState(history.state, "", `${location.pathname}${location.search}${hash}`);
+  }
+
+  async copyLink() {
+    const href = location.href;
+    this.linkField.value = href;
+    try {
+      await navigator.clipboard.writeText(href);
+      this.linkBox.hidden = true;
+      this.status.textContent = "Link copied.";
+    } catch {
+      // No clipboard (insecure context, refused permission, older browser): let the visitor copy it.
+      this.linkBox.hidden = false;
+      this.linkField.focus();
+      this.linkField.select();
+      this.status.textContent = "The link could not be copied automatically. It is selected in the field below.";
+    }
   }
 
   // --- layout ---------------------------------------------------------------
@@ -86,8 +164,10 @@ class Demo {
   }
 
   buildRankerToggle() {
+    this.rankerInputs = {};
     const radios = Object.keys(RANKER_LABELS).map((name) => {
       const input = h("input", { type: "radio", name: this.id("ranker"), id: this.id(`r-${name}`), value: name, checked: name === this.ranker });
+      this.rankerInputs[name] = input;
       input.addEventListener("change", () => {
         this.ranker = name;
         this.render();
@@ -107,6 +187,10 @@ class Demo {
     this.results = h("ol", { class: "md-results", "aria-labelledby": this.id("res-h") });
     this.exportButton = h("button", { type: "button", class: "md-button", text: "Export my ratings", disabled: true });
     this.exportButton.addEventListener("click", () => this.exportRatings());
+    this.copyButton = h("button", { type: "button", class: "md-button", text: "Copy link to these results", disabled: true });
+    this.copyButton.addEventListener("click", () => this.copyLink());
+    this.linkField = h("input", { type: "text", class: "md-input", id: this.id("link"), readonly: true, spellcheck: "false" });
+    this.linkBox = h("div", { class: "md-link-box", hidden: true }, h("label", { for: this.id("link"), class: "md-label", text: "Link to these results" }), this.linkField);
     return h(
       "section",
       { class: "md-section", "aria-labelledby": this.id("res-h") },
@@ -115,6 +199,7 @@ class Demo {
       this.sources.element,
       this.results,
       h("div", { class: "md-row" }, this.exportButton, h("span", { class: "md-help", text: "Ratings stay in this page. Export downloads them as a JSON file." })),
+      this.linkable ? [h("div", { class: "md-row" }, this.copyButton), this.linkBox] : null,
     );
   }
 
@@ -169,13 +254,17 @@ class Demo {
   // --- results --------------------------------------------------------------
 
   render() {
+    this.linkBox.hidden = true;
+    this.copyButton.disabled = this.seed.row < 0;
     if (this.seed.row < 0) {
       this.results.replaceChildren();
       this.status.textContent = "Pick a seed track to see recommendations.";
+      this.writeLink(null);
       return;
     }
     const preference = buildPreference(this.data, this.seed.row, this.picker.qualities);
     preference.excludeSeedArtist = this.excludeSeedArtist.checked;
+    this.writeLink(preference);
     const picks = this.rankers.rank(this.ranker, preference, 10);
     const context = JSON.stringify([this.ranker, preference]);
     this.status.textContent = picks.length

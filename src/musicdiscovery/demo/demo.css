@@ -400,6 +400,10 @@ body.md-demo-page h1 {
   background: var(--md-warn);
 }
 
+.md-link-box {
+  margin-top: 0.75rem;
+}
+
 .md-confirm {
   margin-top: 0.75rem;
   padding: 0.75rem;
