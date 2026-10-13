@@ -27,3 +27,6 @@ ratings/
 output/
 .playwright-cli/
 playwright-report/
+
+# Verification skill evidence
+.verify/

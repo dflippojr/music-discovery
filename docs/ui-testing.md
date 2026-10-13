@@ -115,6 +115,9 @@ connection refusal by itself does not prove the process is dead.
 Each test starts from reload/fresh context; no shared mutating records exist.
 Reports: playwright-report/ and test-results/ (ignored), HTML/JUnit and traces
 on failure. Exploratory evidence: output/ui-pass/music-discovery/YYYY-MM-DD/.
+Verification-skill evidence (.claude/skills/verify): ignored .verify/<UTC timestamp>/.
+WebKit page screenshots inject an inline style that the CSP refuses, which the
+console-error guard reports; take evidence screenshots in Chromium.
 GitHub visibility verified public. Existing runners are ubuntu-latest;
 UI CI MUST use GitHub-hosted ubuntu-latest, never a self-hosted runner.
 The scoped UI job installs Python 3.12/package, Node 24, npm ci, Chromium and

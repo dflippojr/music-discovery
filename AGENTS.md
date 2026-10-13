@@ -16,6 +16,9 @@ ruff format --check .
 pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
 ```
 
+To prove a change works in the real demo page, use the verify skill
+(`.claude/skills/verify/SKILL.md`), which follows `docs/ui-testing.md`.
+
 Use `ruff format .` to format code. The package uses the `src/` layout;
 tests require an installed package. CI runs these checks on Python 3.12.
 
