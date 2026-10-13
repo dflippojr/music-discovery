@@ -163,3 +163,110 @@ against hybrid (means; 95% bootstrap intervals are in the report):
 On the 7,995-track catalog the first call (TF-IDF, popularity, PCA) takes about
 0.16 s and later calls about 3 ms, so it fits the 200 ms target and the browser
 port in issue #7.
+
+# Profile ranker
+
+`--ranker profile` (and `profile` in the evaluator) scores a listener's whole
+history rather than one seed. It is a small learned linear model over a few
+features, runs on the CPU with numpy only, and does no training at query time.
+
+```sh
+musicdiscovery recommend --ranker profile --seed 2 --seed 5 --seed 10 -k 10
+musicdiscovery evaluate --benchmark all --ranker baseline --ranker hybrid --ranker profile
+```
+
+## Profile
+
+Each seed may carry a strength (`Preference.strengths`, for example a play
+fraction). The held-out preference benchmark passes each history track's play
+fraction after weak plays are dropped (see `docs/evaluation.md`); `recommend`
+gives every seed strength 1. The profile is the strength-weighted mean of the
+history tracks' vectors, separately for each feature below. A preference
+always has at least one seed, and building a profile from no tracks is an error.
+
+## Features
+
+| Feature | What it is |
+| --- | --- |
+| `audio` | cosine similarity to the profile in the baseline's 20-component PCA space |
+| `metadata` | the hybrid's TF-IDF cosine over genre ids and tags |
+| `text` | TF-IDF cosine over the words (two or more letters or digits, lower-cased) of the title, artist, album, top genre name and tags |
+| `popularity` | listen-count percentile |
+
+Both TF-IDF features use the same `TfIdf` class in `hybrid.py` (binary term
+frequency, smoothed idf). In the evaluator's held-out tag view, the tags are the
+visible ones only. Liked and disliked axes, genres and tags add the baseline's
+fixed-weight terms on top.
+
+## Scoring head
+
+A track's score is the sum of each feature times its learned weight, plus the
+quality terms. Seed tracks are never returned and `--exclude-seed-artist` works
+as in the baseline; ties go to the lower track id. Explanations follow the
+baseline rule (top three positive terms): `similar sound to your listening`,
+`similar genres and tags`, `similar titles, artists and tags`, `popular with
+listeners`. There is no diversity re-rank.
+
+The weights come from an L2-penalised logistic regression (penalty 1.0, no
+penalty on the bias), fit by Newton's method in numpy on the validation
+profiles only: each profile's held-out positives against 50 catalog tracks
+drawn uniformly from outside its history and held-out set, with seed 20261013
+(507 positives, 5,000 negatives). `python scripts/train_profile_ranker.py
+--write` reproduces `src/musicdiscovery/profile_ranker.json` from the ingested
+catalog and `eval/profiles.json` in about two seconds; Newton's method has no
+randomness, so two runs give the same file.
+
+Current weights: `audio` 0.63, `metadata` 3.41, `text` 6.38, `popularity` 0.39.
+The features are on similar 0-1 scales, so text similarity matters most.
+
+## What the numbers show
+
+Offline report `reports/offline-2026-10-12.md`, test split, k = 10, means with
+95% bootstrap intervals:
+
+| Metric | Baseline | Hybrid | Profile |
+| --- | --- | --- | --- |
+| Held-out preference MRR@10 | 0.015 [0.002, 0.033] | 0.281 [0.197, 0.368] | 0.395 [0.310, 0.476] |
+| Held-out preference nDCG@10 | 0.008 [0.001, 0.019] | 0.112 [0.078, 0.147] | 0.263 [0.207, 0.319] |
+| Held-out tag overlap (queries) | 0.088 [0.018, 0.176] | 0.089 [0.050, 0.131] | 0.284 [0.165, 0.429] |
+| Same-genre rate (queries) | 0.657 | 0.983 | 0.979 |
+| Artist diversity (queries) | 0.847 | 0.997 | 0.380 [0.328, 0.436] |
+| Preference adherence (queries) | 0.743 | 0.618 | 0.566 [0.500, 0.638] |
+
+What the numbers can show:
+
+- **On the held-out preference benchmark, profile ranks the generator's
+  held-out tracks higher than hybrid.** The nDCG intervals do not overlap; the
+  MRR intervals overlap a little. Validation numbers move the same way, but
+  validation is the training split, so only test counts.
+- **Held-out tag overlap rose** with intervals that do not overlap hybrid's, on
+  few queries (12 test seeds have two or more tags).
+
+What they cannot show:
+
+- **Profile is trained on the same synthetic generator it is tested on.** Its
+  weights are fit on the validation profiles, and the test profiles come from
+  the same generator with the same genre, tag and axis tastes. A better test
+  score shows it learned that generator, not that listeners would like it.
+- **Much of the gain is same-artist tracks.** On the test profiles, 81% of
+  profile's results are by an artist already in the history, against 14% for
+  hybrid and 31% of the held-out positives. Artist names and album titles are
+  text features, and tracks by one artist share tags, so the generator's
+  held-out tracks are often the same artist's other tracks. Artist diversity on
+  the queries falls to 0.38. That is the opposite of discovery, and a diversity
+  re-rank (as in hybrid) would trade some of the score back.
+- Held-out tag overlap is helped the same way: tracks by one artist tend to
+  share their hidden tags too.
+- **Preference adherence fell** below hybrid's, with overlapping intervals. The
+  quality terms keep the baseline's small fixed weights, which the learned
+  feature weights outweigh; they were not learned, because the profiles have
+  no liked qualities.
+- Same-genre rate is a label the ranker sees, as for hybrid.
+- Whether any of this helps listeners is for the listener study (issue #8).
+
+## Speed
+
+On the 7,995-track catalog (Windows laptop, Python 3.12), the first call fits
+the PCA and builds both TF-IDF tables in about 0.25 s; later calls rank 10
+results from a profile of about 12 history tracks in about 2-4 ms, well under
+the 200 ms target. Training takes about 2 s.

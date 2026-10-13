@@ -13,6 +13,7 @@ A pilot-stage evaluation, not a product. Built and merged:
 - Catalog ingest for the FMA `small` set: [docs/catalog.md](docs/catalog.md)
 - Content-based baseline ranker with explanations: [docs/ranking.md](docs/ranking.md)
 - Hybrid ranker with diversity re-ranking: [docs/ranking.md](docs/ranking.md)
+- Learned profile ranker over a listener's history (CPU only): [docs/ranking.md](docs/ranking.md)
 - Offline evaluation harness and reports: [docs/evaluation.md](docs/evaluation.md), [reports/](reports/)
 - Static demo page: [docs/demo.md](docs/demo.md)
 - Listener study tooling (blind study page and analysis command): [docs/listener-study.md](docs/listener-study.md), [#9](https://github.com/dflippojr/music-discovery/issues/9)

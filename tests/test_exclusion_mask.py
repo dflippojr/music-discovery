@@ -1,4 +1,4 @@
-"""Seed and seed-artist exclusion is shared by all four rankers."""
+"""Seed and seed-artist exclusion is shared by all five rankers."""
 
 import pytest
 from test_evaluation import make_frame
@@ -7,9 +7,10 @@ from musicdiscovery.catalog import Catalog
 from musicdiscovery.evaluation import PopularRanker, RandomRanker
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import Preference
+from musicdiscovery.profile_ranker import ProfileRanker
 from musicdiscovery.ranking import BaselineRanker, _allowed
 
-RANKERS = [BaselineRanker, HybridRanker, RandomRanker, PopularRanker]
+RANKERS = [BaselineRanker, HybridRanker, ProfileRanker, RandomRanker, PopularRanker]
 SEEDS = (100, 101, 160)
 
 
