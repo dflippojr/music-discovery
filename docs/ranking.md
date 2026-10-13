@@ -71,8 +71,10 @@ Rankers implement `Ranker.rank(preference, catalog) -> list[Recommendation]`
 ## Speed
 
 On a 7,998-track, 518-feature synthetic catalog, a laptop (Windows, Python
-3.12) fits the standardisation and PCA in about 0.15 s on the first call, then
-ranks 10 results in about 3-9 ms. The 200 ms target is documented, not a CI gate.
+3.12) fits the standardisation and PCA in about 0.15 s on the first call. Later
+calls rank 10 results in about 1.2 ms (median over 200 generated queries on a
+7,995-track synthetic catalog shaped like the real one, measured for issue #79).
+The 200 ms target is documented, not a CI gate.
 
 # Hybrid ranker
 
@@ -114,8 +116,8 @@ queries and the ingested catalog: it scores every combination in a fixed grid
 (`GRID` in `src/musicdiscovery/tuning.py`), keeps those whose validation genre
 precision is within the width of the baseline's validation 95% interval of the
 baseline's mean, and picks the one with the highest genre nDCG plus artist
-diversity (ties go to the first in grid order). The full grid takes about three
-minutes.
+diversity (ties go to the first in grid order). The full grid takes about two
+minutes (122 s on a 7,995-track synthetic catalog, measured for issue #79).
 
 Current values: `metadata_weight` 2.0, `popularity_weight` 0.1, `mmr_lambda`
 0.6, `genre_redundancy` 0.0, `pool_size` 100. Three of these sit at the edge of
@@ -161,8 +163,9 @@ against hybrid (means; 95% bootstrap intervals are in the report):
 ## Speed
 
 On the 7,995-track catalog the first call (TF-IDF, popularity, PCA) takes about
-0.16 s and later calls about 3 ms, so it fits the 200 ms target and the browser
-port in issue #7.
+0.16 s. Later calls take about 1.9 ms (median over 200 generated queries on a
+7,995-track synthetic catalog shaped like the real one, measured for issue #79),
+so it fits the 200 ms target and the browser port in issue #7.
 
 # Profile ranker
 
@@ -268,8 +271,10 @@ What they cannot show:
 
 On the 7,995-track catalog (Windows laptop, Python 3.12), the first call fits
 the PCA and builds both TF-IDF tables in about 0.25 s; later calls rank 10
-results from a profile of about 12 history tracks in about 2-4 ms, well under
-the 200 ms target. Training takes about 2 s.
+results from a profile of 12 history tracks in about 0.9 ms, and from one seed
+in about 1.6 ms (medians on a 7,995-track synthetic catalog shaped like the real
+one, measured for issue #79), well under the 200 ms target. Training takes about
+2 s.
 
 # Audio-embedding ranker
 
