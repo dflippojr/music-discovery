@@ -144,10 +144,7 @@ class HybridRanker:
             self._popularity = (
                 catalog.frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
             )
-            self._artists = catalog.frame["artist"].astype(str).to_numpy()
-            self._genres = (
-                catalog.frame["genre_top"].astype("string").to_numpy(dtype=object)
-            )
+            self._artists, self._genres = mmr_keys(catalog)
             self._catalog = catalog
         return self._metadata, self._popularity
 
@@ -181,58 +178,92 @@ class HybridRanker:
             return []
         order = np.lexsort((catalog.track_ids[candidates], -relevance[candidates]))
         pool = candidates[order[: max(config.pool_size, preference.k)]]
-        picks, variety = self._mmr(pool, relevance[pool], preference.k)
+        picks, variety = mmr(
+            pool,
+            relevance[pool],
+            preference.k,
+            config.mmr_lambda,
+            config.genre_redundancy,
+            self._artists,
+            self._genres,
+        )
+        return with_variety(catalog, picks, variety, terms)
 
-        results = []
-        for row in picks:
-            row_terms = list(terms)
-            if variety.get(row, 0.0) > 0:
-                values = np.zeros(len(catalog))
-                values[row] = variety[row]
-                row_terms.append(("variety", VARIETY_TEXT, values))
-            results.append(BaselineRanker.build(catalog, row, row_terms))
-        return results
 
-    def _mmr(
-        self, pool: np.ndarray, scores: np.ndarray, k: int
-    ) -> tuple[list[int], dict[int, float]]:
-        """Greedy MMR over the pool, which is in relevance order.
+def with_variety(
+    catalog: Catalog,
+    picks: list[int],
+    variety: dict[int, float],
+    terms: list[tuple[str, str, np.ndarray]],
+) -> list[Recommendation]:
+    """Build the picks' recommendations, adding the `variety` term where MMR
+    jumped a more relevant track."""
+    results = []
+    for row in picks:
+        row_terms = list(terms)
+        if variety.get(row, 0.0) > 0:
+            values = np.zeros(len(catalog))
+            values[row] = variety[row]
+            row_terms.append(("variety", VARIETY_TEXT, values))
+        results.append(BaselineRanker.build(catalog, row, row_terms))
+    return results
 
-        Reads the artist and genre arrays that `_prepare` cached for the catalog.
 
-        Returns the picked rows and, for each pick that jumped a more relevant
-        track, lambda times the redundancy it avoided.
-        """
-        config = self.config
-        lam = config.mmr_lambda
-        span = scores.max() - scores.min()
-        rel = (scores - scores.min()) / span if span else np.zeros(len(scores))
-        artists = self._artists[pool]
-        genres = self._genres[pool]
-        artist_taken: set[str] = set()
-        genre_count: dict[str, int] = {}
-        remaining = list(range(len(pool)))
-        picks: list[int] = []
-        variety: dict[int, float] = {}
+def mmr_keys(catalog: Catalog) -> tuple[np.ndarray, np.ndarray]:
+    """Every row's artist and top genre, as `mmr` reads them."""
+    frame = catalog.frame
+    artists = frame["artist"].astype(str).to_numpy()
+    genres = frame["genre_top"].astype("string").to_numpy(dtype=object)
+    return artists, genres
 
-        def redundancy(i: int) -> float:
-            same_artist = 1.0 if artists[i] in artist_taken else 0.0
-            genre = genres[i]
-            share = 0.0
-            if picks and isinstance(genre, str):
-                share = genre_count.get(genre, 0) / len(picks)
-            g = config.genre_redundancy
-            return (1 - g) * same_artist + g * share
 
-        while remaining and len(picks) < k:
-            gains = [(1 - lam) * rel[i] - lam * redundancy(i) for i in remaining]
-            best = remaining[int(np.argmax(gains))]  # ties go to higher relevance
-            top = remaining[0]
-            if best != top:
-                variety[int(pool[best])] = lam * (redundancy(top) - redundancy(best))
-            picks.append(int(pool[best]))
-            remaining.remove(best)
-            artist_taken.add(artists[best])
-            if isinstance(genres[best], str):
-                genre_count[genres[best]] = genre_count.get(genres[best], 0) + 1
-        return picks, variety
+def mmr(
+    pool: np.ndarray,
+    scores: np.ndarray,
+    k: int,
+    mmr_lambda: float,
+    genre_redundancy: float,
+    artists: np.ndarray,
+    genres: np.ndarray,
+) -> tuple[list[int], dict[int, float]]:
+    """Greedy maximal marginal relevance over the pool, which is in relevance order.
+
+    `scores` are the pool's relevance scores; `artists` and `genres` hold every
+    catalog row's artist and top genre (missing genres are not strings).
+    `genre_redundancy` is genre's share of the penalty; artist gets the rest.
+
+    Returns the picked rows and, for each pick that jumped a more relevant
+    track, lambda times the redundancy it avoided.
+    """
+    lam = mmr_lambda
+    span = scores.max() - scores.min()
+    rel = (scores - scores.min()) / span if span else np.zeros(len(scores))
+    artists = artists[pool]
+    genres = genres[pool]
+    artist_taken: set[str] = set()
+    genre_count: dict[str, int] = {}
+    remaining = list(range(len(pool)))
+    picks: list[int] = []
+    variety: dict[int, float] = {}
+
+    def redundancy(i: int) -> float:
+        same_artist = 1.0 if artists[i] in artist_taken else 0.0
+        genre = genres[i]
+        share = 0.0
+        if picks and isinstance(genre, str):
+            share = genre_count.get(genre, 0) / len(picks)
+        g = genre_redundancy
+        return (1 - g) * same_artist + g * share
+
+    while remaining and len(picks) < k:
+        gains = [(1 - lam) * rel[i] - lam * redundancy(i) for i in remaining]
+        best = remaining[int(np.argmax(gains))]  # ties go to higher relevance
+        top = remaining[0]
+        if best != top:
+            variety[int(pool[best])] = lam * (redundancy(top) - redundancy(best))
+        picks.append(int(pool[best]))
+        remaining.remove(best)
+        artist_taken.add(artists[best])
+        if isinstance(genres[best], str):
+            genre_count[genres[best]] = genre_count.get(genres[best], 0) + 1
+    return picks, variety

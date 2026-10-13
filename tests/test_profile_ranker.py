@@ -10,10 +10,12 @@ from test_evaluation import make_frame
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.cli import main
 from musicdiscovery.evaluation import write_profiles
+from musicdiscovery.hybrid import HybridConfig
 from musicdiscovery.preference import Preference, PreferenceError
 from musicdiscovery.profile_ranker import (
     FEATURES,
     TEXTS,
+    ProfileDiverseRanker,
     ProfileModel,
     ProfileRanker,
     ProfileRankerError,
@@ -261,3 +263,76 @@ def test_cli_evaluate_profile_end_to_end(workdir):
     section = numbers["held_out_preferences"]["rankers"]
     assert set(section) == {"baseline", "hybrid", "profile"}
     assert section["profile"]["test"]["mrr"]["lo"] is not None
+
+
+@pytest.fixture(scope="module")
+def star_catalog():
+    """The fixture with one artist on 40 Folk tracks, so the profile features
+    of a history by that artist favour more of the same artist."""
+    frame = make_titled_frame()
+    folk = frame.index[frame["genre_top"] == "Folk"]
+    frame.loc[folk[:40], "artist"] = "Star Band"
+    star = tuple(int(t) for t in frame.loc[folk[:5], "track_id"])
+    other = int(frame.loc[folk[45], "track_id"])
+    return Catalog(frame), (*star, other)
+
+
+def test_profile_diverse_spreads_artists(star_catalog):
+    catalog, history = star_catalog
+    preference = Preference(history, k=10)
+    plain = ProfileRanker(MODEL).rank(preference, catalog)
+    diverse = ProfileDiverseRanker(MODEL).rank(preference, catalog)
+    assert len(diverse) == 10
+    assert sum(r.artist == "Star Band" for r in plain) >= 5
+    assert len({r.artist for r in diverse}) > len({r.artist for r in plain})
+    for results in (plain, diverse):
+        assert not {r.track_id for r in results} & set(history)
+    # A pick that jumped a more relevant track says so; the first never does.
+    names = [{t.name for t in r.terms} for r in diverse]
+    assert "variety" not in names[0]
+    assert any("variety" in n for n in names[1:])
+    assert all(r.explanations for r in diverse)
+
+    excluded = Preference(history, k=10, exclude_seed_artist=True)
+    seed_artists = set(catalog.frame.set_index("track_id").loc[list(history), "artist"])
+    for ranker in (ProfileRanker(MODEL), ProfileDiverseRanker(MODEL)):
+        results = ranker.rank(excluded, catalog)
+        assert len(results) == 10
+        assert not {r.artist for r in results} & seed_artists
+
+
+def test_profile_diverse_without_lambda_matches_profile(star_catalog):
+    catalog, history = star_catalog
+    preference = Preference(history, k=10)
+    config = HybridConfig(mmr_lambda=0.0, genre_redundancy=0.0)
+    plain = ProfileRanker(MODEL).rank(preference, catalog)
+    same = ProfileDiverseRanker(MODEL, config).rank(preference, catalog)
+    assert [r.track_id for r in same] == [r.track_id for r in plain]
+    assert [r.score for r in same] == pytest.approx([r.score for r in plain])
+
+
+def test_profile_diverse_uses_the_hybrid_mmr_settings(catalog):
+    ranker = ProfileDiverseRanker(MODEL)
+    assert ranker.config == HybridConfig.load()
+    small = ProfileDiverseRanker(MODEL, HybridConfig(pool_size=3))
+    # The pool never holds fewer than k tracks.
+    assert len(small.rank(Preference((100,), k=10), catalog)) == 10
+
+
+def test_profile_diverse_with_every_candidate_excluded():
+    frame = make_titled_frame(per_genre=10)
+    frame["artist"] = "Only artist"
+    excluded = Preference((100,), k=10, exclude_seed_artist=True)
+    assert ProfileDiverseRanker(MODEL).rank(excluded, Catalog(frame)) == []
+
+
+def test_cli_recommend_profile_diverse(workdir, capsys):
+    argv = ["recommend", "--ranker", "profile-diverse", "--seed", "100"]
+    assert main([*argv, "--json"]) == 0
+    results = json.loads(capsys.readouterr().out)
+    assert len(results) == 10
+    assert 100 not in {r["track_id"] for r in results}
+    for command in ("recommend", "evaluate"):
+        with pytest.raises(SystemExit):
+            main([command, "--help"])
+        assert "profile-diverse" in capsys.readouterr().out

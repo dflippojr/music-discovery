@@ -176,6 +176,7 @@ features, runs on the CPU with numpy only, and does no training at query time.
 ```sh
 musicdiscovery recommend --ranker profile --seed 2 --seed 5 --seed 10 -k 10
 musicdiscovery evaluate --benchmark all --ranker baseline --ranker hybrid --ranker profile
+musicdiscovery recommend --ranker profile-diverse --seed 2 --seed 5 --seed 10 -k 10
 ```
 
 ## Profile
@@ -208,7 +209,18 @@ quality terms. Seed tracks are never returned and `--exclude-seed-artist` works
 as in the baseline; ties go to the lower track id. Explanations follow the
 baseline rule (top three positive terms): `similar sound to your listening`,
 `similar genres and tags`, `similar titles, artists and tags`, `popular with
-listeners`. There is no diversity re-rank.
+listeners`. `profile` has no diversity re-rank; `profile-diverse` adds one.
+
+## Diversity re-rank (`profile-diverse`)
+
+`--ranker profile-diverse` (and `profile-diverse` in the evaluator) scores
+exactly as `profile`, then re-ranks the top `pool_size` allowed tracks with the
+hybrid's MMR (`mmr` in `hybrid.py`, described under the hybrid ranker). It
+reads `mmr_lambda` (0.6), `genre_redundancy` (0.0) and `pool_size` (100) from
+`hybrid_config.json` and has no config or tuning of its own. With
+`genre_redundancy` 0.0 the penalty is for repeating an artist already picked
+for the list; artists from the history are not penalised. A pick that jumped a
+more relevant track gets the hybrid's `variety` term and explanation.
 
 The weights come from an L2-penalised logistic regression (penalty 1.0, no
 penalty on the bias), fit by Newton's method in numpy on the validation
@@ -224,17 +236,26 @@ The features are on similar 0-1 scales, so text similarity matters most.
 
 ## What the numbers show
 
-Offline report `reports/offline-2026-10-12.md`, test split, k = 10, means with
-95% bootstrap intervals:
+Offline report `reports/offline-2026-10-13-profile-diverse.md` (the baseline,
+hybrid and profile numbers are the same as in `reports/offline-2026-10-12.md`),
+test split, k = 10, means with 95% bootstrap intervals:
 
-| Metric | Baseline | Hybrid | Profile |
-| --- | --- | --- | --- |
-| Held-out preference MRR@10 | 0.015 [0.002, 0.033] | 0.281 [0.197, 0.368] | 0.395 [0.310, 0.476] |
-| Held-out preference nDCG@10 | 0.008 [0.001, 0.019] | 0.112 [0.078, 0.147] | 0.263 [0.207, 0.319] |
-| Held-out tag overlap (queries) | 0.088 [0.018, 0.176] | 0.089 [0.050, 0.131] | 0.284 [0.165, 0.429] |
-| Same-genre rate (queries) | 0.657 | 0.983 | 0.979 |
-| Artist diversity (queries) | 0.847 | 0.997 | 0.380 [0.328, 0.436] |
-| Preference adherence (queries) | 0.743 | 0.618 | 0.566 [0.500, 0.638] |
+| Metric | Baseline | Hybrid | Profile | Profile-diverse |
+| --- | --- | --- | --- | --- |
+| Held-out preference MRR@10 | 0.015 [0.002, 0.033] | 0.281 [0.197, 0.368] | 0.395 [0.310, 0.476] | 0.346 [0.259, 0.432] |
+| Held-out preference nDCG@10 | 0.008 [0.001, 0.019] | 0.112 [0.078, 0.147] | 0.263 [0.207, 0.319] | 0.149 [0.112, 0.185] |
+| Results by a history artist (profiles) | 0.079 [0.056, 0.104] | 0.142 [0.124, 0.164] | 0.807 [0.745, 0.866] | 0.369 [0.336, 0.406] |
+| Held-out tag overlap (queries) | 0.088 [0.018, 0.176] | 0.089 [0.050, 0.131] | 0.284 [0.165, 0.429] | 0.098 [0.063, 0.139] |
+| Same-genre rate (queries) | 0.657 | 0.983 | 0.979 | 0.977 |
+| Artist diversity (queries) | 0.847 | 0.997 | 0.380 [0.328, 0.436] | 0.955 [0.910, 0.991] |
+| Preference adherence (queries) | 0.743 | 0.618 | 0.566 [0.500, 0.638] | 0.605 [0.541, 0.667] |
+
+"Results by a history artist" is not printed by `evaluate`. It is the share of
+each test profile's top-10 results whose artist is among the artists of the
+profile's filtered history tracks (the seeds the ranker gets), averaged over
+the 100 test profiles, with a bootstrap interval over profiles (seed 7, 1000
+resamples). Every list has ten results, so the mean equals the share of all
+1,000 results. The same count over the held-out positives gives 0.31.
 
 What the numbers can show:
 
@@ -267,6 +288,34 @@ What they cannot show:
 - Same-genre rate is a label the ranker sees, as for hybrid.
 - Whether any of this helps listeners is for the listener study (issue #8).
 
+With the diversity re-rank (`profile-diverse`), what the numbers can show:
+
+- **The re-rank removes most of the same-artist lists.** Results by a history
+  artist fall from 0.81 to 0.37, close to the 0.31 of the held-out positives,
+  and artist diversity on the queries rises from 0.38 to 0.955. What remains is
+  one track per history artist: MMR penalises an artist only once it is in the
+  list, so each history artist can still appear once (1 of the 100 test lists
+  repeats an artist).
+- **Profile-diverse's nDCG is above hybrid's** (0.149 against 0.112), but the
+  intervals overlap, so this does not show it ranks better; its MRR (0.346)
+  is between hybrid's and profile's, with intervals that overlap both.
+- **Most of profile's nDCG lead came from same-artist tracks.** nDCG falls from
+  0.263 to 0.149 when the same-artist repeats go, with intervals that do not
+  overlap. Held-out tag overlap falls back to hybrid's level (0.098 against
+  0.089), which supports the earlier note that tracks by one artist share their
+  hidden tags.
+
+What they cannot show:
+
+- Everything above about profile still applies: the weights were trained on
+  this generator, and its held-out tracks are often the history artists' other
+  tracks, which profile-diverse still returns once per artist.
+- The MMR settings are the hybrid's, tuned for the hybrid's scores. They were
+  not tuned for profile scores, so a different lambda could trade more or less
+  of the score back. This arm has no tuning by design (issue #80).
+- Whether a lead this small over hybrid matters to listeners is for the
+  listener study (issue #8).
+
 ## Speed
 
 On the 7,995-track catalog (Windows laptop, Python 3.12), the first call fits
@@ -274,7 +323,9 @@ the PCA and builds both TF-IDF tables in about 0.25 s; later calls rank 10
 results from a profile of 12 history tracks in about 0.9 ms, and from one seed
 in about 1.6 ms (medians on a 7,995-track synthetic catalog shaped like the real
 one, measured for issue #79), well under the 200 ms target. Training takes about
-2 s.
+2 s. The `profile-diverse` re-rank adds about 0.3 ms per call (medians over
+200 calls on the ingested catalog: 1.2 ms for profile and 1.5 ms for
+profile-diverse from 12 history tracks).
 
 # Audio-embedding ranker
 

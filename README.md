@@ -23,7 +23,7 @@ Remaining:
 
 - Run the listener pilot and publish the blind comparison: [#8](https://github.com/dflippojr/music-discovery/issues/8)
 
-Results are in the reports, not restated here; the latest is [reports/offline-2026-10-06.md](reports/offline-2026-10-06.md).
+Results are in the reports, not restated here; the latest is [reports/offline-2026-10-13-profile-diverse.md](reports/offline-2026-10-13-profile-diverse.md).
 
 ## Where things are
 
