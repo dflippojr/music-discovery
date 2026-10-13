@@ -57,7 +57,8 @@ choose the exact matching title/artist, or ArrowDown/Enter. Random track selecti
 must result in any synthetic label; do not assert a particular random track.
 Reset command: npm run ui:stop followed by npm run ui:start. For independent
 browser/device/theme cases, use fresh contexts and reload: all writes are
-in page memory, never shared with another context or saved on the server.
+in page memory, except the demo's feedback log in that context's localStorage,
+and none is shared with another context or saved on the server.
 Study order and session ID are intentionally random.
 If the owned launcher has already crashed and left a handle, follow the verified
 recovery procedure below before starting again.
@@ -69,6 +70,7 @@ recovery procedure below before starting again.
 | D1 search | /; combobox visible, source links loaded | Search nonexistent text: no options/results. Search Synthetic track 100, inspect dropdown, Escape cancels, reopen with arrow keys, select with Enter or pointer/tap; ten explained results and ten local source/license links. Clear search removes results. Random pick restores results. | Reload clears seed/results. No audit/backend. |
 | D2 preferences | /; ten results | Cycle Calmer neutral → liked → disliked → neutral. Toggle Baseline/Hybrid and exclude seed artist; seed/qualities/exclusion survive ranker changes, results update, exclusion contains no artist0. | Reload resets preferences to Hybrid, no exclusion. |
 | D3 ratings | /; ten results | Up toggles on/off; down replaces up. Export enables only with ratings. Download JSON v2 with seed, ranker, qualities, exclusion and rating; exported contents match choices. Return to same query restores its in-page rating. | Reload discards ratings and disables export, explicitly advertised. No import/edit/delete database paths; remove by toggling same rating. |
+| D4 score detail/log | /; ten results | "How this was scored" is closed by default; open it from the keyboard (or tap): signed terms, no overflow at 200% text. Rate two tracks: log count 2. Download JSONL: two events with ranker, seed, shown ids/ranks, rating and explanation terms. Clear asks first; "Keep the log" keeps it, "Yes, clear the log" empties it. | Reload keeps the log (localStorage) but discards in-page ratings; after clearing, reload shows 0 entries. Fresh contexts start empty. |
 | S1 consent/search | /study.html; Listener study heading and consent button | Consent opens Task 1 of 5. Show lists disabled without a seed. Search/cancel/invalid query and select as D1, cycle qualities; Show lists reveals two five-track lists A/B without ranker labels/explanations. | Reload returns to consent with new session; persistence deliberately absent. |
 | S2 rating/validation | /study.html; lists A/B | Next task disabled until all ten tracks rated and preference chosen. Toggle up/down, new-to-me; preference A/B/none. Next advances and clears seed/qualities for the next task. | No server writes or audit; progress is memory only. |
 | S3 complete/export | /study.html; Task 1 | Complete all five tasks; Finish leads to All done. Download synthetic study JSON: five complete tasks, ten ratings each, preference, new-to-me flags, random ID, blind rankers only in file. | Reload returns to consent; downloaded file remains valid independently. |
@@ -76,7 +78,7 @@ recovery procedure below before starting again.
 | N1 links/navigation | both pages | Open local source and license popup, verify synthetic stub, close popup. Fresh deep link /study.html starts consent. Navigate between URLs and browser Back returns useful page. | Back may restore browser page cache or fresh state; no promised persisted study. |
 
 CRUD and audit logs: not applicable; this is a static, read-only catalog with
-local ephemeral rating controls and downloadable files. Do not invent an
+local ephemeral rating controls, a browser-local feedback log and downloadable files. Do not invent an
 account, persisted write or audit feed. After each rating/preference transition
 verify its UI state; verify reload resets for every journey that changes state.
 

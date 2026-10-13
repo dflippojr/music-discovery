@@ -47,8 +47,12 @@ export function h(tag, attrs = {}, ...children) {
 
 /** Save `body` as a local pretty-printed JSON download named `filename`. */
 export function downloadJson(body, filename) {
-  const url = URL.createObjectURL(new Blob([`${JSON.stringify(body, null, 2)}
-`], { type: "application/json" }));
+  downloadText(`${JSON.stringify(body, null, 2)}\n`, filename, "application/json");
+}
+
+/** Save `text` as a local download named `filename`; nothing is sent anywhere. */
+export function downloadText(text, filename, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const link = h("a", { href: url, download: filename });
   document.body.append(link);
   link.click();

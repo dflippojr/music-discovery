@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Demo feedback log event",
+  "description": "One line of the JSON Lines feedback log the demo page keeps in the browser: one thumbs action, the query, the list as shown, the rated track, its rating and the score terms behind the explanations it showed. No names, emails, IP addresses or free text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "time",
+    "ranker",
+    "seed_track_ids",
+    "likes",
+    "dislikes",
+    "exclude_seed_artist",
+    "shown",
+    "track_id",
+    "rank",
+    "rating",
+    "explanation_terms"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "time": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "ranker": { "enum": ["baseline", "hybrid"] },
+    "seed_track_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/track_id" }
+    },
+    "likes": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/quality" } },
+    "dislikes": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/quality" } },
+    "exclude_seed_artist": { "type": "boolean" },
+    "shown": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["track_id", "rank"],
+        "properties": {
+          "track_id": { "$ref": "#/$defs/track_id" },
+          "rank": { "$ref": "#/$defs/rank" }
+        }
+      }
+    },
+    "track_id": { "$ref": "#/$defs/track_id" },
+    "rank": { "$ref": "#/$defs/rank" },
+    "rating": {
+      "description": "1 thumbs up, -1 thumbs down, 0 an earlier rating of this track in this list taken back.",
+      "enum": [1, -1, 0]
+    },
+    "explanation_terms": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "pattern": "^(similarity|audio|metadata|popularity|variety|(genre|tag):[^\n]{1,60}|axis:[a-z]{1,30}[+-])$"
+      }
+    }
+  },
+  "$defs": {
+    "track_id": { "type": "integer", "minimum": 0 },
+    "rank": { "type": "integer", "minimum": 1, "maximum": 50 },
+    "quality": {
+      "type": "string",
+      "pattern": "^(genre|tag|more|less):[^\n]{1,60}$"
+    }
+  }
+}

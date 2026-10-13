@@ -22,6 +22,7 @@ python -m http.server -d build/demo 8000    # open http://localhost:8000/
 | --- | --- |
 | `index.html` | standalone test page; mounts the demo in `#music-discovery-demo` |
 | `demo.js`, `ranker.js`, `ui.js` | the UI, the JavaScript port of both rankers and shared UI pieces (ES modules) |
+| `feedback-log.js` | the demo's local feedback log (see below) |
 | `study.html`, `study.js`, `study-lib.js` | the blind listener study page (see below) |
 | `demo.css` | styles, scoped to `.md-demo`; light and dark by `prefers-color-scheme` |
 | `catalog.json` | compact catalog and precomputed data (see below); the first download |
@@ -74,14 +75,37 @@ must return the same top 10 as Python on 24 fixed queries (likes and dislikes):
 python scripts/build_demo_fixture.py .demo-fixture   # synthetic catalog, no dataset
 npm ci && npx playwright install chromium
 npm run test:parity    # Node: JavaScript vs Python top 10
-npm run test:study     # Node: study list order, session id and export shape
-npm run test:browser   # Chromium: CSP, console errors, toggle, axe-core, 320 px, ratings
+npm run test:study     # Node: study list order, session id, export shape and the feedback log
+npm run test:browser   # Chromium: CSP, console errors, toggle, axe-core, 320 px, ratings, score detail, log
 ```
 
 The browser test serves the bundle with `Content-Security-Policy: default-src
 'self'; script-src 'self'; style-src 'self'`, fails on any console error, runs
 axe-core in light and dark mode, and checks there is no horizontal scroll at 320 px.
 The page uses no inline scripts, styles, handlers or third-party files.
+
+## Score detail
+
+Under each result's explanations, a closed "How this was scored" disclosure (a
+native `details` element, so it opens with Enter or Space and announces its
+state) lists every score term the ranker returned for that track, largest first:
+a plain-language name, the signed contribution to two decimals and a bar. Bars
+start at a zero line in the middle, grow right for positive and left for negative
+terms, and are scaled to the largest term in that result; the bar is decorative
+(`aria-hidden`) because the number carries the same information. The line above
+the terms gives the total score. Term names read as follows:
+
+| Term | Shown as |
+| --- | --- |
+| `similarity` (baseline), `audio` (hybrid) | Sounds like the seed |
+| `metadata` | Shares genres and tags with the seed |
+| `popularity` | Popular with listeners |
+| `variety` | Adds variety to the list |
+| `genre:<name>`, `tag:<name>` | Genre you picked: <name>, Tag you picked: <name> |
+| `axis:<axis>+` or `-` | Sound you picked: the axis word, for example calmer |
+
+A disliked genre or tag shows as a negative term. The study page does not show
+explanations or this detail.
 
 ## Ratings
 
@@ -93,6 +117,32 @@ The added boolean records the exclusion setting when that rating was made,
 including `false` by default. Ratings for the same query and track under different
 exclusion settings are kept separately. No importer currently exists in this repo.
 The blind listener study's controls, export schema and protocol are unchanged.
+
+## Feedback log
+
+Every thumbs action on the demo page, including taking a rating back, also
+appends an event to a feedback log in the browser's `localStorage` (key
+`music-discovery-feedback-log`). Unlike the in-page ratings, the log survives a
+reload. It holds at most 2,000 events and drops the oldest first. If the browser
+refuses storage (blocked site data, a full quota, some private windows), the page
+keeps the log in memory for that visit and says so; it never fails the rating.
+Each event holds:
+
+- `version` (1) and `time` (UTC, to the second);
+- `ranker`, `seed_track_ids`, `likes`, `dislikes` and `exclude_seed_artist`;
+- `shown`, the whole list as shown: `track_id` and `rank` for each result;
+- `track_id` and `rank` of the rated track, and `rating`: 1, -1, or 0 when an
+  earlier rating of that track in that list was taken back;
+- `explanation_terms`, the score terms behind the explanations the track showed,
+  for example `["audio", "genre:Folk"]`.
+
+The "Feedback log" section shows the number of entries, with "Download feedback
+log" (JSON Lines, `music-discovery-feedback.jsonl`, one event per line) and
+"Clear feedback log", which asks for confirmation first. Both are disabled while
+the log is empty. The log is never sent anywhere. `src/musicdiscovery/feedback-log.schema.json`
+describes one line, and `musicdiscovery feedback-report <log.jsonl>` summarises
+a downloaded log; [evaluation.md](evaluation.md#feedback-logs-from-the-demo)
+explains its output and limits. The study page has no feedback log.
 
 ## Study page
 

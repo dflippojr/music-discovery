@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test:parity": "node --test tests/demo/parity.test.mjs",
-    "test:study": "node --test tests/demo/study.test.mjs",
+    "test:study": "node --test tests/demo/study.test.mjs tests/demo/feedback-log.test.mjs",
     "test:browser": "node --test tests/demo/browser.test.mjs",
     "test:ui": "playwright test --workers=1",
     "ui:start": "node scripts/ui-command.mjs start",
