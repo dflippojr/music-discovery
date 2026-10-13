@@ -390,8 +390,12 @@ class Spy:
 def test_held_out_tags_are_never_visible_to_a_ranker(
     monkeypatch, tagged, tagged_queries
 ):
-    from musicdiscovery import evaluation
+    from test_audio_embedding import store_for
 
+    from musicdiscovery import evaluation
+    from musicdiscovery.audio_embedding import DEFAULT_VECTORS
+
+    store_for(tagged).save(DEFAULT_VECTORS)
     holdout = HeldOut(tagged)
     original = dict(evaluation.RANKERS)
     spies = {}

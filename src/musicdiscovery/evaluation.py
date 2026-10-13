@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from musicdiscovery.audio_embedding import AudioEmbeddingRanker
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
@@ -105,6 +106,7 @@ RANKERS: dict[str, Callable[[], Ranker]] = {
     "profile": ProfileRanker,
     "random": RandomRanker,
     "popular": PopularRanker,
+    "audio-embedding": AudioEmbeddingRanker,
 }
 
 
