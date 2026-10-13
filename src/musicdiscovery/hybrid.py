@@ -2,6 +2,7 @@
 prior, then maximal marginal relevance (MMR) for artist and genre variety."""
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from importlib import resources
 from pathlib import Path
@@ -64,15 +65,13 @@ class HybridConfig:
         return json.dumps(asdict(self), indent=2) + "\n"
 
 
-class _Metadata:
-    """TF-IDF over genre ids and tags, stored as flat (row, column, value) arrays."""
+class TfIdf:
+    """TF-IDF over token sets, stored as flat (row, column, value) arrays.
 
-    def __init__(self, catalog: Catalog):
-        frame = catalog.frame
-        documents = [
-            {f"g:{g}" for g in genres} | {f"t:{t}" for t in tags}
-            for genres, tags in zip(frame["genre_ids"], frame["tags"], strict=True)
-        ]
+    Term frequency is binary and idf is smoothed; each row is L2-normalised.
+    """
+
+    def __init__(self, documents: list[set[str]]):
         vocabulary = {
             token: i for i, token in enumerate(sorted(set().union(*documents)))
         }
@@ -93,18 +92,38 @@ class _Metadata:
         self.tokens = list(vocabulary)
         self.size = len(vocabulary)
         self.count = n
+        # Row r's entries are the slice starts[r]:starts[r + 1] of the sorted order.
+        self._order = np.argsort(self.rows, kind="stable")
+        self._starts = np.searchsorted(self.rows[self._order], np.arange(n + 1))
 
-    def similarity(self, seed_rows: list[int]) -> np.ndarray:
-        """Cosine similarity of every track to the mean seed vector."""
+    def similarity(
+        self, seed_rows: list[int], weights: Sequence[float] | None = None
+    ) -> np.ndarray:
+        """Cosine similarity of every track to the (weighted) mean seed vector."""
+        if weights is None:
+            weights = [1.0] * len(seed_rows)
         centre = np.zeros(self.size)
-        for seed in seed_rows:
-            mask = self.rows == seed
-            np.add.at(centre, self.columns[mask], self.values[mask])
+        for seed, weight in zip(seed_rows, weights, strict=True):
+            entries = self._order[self._starts[seed] : self._starts[seed + 1]]
+            np.add.at(centre, self.columns[entries], weight * self.values[entries])
         norm = np.linalg.norm(centre)
         if not norm:
             return np.zeros(self.count)
-        weights = self.values * (centre / norm)[self.columns]
-        return np.bincount(self.rows, weights=weights, minlength=self.count)
+        products = self.values * (centre / norm)[self.columns]
+        return np.bincount(self.rows, weights=products, minlength=self.count)
+
+
+class _Metadata(TfIdf):
+    """TF-IDF over genre ids and tags."""
+
+    def __init__(self, catalog: Catalog):
+        frame = catalog.frame
+        super().__init__(
+            [
+                {f"g:{g}" for g in genres} | {f"t:{t}" for t in tags}
+                for genres, tags in zip(frame["genre_ids"], frame["tags"], strict=True)
+            ]
+        )
 
 
 class HybridRanker:

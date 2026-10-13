@@ -64,19 +64,35 @@ class Quality:
 
 @dataclass(frozen=True)
 class Preference:
-    """Seeds, liked and disliked qualities, result count and seed-artist option."""
+    """Seeds, liked and disliked qualities, result count and seed-artist option.
+
+    `strengths` optionally weights each seed (for example a play fraction); it
+    is empty or one positive value per seed. Rankers that ignore it treat every
+    seed alike.
+    """
 
     seeds: tuple[int, ...]
     likes: tuple[Quality, ...] = ()
     dislikes: tuple[Quality, ...] = ()
     k: int = DEFAULT_K
     exclude_seed_artist: bool = False
+    strengths: tuple[float, ...] = ()
 
     def __post_init__(self):
         if not self.seeds:
             raise PreferenceError("at least one seed track id is required")
         if self.k < 1:
             raise PreferenceError(f"k must be at least 1, got {self.k}")
+        if self.strengths and len(self.strengths) != len(self.seeds):
+            raise PreferenceError(
+                f"got {len(self.strengths)} strengths for {len(self.seeds)} seeds"
+            )
+        if any(not s > 0 for s in self.strengths):
+            raise PreferenceError("seed strengths must be positive")
+
+    def seed_weights(self) -> tuple[float, ...]:
+        """One weight per seed: the strengths, or 1.0 each when there are none."""
+        return self.strengths or (1.0,) * len(self.seeds)
 
     @classmethod
     def from_strings(

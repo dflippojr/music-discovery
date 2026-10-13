@@ -13,6 +13,7 @@ import pandas as pd
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
+from musicdiscovery.profile_ranker import ProfileRanker
 from musicdiscovery.profiles import (
     PROFILE_SEED,
     SPLITS,
@@ -101,6 +102,7 @@ class PopularRanker:
 RANKERS: dict[str, Callable[[], Ranker]] = {
     "baseline": BaselineRanker,
     "hybrid": HybridRanker,
+    "profile": ProfileRanker,
     "random": RandomRanker,
     "popular": PopularRanker,
 }

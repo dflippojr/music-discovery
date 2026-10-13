@@ -27,6 +27,7 @@ from musicdiscovery.evaluation import (
 from musicdiscovery.hybrid import HybridConfigError
 from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, ingest
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
+from musicdiscovery.profile_ranker import ProfileRankerError
 from musicdiscovery.profiles import generate_profiles
 from musicdiscovery.study import DEFAULT_RATINGS_DIR, StudyError
 from musicdiscovery.study import run as run_study
@@ -56,7 +57,12 @@ def _run_recommend(args: argparse.Namespace) -> int:
             args.seed, args.like, args.dislike, args.k, args.exclude_seed_artist
         )
         results = make_ranker(args.ranker).rank(preference, catalog)
-    except (CatalogError, HybridConfigError, PreferenceError) as error:
+    except (
+        CatalogError,
+        HybridConfigError,
+        PreferenceError,
+        ProfileRankerError,
+    ) as error:
         print(f"recommend: {error}", file=sys.stderr)
         return 1
     if args.json:
@@ -84,7 +90,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         report, numbers = run(
             catalog,
             args.queries,
-            args.ranker or ["baseline", "hybrid", "random", "popular"],
+            args.ranker or ["baseline", "hybrid", "profile", "random", "popular"],
             args.out_dir,
             report_date,
             catalog_dir / MANIFEST_NAME,
@@ -96,6 +102,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         EvaluationError,
         HybridConfigError,
         PreferenceError,
+        ProfileRankerError,
         ValueError,
     ) as error:
         print(f"evaluate: {error}", file=sys.stderr)
@@ -189,7 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recommend.add_argument(
         "--ranker",
-        choices=["baseline", "hybrid"],
+        choices=["baseline", "hybrid", "profile"],
         default="baseline",
         help="ranker to use (default: baseline)",
     )

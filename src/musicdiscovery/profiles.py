@@ -63,11 +63,18 @@ class Profile:
     def preference(
         self, k: int, threshold: float = WEAK_SIGNAL_THRESHOLD
     ) -> Preference:
-        """The filtered history as a multi-seed preference; no liked qualities."""
-        seeds = self.seeds(threshold)
-        if not seeds:
+        """The filtered history as a multi-seed preference; no liked qualities.
+
+        Each seed carries its play fraction as its strength.
+        """
+        kept = [i for i in self.history if i.strength >= threshold]
+        if not kept:
             raise ProfileError(f"profile {self.id} has no history above {threshold}")
-        return Preference(seeds, k=k)
+        return Preference(
+            tuple(i.track for i in kept),
+            k=k,
+            strengths=tuple(i.strength for i in kept),
+        )
 
 
 def _taste_scores(

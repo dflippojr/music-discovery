@@ -80,6 +80,42 @@ def _allowed(preference: Preference, catalog: Catalog) -> np.ndarray:
     return allowed
 
 
+def quality_terms(
+    preference: Preference, catalog: Catalog, fit: _Fit
+) -> list[tuple[str, str, np.ndarray]]:
+    """Fixed-weight terms for each liked and disliked axis, genre and tag."""
+    terms: list[tuple[str, str, np.ndarray]] = []
+    for quality, sign in preference.signed_qualities():
+        if quality.kind == "axis":
+            axis = AXES[quality.name]
+            z = np.clip(fit.z[:, fit.columns[axis.column]], -_Z_CLIP, _Z_CLIP)
+            up = quality.direction > 0
+            terms.append(
+                (
+                    f"axis:{quality.name}{'+' if up else '-'}",
+                    f"{axis.up if up else axis.down}, as asked",
+                    AXIS_WEIGHT * quality.direction * z,
+                )
+            )
+        elif quality.kind == "genre":
+            terms.append(
+                (
+                    f"genre:{quality.name}",
+                    f"same genre: {quality.name}",
+                    sign * GENRE_WEIGHT * catalog.has_genre(quality.name),
+                )
+            )
+        else:
+            terms.append(
+                (
+                    f"tag:{quality.name}",
+                    f"tagged {quality.name}",
+                    sign * TAG_WEIGHT * catalog.has_tag(quality.name),
+                )
+            )
+    return terms
+
+
 class BaselineRanker:
     """Cosine similarity to the seeds, plus fixed-weight axis, genre and tag terms."""
 
@@ -117,35 +153,7 @@ class BaselineRanker:
             ("similarity", "similar sound to the seed", SIMILARITY_WEIGHT * similarity)
         ]
 
-        for quality, sign in preference.signed_qualities():
-            if quality.kind == "axis":
-                axis = AXES[quality.name]
-                z = np.clip(fit.z[:, fit.columns[axis.column]], -_Z_CLIP, _Z_CLIP)
-                up = quality.direction > 0
-                terms.append(
-                    (
-                        f"axis:{quality.name}{'+' if up else '-'}",
-                        f"{axis.up if up else axis.down}, as asked",
-                        AXIS_WEIGHT * quality.direction * z,
-                    )
-                )
-            elif quality.kind == "genre":
-                terms.append(
-                    (
-                        f"genre:{quality.name}",
-                        f"same genre: {quality.name}",
-                        sign * GENRE_WEIGHT * catalog.has_genre(quality.name),
-                    )
-                )
-            else:
-                terms.append(
-                    (
-                        f"tag:{quality.name}",
-                        f"tagged {quality.name}",
-                        sign * TAG_WEIGHT * catalog.has_tag(quality.name),
-                    )
-                )
-
+        terms += quality_terms(preference, catalog, fit)
         scores = np.sum([values for _, _, values in terms], axis=0)
         return terms, scores, _allowed(preference, catalog)
 

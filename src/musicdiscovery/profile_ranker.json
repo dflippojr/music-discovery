@@ -1,0 +1,24 @@
+{
+  "features": [
+    "audio",
+    "metadata",
+    "text",
+    "popularity"
+  ],
+  "weights": {
+    "audio": 0.629416,
+    "metadata": 3.414207,
+    "text": 6.377868,
+    "popularity": 0.389569
+  },
+  "bias": -3.651374,
+  "training": {
+    "split": "validation",
+    "seed": 20261013,
+    "negatives_per_profile": 50,
+    "l2_penalty": 1.0,
+    "positives": 507,
+    "negatives": 5000,
+    "catalog_tracks": 7995
+  }
+}
