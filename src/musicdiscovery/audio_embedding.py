@@ -7,7 +7,6 @@ audio nor vectors are committed. Ranking needs only numpy and the cache; the
 model is loaded only to embed clips or a text description.
 """
 
-import hashlib
 import io
 import json
 import os
@@ -20,6 +19,7 @@ from typing import Protocol
 import numpy as np
 
 from musicdiscovery.catalog import Catalog
+from musicdiscovery.ingest import sha1_of
 from musicdiscovery.preference import Preference
 from musicdiscovery.profile_ranker import weighted_centre
 from musicdiscovery.ranking import (
@@ -115,12 +115,16 @@ def member_name(track_id: int) -> str:
     return f"fma_small/{name[:3]}/{name}.mp3"
 
 
-def sha1_of(path: Path) -> str:
-    digest = hashlib.sha1()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def confined(path: Path) -> Path:
+    """Resolve a user-supplied path and keep it inside the working directory."""
+    # Imported here: the evaluator imports this module for its ranker table.
+    from musicdiscovery.evaluation import EvaluationError
+    from musicdiscovery.evaluation import confined as inside
+
+    try:
+        return inside(path)
+    except EvaluationError as error:
+        raise AudioEmbeddingError(str(error)) from error
 
 
 def _unit(vectors: np.ndarray) -> np.ndarray:
@@ -160,6 +164,7 @@ class VectorStore:
 
     def save(self, path: Path) -> None:
         """Write the cache atomically: a crash never leaves a half-written file."""
+        path = confined(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         with part.open("wb") as handle:
@@ -173,6 +178,7 @@ class VectorStore:
 
     @classmethod
     def load(cls, path: Path) -> "VectorStore":
+        path = confined(path)
         if not path.exists():
             raise AudioEmbeddingError(
                 f"no audio vectors at {path}; run `musicdiscovery embed-audio`"
@@ -226,8 +232,10 @@ def embed_archive(
     A second run resumes: tracks already embedded or recorded as failed are
     skipped. The cache is saved every `checkpoint_every` tracks and at the end.
     A missing, undecodable or shorter-than-a-second clip is recorded as a
-    failure and the run goes on.
+    failure and the run goes on. Both paths must be inside the working
+    directory.
     """
+    archive, out = confined(archive), confined(out)
     if not archive.exists():
         raise AudioEmbeddingError(f"no audio archive at {archive}")
     archive_sha1 = sha1_of(archive)

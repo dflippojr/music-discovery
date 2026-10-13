@@ -25,11 +25,11 @@ from musicdiscovery.audio_embedding import (
     embed_archive,
     member_name,
     select_tracks,
-    sha1_of,
 )
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.cli import main
 from musicdiscovery.evaluation import evaluate, generate_queries, make_ranker
+from musicdiscovery.ingest import sha1_of
 from musicdiscovery.preference import Preference
 from musicdiscovery.ranking import Ranker
 
@@ -199,6 +199,10 @@ def test_embed_archive_refuses_wrong_or_missing_inputs(tmp_path, catalog):
     out = tmp_path / "v.npz"
     with pytest.raises(AudioEmbeddingError, match="no audio archive"):
         embed_archive(catalog, tmp_path / "none.zip", out, FakeEncoder())
+    with pytest.raises(AudioEmbeddingError, match="outside the working directory"):
+        embed_archive(catalog, archive, tmp_path.parent / "v.npz", FakeEncoder())
+    with pytest.raises(AudioEmbeddingError, match="outside the working directory"):
+        VectorStore.load(Path("..") / "v.npz")
     with pytest.raises(AudioEmbeddingError, match="expected"):
         embed_archive(catalog, archive, out, FakeEncoder(), expected_sha1="0" * 40)
     embed_archive(

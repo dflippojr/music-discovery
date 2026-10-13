@@ -2,7 +2,11 @@
 
 The catalog is built by `musicdiscovery ingest` from the Free Music Archive
 dataset ([`mdeff/fma`](https://github.com/mdeff/fma)). Only metadata and
-precomputed features are used. No audio is downloaded, processed or hosted.
+precomputed features are used. Ingest downloads no audio, and nothing hosts
+any. Only the optional audio-embedding ranker reads audio: `musicdiscovery
+embed-audio` reads `fma_small.zip` locally from `data/audio/` and caches vectors
+under `data/` ([ranking.md](ranking.md#audio-embedding-ranker)). Neither the
+audio nor the vectors are committed.
 
 ## Source
 
@@ -71,7 +75,7 @@ changed hands after 2019, and ingest does not check that they resolve.
 | --- | --- |
 | Metadata and features | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | FMA code | MIT |
-| Audio (not used here) | Each artist's chosen license, recorded per track in `license_url` |
+| Audio (read locally by `embed-audio` only, never committed or hosted) | Each artist's chosen license, recorded per track in `license_url` |
 
 `license_url` is kept for display only. Many tracks are NC or ND licensed, so
 the demo links each track to its source page and hosts no audio.
