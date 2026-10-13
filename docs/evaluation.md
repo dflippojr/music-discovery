@@ -39,6 +39,7 @@ validation split to choose settings and the test split to report.
 | `baseline` | the content-based ranker in `docs/ranking.md` |
 | `hybrid` | the hybrid ranker in `docs/ranking.md` |
 | `profile` | the learned profile ranker in `docs/ranking.md` |
+| `profile-diverse` | the profile ranker's scores re-ranked with the hybrid's MMR, in `docs/ranking.md` |
 | `audio-embedding` | the EmbeddingGemma 2 clip-vector ranker in `docs/ranking.md`; needs the vector cache from `musicdiscovery embed-audio`, so it runs only when named with `--ranker` |
 | `random` | uniformly random tracks (seeded by the query) |
 | `popular` | the most listened-to tracks in the seed's top genre |
