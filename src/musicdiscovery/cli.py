@@ -9,6 +9,15 @@ from datetime import date
 from pathlib import Path
 
 from musicdiscovery import __version__
+from musicdiscovery.audio_embedding import (
+    DEFAULT_ARCHIVE,
+    DEFAULT_VECTORS,
+    AudioEmbeddingError,
+    AudioEmbeddingRanker,
+    SentenceTransformerEncoder,
+    describe_vector,
+    embed_archive,
+)
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.demo import TARGET_BYTES, DemoError, export_demo
 from musicdiscovery.evaluation import (
@@ -59,8 +68,19 @@ def _run_recommend(args: argparse.Namespace) -> int:
         preference = Preference.from_strings(
             args.seed, args.like, args.dislike, args.k, args.exclude_seed_artist
         )
-        results = make_ranker(args.ranker).rank(preference, catalog)
+        if args.describe is not None and args.ranker != "audio-embedding":
+            raise PreferenceError("--describe needs --ranker audio-embedding")
+        if args.ranker == "audio-embedding":
+            description = None
+            if args.describe is not None:
+                encoder = SentenceTransformerEncoder(threads=args.threads)
+                description = describe_vector(args.describe, encoder)
+            ranker = AudioEmbeddingRanker(path=args.vectors, description=description)
+        else:
+            ranker = make_ranker(args.ranker)
+        results = ranker.rank(preference, catalog)
     except (
+        AudioEmbeddingError,
         CatalogError,
         HybridConfigError,
         PreferenceError,
@@ -101,6 +121,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
             args.profiles,
         )
     except (
+        AudioEmbeddingError,
         CatalogError,
         EvaluationError,
         HybridConfigError,
@@ -111,6 +132,30 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         print(f"evaluate: {error}", file=sys.stderr)
         return 1
     print(f"evaluate: wrote {report} and {numbers}")
+    return 0
+
+
+def _run_embed_audio(args: argparse.Namespace) -> int:
+    try:
+        catalog = Catalog.load(args.data_dir / "catalog" / CATALOG_NAME)
+        encoder = SentenceTransformerEncoder(threads=args.threads)
+        result = embed_archive(
+            catalog,
+            args.archive,
+            args.vectors,
+            encoder,
+            limit=args.limit,
+            sample_seed=args.sample_seed,
+            batch_size=args.batch_size,
+            log=lambda line: print(f"embed-audio: {line}", flush=True),
+        )
+    except (AudioEmbeddingError, CatalogError, OSError) as error:
+        print(f"embed-audio: {error}", file=sys.stderr)
+        return 1
+    print(
+        f"embed-audio: embedded {result.embedded} of {result.total} tracks, "
+        f"{result.failed} failed, {result.skipped} already done; wrote {args.vectors}"
+    )
     return 0
 
 
@@ -217,9 +262,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recommend.add_argument(
         "--ranker",
-        choices=["baseline", "hybrid", "profile"],
+        choices=["baseline", "hybrid", "profile", "audio-embedding"],
         default="baseline",
         help="ranker to use (default: baseline)",
+    )
+    recommend.add_argument(
+        "--describe",
+        metavar="TEXT",
+        help="audio-embedding only: describe the qualities you like in words",
+    )
+    recommend.add_argument("--vectors", type=Path, default=DEFAULT_VECTORS)
+    recommend.add_argument(
+        "--threads", type=int, default=4, help="CPU threads for --describe"
     )
     recommend.add_argument("--json", action="store_true", help="print JSON")
     evaluate = subparsers.add_parser(
@@ -252,6 +306,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="write the seeded listener profile file for this catalog and exit",
     )
+    embed = subparsers.add_parser(
+        "embed-audio",
+        help="Embed the FMA small clips with EmbeddingGemma 2 and cache the vectors",
+    )
+    embed.add_argument("--data-dir", type=Path, default=Path("data"))
+    embed.add_argument("--archive", type=Path, default=DEFAULT_ARCHIVE)
+    embed.add_argument("--vectors", type=Path, default=DEFAULT_VECTORS)
+    embed.add_argument(
+        "--limit", type=int, help="embed a seeded sample of this many tracks"
+    )
+    embed.add_argument("--sample-seed", type=int, default=0)
+    embed.add_argument("--batch-size", type=int, default=4)
+    embed.add_argument("--threads", type=int, default=4, help="CPU threads")
     export = subparsers.add_parser(
         "export-demo", help="Write the static demo bundle for the browser"
     )
@@ -291,6 +358,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "evaluate":
         return _run_evaluate(args)
+
+    if args.command == "embed-audio":
+        return _run_embed_audio(args)
 
     if args.command == "export-demo":
         return _run_export_demo(args)

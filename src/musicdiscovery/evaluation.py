@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from musicdiscovery.audio_embedding import AudioEmbeddingRanker
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
@@ -105,6 +106,7 @@ RANKERS: dict[str, Callable[[], Ranker]] = {
     "profile": ProfileRanker,
     "random": RandomRanker,
     "popular": PopularRanker,
+    "audio-embedding": AudioEmbeddingRanker,
 }
 
 
@@ -315,8 +317,8 @@ METRIC_NOTES: dict[str, str] = {
     "genre_precision": (
         "Scored on `genre_top`: `popular` filters on it, `hybrid` scores on it "
         "through genre ids and tags and `profile` through genre ids, tags and the "
-        "genre name, so they see the label; `baseline` (audio features only) and "
-        "`random` do not."
+        "genre name, so they see the label; `baseline` (audio features only), "
+        "`audio-embedding` (clip vectors only) and `random` do not."
     ),
     "genre_ndcg": (
         "Scored on `genre_top`; the same rankers see the label as for the "
