@@ -11,7 +11,14 @@ from pathlib import Path
 import numpy as np
 
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.hybrid import TfIdf, _Metadata
+from musicdiscovery.hybrid import (
+    HybridConfig,
+    TfIdf,
+    _Metadata,
+    mmr,
+    mmr_keys,
+    with_variety,
+)
 from musicdiscovery.preference import Preference
 from musicdiscovery.ranking import (
     BaselineRanker,
@@ -165,7 +172,13 @@ class ProfileRanker:
             self._catalog = catalog
         return self._prepared
 
-    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+    def score(
+        self, preference: Preference, catalog: Catalog
+    ) -> tuple[list[tuple[str, str, np.ndarray]], np.ndarray, np.ndarray]:
+        """The score terms, the total scores and the allowed rows in score order.
+
+        Highest score first; ties go to the lower track id.
+        """
         preference.validate(catalog)
         prepared = self.prepare(catalog)
         seed_rows = [catalog.position[s] for s in preference.seeds]
@@ -179,7 +192,48 @@ class ProfileRanker:
         scores = np.sum([values for _, _, values in terms], axis=0)
 
         candidates = np.flatnonzero(_allowed(preference, catalog))
-        # Highest score first; ties go to the lower track id.
         order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
-        chosen = candidates[order[: preference.k]]
+        return terms, scores, candidates[order]
+
+    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+        terms, _, ranked = self.score(preference, catalog)
+        chosen = ranked[: preference.k]
         return [BaselineRanker.build(catalog, int(row), terms) for row in chosen]
+
+
+class ProfileDiverseRanker(ProfileRanker):
+    """The profile ranker's scores, re-ranked with the hybrid's MMR for variety.
+
+    Uses `mmr_lambda`, `genre_redundancy` and `pool_size` from the hybrid
+    config; it has no config or tuning of its own.
+    """
+
+    def __init__(
+        self, model: ProfileModel | None = None, config: HybridConfig | None = None
+    ):
+        super().__init__(model)
+        self.config = config or HybridConfig.load()
+        self._keys: tuple[np.ndarray, np.ndarray] | None = None
+
+    def prepare(self, catalog: Catalog) -> Prepared:
+        if self._catalog is not catalog or self._keys is None:
+            self._keys = mmr_keys(catalog)
+        return super().prepare(catalog)
+
+    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+        config = self.config
+        terms, scores, ranked = self.score(preference, catalog)
+        if not len(ranked):
+            return []
+        pool = ranked[: max(config.pool_size, preference.k)]
+        artists, genres = self._keys
+        picks, variety = mmr(
+            pool,
+            scores[pool],
+            preference.k,
+            config.mmr_lambda,
+            config.genre_redundancy,
+            artists,
+            genres,
+        )
+        return with_variety(catalog, picks, variety, terms)

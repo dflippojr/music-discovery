@@ -262,7 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recommend.add_argument(
         "--ranker",
-        choices=["baseline", "hybrid", "profile", "audio-embedding"],
+        choices=["baseline", "hybrid", "profile", "profile-diverse", "audio-embedding"],
         default="baseline",
         help="ranker to use (default: baseline)",
     )

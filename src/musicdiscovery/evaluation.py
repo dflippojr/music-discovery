@@ -14,7 +14,7 @@ from musicdiscovery.audio_embedding import AudioEmbeddingRanker
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
-from musicdiscovery.profile_ranker import ProfileRanker
+from musicdiscovery.profile_ranker import ProfileDiverseRanker, ProfileRanker
 from musicdiscovery.profiles import (
     PROFILE_SEED,
     SPLITS,
@@ -104,6 +104,7 @@ RANKERS: dict[str, Callable[[], Ranker]] = {
     "baseline": BaselineRanker,
     "hybrid": HybridRanker,
     "profile": ProfileRanker,
+    "profile-diverse": ProfileDiverseRanker,
     "random": RandomRanker,
     "popular": PopularRanker,
     "audio-embedding": AudioEmbeddingRanker,
