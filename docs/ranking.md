@@ -270,3 +270,105 @@ On the 7,995-track catalog (Windows laptop, Python 3.12), the first call fits
 the PCA and builds both TF-IDF tables in about 0.25 s; later calls rank 10
 results from a profile of about 12 history tracks in about 2-4 ms, well under
 the 200 ms target. Training takes about 2 s.
+
+# Audio-embedding ranker
+
+`--ranker audio-embedding` (and `audio-embedding` in the evaluator) ranks by how
+alike the clips sound to EmbeddingGemma 2, Google's multimodal embedding model,
+which maps text and audio into one 768-dimension space. It needs the vector
+cache from an offline job and runs on the CPU only.
+
+```sh
+pip install -e ".[audio]"
+musicdiscovery embed-audio --threads 4 --batch-size 4
+musicdiscovery recommend --ranker audio-embedding --seed 2 -k 10
+musicdiscovery recommend --ranker audio-embedding --seed 2 --describe "warm acoustic guitar"
+```
+
+## Model
+
+- **Licence.** `google/embeddinggemma-2` is Apache 2.0 (model card).
+- **Audio quality claim.** The card reports a MAEB mean of 49.39 at 768
+  dimensions (49.21 at 512, 46.92 at 128). That is the card's own number; this
+  project did not rerun MAEB.
+- **Runtime.** The card says not to use float16, so the model runs in float32
+  through sentence-transformers, with the vision encoder not loaded. The
+  `unsloth/embeddinggemma-2-GGUF` repo ships `mmproj` encoder files, but neither
+  card documents audio embeddings through llama.cpp, so it is not used. Clips
+  are embedded with no prompt; `--describe` text uses the card's `SearchQuery`
+  prompt.
+
+## Offline job
+
+`musicdiscovery embed-audio` reads each clip straight from the checksum-verified
+`data/audio/fma_small.zip`, decodes it to 16 kHz mono and caches unit vectors in
+`data/embeddings/embeddinggemma-2.npz`. It saves every 200 tracks, so a stopped
+run resumes where it left off, and it records failed tracks with the reason.
+`--limit` embeds a seeded sample instead. Neither audio nor vectors are
+committed.
+
+On the full catalog, 7,989 of 7,995 clips were embedded. The six that failed
+(track ids 98565, 98567, 98569, 99134, 108925 and 133297) do not decode; they
+are known bad files in FMA `small`. On a Windows tower with four CPU threads and
+batches of four, the run took about 6 minutes per 200 clips, about 4 hours in
+all.
+
+## Scoring
+
+The profile is the strength-weighted mean of the seeds' clip vectors, as in
+the profile ranker. A track's score is its cosine similarity to that profile,
+plus a cosine to the `--describe` vector when given, plus the baseline's
+fixed-weight quality terms. Only tracks with a vector can be returned, so
+scoring stays inside the embedded catalog. Seed tracks are never returned,
+`--exclude-seed-artist` works as in the baseline, and ties go to the lower
+track id.
+
+## What the numbers show
+
+Offline report `reports/offline-2026-10-13.md`, test split, k = 10, means with
+95% bootstrap intervals:
+
+| Metric | Baseline | Hybrid | Profile | Audio-embedding |
+| --- | --- | --- | --- | --- |
+| Held-out preference MRR@10 | 0.015 [0.002, 0.033] | 0.281 [0.197, 0.368] | 0.395 [0.310, 0.476] | 0.015 [0.000, 0.040] |
+| Held-out preference nDCG@10 | 0.008 [0.001, 0.019] | 0.112 [0.078, 0.147] | 0.263 [0.207, 0.319] | 0.006 [0.000, 0.015] |
+| Held-out tag overlap (queries) | 0.088 [0.018, 0.176] | 0.089 [0.050, 0.131] | 0.284 [0.165, 0.429] | 0.051 [0.006, 0.108] |
+| Same-genre rate (queries) | 0.657 [0.587, 0.720] | 0.983 | 0.979 | 0.674 [0.598, 0.745] |
+| Artist diversity (queries) | 0.847 | 0.997 | 0.380 | 0.795 [0.752, 0.834] |
+| Preference adherence (queries) | 0.743 [0.688, 0.795] | 0.618 | 0.566 | 0.977 [0.952, 0.998] |
+| Coverage (queries) | 0.115 | 0.111 | 0.117 | 0.082 |
+
+What the numbers can show:
+
+- **Audio-embedding does not win offline.** On the held-out preference
+  benchmark it scores like baseline and near `random`, far below hybrid and
+  profile. On the query metrics it ties baseline on the same-genre rate, a label
+  neither ranker sees, and its held-out tag overlap is no better than baseline's.
+- **Preference adherence is high because the axis terms dominate.** Clip
+  vectors are close together: for 300 sampled clips against the catalog, the
+  cosine averages 0.79 with a standard deviation of 0.07. A liked axis adds up to 0.15
+  (0.05 per standard deviation, clipped at 3), so it outweighs most differences
+  in similarity, and the ranker mostly sorts sound-alikes by the asked-for axis.
+  The baseline's PCA cosines spread from -1 to 1, so similarity matters more
+  there.
+
+What they cannot show:
+
+- **The benchmarks favour the label columns.** The synthetic listener tastes are
+  built from genres, tags and a librosa axis, and the query likes come from the
+  same columns. Hybrid and profile score on genre ids and tags; audio-embedding
+  sees only the clips. A ranker that hears what a listener hears is not
+  rewarded here unless it lines up with those labels.
+- **Text-to-audio (`--describe`) is not evaluated.** The benchmarks have no
+  descriptions, so nothing offline measures it.
+- Weights were not tuned: the similarity weight is 1 and the quality terms are
+  the baseline's. Rescaling the similarity would lower adherence and might move
+  the other metrics; that is a tuning question for the validation split.
+- Whether it helps listeners is for the listener study (issue #8). It does not
+  win offline, so it is not proposed as a pilot arm.
+
+## Speed
+
+On the 7,995-track catalog, the first call loads the cache and fits the
+baseline's PCA in about 0.11 s; later calls with 12 seeds take about 11 ms. The
+model is loaded only to embed clips or a `--describe` text, not to rank.

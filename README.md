@@ -14,6 +14,7 @@ A pilot-stage evaluation, not a product. Built and merged:
 - Content-based baseline ranker with explanations: [docs/ranking.md](docs/ranking.md)
 - Hybrid ranker with diversity re-ranking: [docs/ranking.md](docs/ranking.md)
 - Learned profile ranker over a listener's history (CPU only): [docs/ranking.md](docs/ranking.md)
+- EmbeddingGemma 2 audio-embedding ranker with text-to-audio queries (offline, CPU only): [docs/ranking.md](docs/ranking.md#audio-embedding-ranker)
 - Offline evaluation harness and reports: [docs/evaluation.md](docs/evaluation.md), [reports/](reports/)
 - Static demo page: [docs/demo.md](docs/demo.md)
 - Listener study tooling (blind study page and analysis command): [docs/listener-study.md](docs/listener-study.md), [#9](https://github.com/dflippojr/music-discovery/issues/9)

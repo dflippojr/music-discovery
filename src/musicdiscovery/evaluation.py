@@ -317,8 +317,8 @@ METRIC_NOTES: dict[str, str] = {
     "genre_precision": (
         "Scored on `genre_top`: `popular` filters on it, `hybrid` scores on it "
         "through genre ids and tags and `profile` through genre ids, tags and the "
-        "genre name, so they see the label; `baseline` (audio features only) and "
-        "`random` do not."
+        "genre name, so they see the label; `baseline` (audio features only), "
+        "`audio-embedding` (clip vectors only) and `random` do not."
     ),
     "genre_ndcg": (
         "Scored on `genre_top`; the same rankers see the label as for the "
