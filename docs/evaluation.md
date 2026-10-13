@@ -9,7 +9,7 @@ musicdiscovery evaluate --ranker baseline --ranker hybrid --ranker random --rank
 ```
 
 Output goes to `reports/offline-<date>.md` and `.json` (`--out-dir`, `--date`).
-With no `--ranker`, all four run. Generated reports are committed only in a
+With no `--ranker`, all five run. Generated reports are committed only in a
 pull request that is about results.
 
 `--benchmark` picks what is scored: `queries` (the default, described first
@@ -38,6 +38,7 @@ validation split to choose settings and the test split to report.
 | --- | --- |
 | `baseline` | the content-based ranker in `docs/ranking.md` |
 | `hybrid` | the hybrid ranker in `docs/ranking.md` |
+| `profile` | the learned profile ranker in `docs/ranking.md` |
 | `random` | uniformly random tracks (seeded by the query) |
 | `popular` | the most listened-to tracks in the seed's top genre |
 

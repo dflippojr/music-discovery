@@ -106,6 +106,32 @@
           }
         }
       },
+      "profile": {
+        "test": {
+          "mrr": {
+            "hi": 0.476474,
+            "lo": 0.310381,
+            "mean": 0.394639
+          },
+          "ndcg": {
+            "hi": 0.318916,
+            "lo": 0.207313,
+            "mean": 0.262631
+          }
+        },
+        "validation": {
+          "mrr": {
+            "hi": 0.506046,
+            "lo": 0.342044,
+            "mean": 0.421774
+          },
+          "ndcg": {
+            "hi": 0.360399,
+            "lo": 0.24809,
+            "mean": 0.302994
+          }
+        }
+      },
       "random": {
         "test": {
           "mrr": {
@@ -414,6 +440,92 @@
           "hi": 0.052886,
           "lo": 0.004436,
           "mean": 0.024494
+        }
+      }
+    },
+    "profile": {
+      "test": {
+        "adherence": {
+          "hi": 0.637663,
+          "lo": 0.5,
+          "mean": 0.566265
+        },
+        "artist_diversity": {
+          "hi": 0.436,
+          "lo": 0.328,
+          "mean": 0.38
+        },
+        "coverage": {
+          "hi": null,
+          "lo": null,
+          "mean": 0.116948
+        },
+        "genre_ndcg": {
+          "hi": 0.997722,
+          "lo": 0.962096,
+          "mean": 0.98285
+        },
+        "genre_precision": {
+          "hi": 0.997,
+          "lo": 0.954,
+          "mean": 0.979
+        },
+        "heldout_tags": {
+          "hi": 0.429161,
+          "lo": 0.165035,
+          "mean": 0.283754
+        },
+        "popularity": {
+          "hi": 0.598925,
+          "lo": 0.515041,
+          "mean": 0.556072
+        },
+        "tag_overlap": {
+          "hi": 0.683257,
+          "lo": 0.30814,
+          "mean": 0.488318
+        }
+      },
+      "validation": {
+        "adherence": {
+          "hi": 0.637504,
+          "lo": 0.505254,
+          "mean": 0.56962
+        },
+        "artist_diversity": {
+          "hi": 0.473025,
+          "lo": 0.367975,
+          "mean": 0.417
+        },
+        "coverage": {
+          "hi": null,
+          "lo": null,
+          "mean": 0.115197
+        },
+        "genre_ndcg": {
+          "hi": 0.999364,
+          "lo": 0.974915,
+          "mean": 0.989729
+        },
+        "genre_precision": {
+          "hi": 0.999,
+          "lo": 0.968,
+          "mean": 0.987
+        },
+        "heldout_tags": {
+          "hi": 0.284253,
+          "lo": 0.150221,
+          "mean": 0.216878
+        },
+        "popularity": {
+          "hi": 0.610435,
+          "lo": 0.518364,
+          "mean": 0.565451
+        },
+        "tag_overlap": {
+          "hi": 0.743332,
+          "lo": 0.506761,
+          "mean": 0.624587
         }
       }
     },

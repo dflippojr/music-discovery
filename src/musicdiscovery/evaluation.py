@@ -313,17 +313,19 @@ METRICS: dict[str, str] = {
 # Which rankers can see the label each metric is scored against.
 METRIC_NOTES: dict[str, str] = {
     "genre_precision": (
-        "Scored on `genre_top`: `popular` filters on it and `hybrid` scores on it "
-        "through genre ids and tags, so they see the label; `baseline` (audio "
-        "features only) and `random` do not."
+        "Scored on `genre_top`: `popular` filters on it, `hybrid` scores on it "
+        "through genre ids and tags and `profile` through genre ids, tags and the "
+        "genre name, so they see the label; `baseline` (audio features only) and "
+        "`random` do not."
     ),
     "genre_ndcg": (
         "Scored on `genre_top`; the same rankers see the label as for the "
         "same-genre rate."
     ),
     "tag_overlap": (
-        "Scored on full tag sets: `hybrid` scores on tags, and a liked `tag:` "
-        "quality can name one of the seed's tags, so these rankers see the label."
+        "Scored on full tag sets: `hybrid` and `profile` score on tags, and a "
+        "liked `tag:` quality can name one of the seed's tags, so these rankers "
+        "see the label."
     ),
     "heldout_tags": (
         "Rankers see only a visible half of each track's tags; the score uses "
@@ -675,7 +677,8 @@ These numbers come from proxies, not listeners. Read them with the following in 
   nothing about whether a listener enjoys a result, and cannot show that anything
   was discovered. A ranker that returns the same sound-alikes every time scores well.
   The `popular` reference ranker returns only the seed's genre, so it scores 1.0 on
-  the same-genre rate by construction, and `hybrid` scores on genre ids and tags.
+  the same-genre rate by construction, and `hybrid` and `profile` score on genre
+  ids and tags.
 - **Held-out tag overlap hides half of each track's tags from the rankers**, so it
   does not reward using a label it is scored against. It is still a proxy: tags are
   noisy, sparse (tracks with fewer than two tags have nothing to hide, and queries
@@ -806,9 +809,12 @@ PROFILE_LIMITS = """Limits of the held-out preference benchmark:
 - **Synthetic tastes reward rankers that share the generator's features.** Each
   profile's interactions are drawn from a hidden taste built from a top genre,
   catalog tags and a librosa feature axis, so a ranker that scores on those same
-  columns (`hybrid` uses genre ids and tags, `popular` filters on the top genre)
-  is favoured by construction. A high score shows that a ranker recovers the
-  generator's taste, not that a listener would like the results.
+  columns (`hybrid` and `profile` use genre ids and tags, `popular` filters on the
+  top genre) is favoured by construction. A high score shows that a ranker
+  recovers the generator's taste, not that a listener would like the results.
+- **`profile` is trained on this generator.** Its weights are fit on the
+  validation profiles, which come from the same generator as the test profiles,
+  so its test score measures how well it learned the generator, not real taste.
 - **Interactions are not listens.** Strengths are synthetic play fractions: taste
   draws are mostly strong and noise draws mostly weak. The weak-signal threshold
   drops plays below it from the history and from the positives; a dropped weak
