@@ -144,6 +144,45 @@ describes one line, and `musicdiscovery feedback-report <log.jsonl>` summarises
 a downloaded log; [evaluation.md](evaluation.md#feedback-logs-from-the-demo)
 explains its output and limits. The study page has no feedback log.
 
+## Links to results
+
+The demo keeps its settings in the URL fragment, so a link opens the same list and
+nothing about it reaches a server:
+
+```text
+#seed=<track id>&like=<quality>&dislike=<quality>&ranker=<hybrid|baseline>&exclude=1
+```
+
+`like` and `dislike` repeat, are URL-encoded and use the preference form from
+[ranking.md](ranking.md#preference-input): `genre:Folk`, `tag:punk`, `more:energy`
+or `less:energy`. An axis can be liked as `less:energy` or disliked as
+`more:energy`, and a link restores exactly the chip and state it names. Omitted
+keys mean the defaults: no qualities, the hybrid ranker and exclusion off
+(`exclude=0` is accepted too). After every change that leaves a seed chosen, the
+page replaces the fragment with its current state using `history.replaceState`,
+so Back still leaves the page rather than stepping through settings. The keys are
+written in a fixed order: seed, likes, dislikes, ranker, exclude. Clearing the seed
+clears the fragment. "Copy link to these results", under the results, copies the
+address; if the browser has no clipboard or refuses it, the page shows the address
+in a selected field to copy by hand.
+
+- **What is ignored.** Only values this page can show are applied: a track id in
+  `catalog.json`, a quality that has a chip and a known ranker. The rest are
+  ignored, and the results status adds "Some settings in this link are not
+  available here and were ignored." A link without a usable seed still applies its
+  valid qualities, ranker and exclusion but shows the usual empty state. A fragment
+  with none of these keys, such as an ordinary in-page anchor, is left alone.
+- **One demo per page.** The fragment is read and written only when the page has
+  exactly one `[data-music-discovery]` root. With several, no demo reads or writes
+  it and the copy button is not shown, since one fragment cannot describe them all.
+- **Same catalog only.** Ranking is deterministic, so a link reproduces a list
+  exactly only while the catalog it was made with is published. A rebuilt or
+  different `catalog.json` can give a different list, or drop the seed track.
+- **Read once.** The fragment is read when the catalog loads. Editing it by hand
+  afterwards (`hashchange`) is ignored; reload the page to apply it.
+- **Not the study.** `study.html` never reads or writes the fragment, so a link
+  cannot unblind it. Ratings, the feedback log and its schema do not record links.
+
 ## Study page
 
 `study.html` is the blind listener study: two unlabelled lists per task, ratings

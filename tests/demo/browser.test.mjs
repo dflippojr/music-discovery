@@ -575,6 +575,163 @@ describe("demo page", () => {
   });
 });
 
+// --- links to results ----------------------------------------------------------
+
+const LINK = "seed={seed}&like=genre%3AFolk&dislike=more%3Aenergy&ranker=baseline&exclude=1";
+
+function linkSeed() {
+  const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+  return catalog.ids[catalog.titles.indexOf("Synthetic track 107")];
+}
+
+const folkChip = (page) => page.locator(".md-chip").filter({ has: page.getByText("Folk", { exact: true }) });
+const linkParams = async (page) => new URLSearchParams((await page.evaluate(() => location.hash)).slice(1));
+const IGNORED = "Some settings in this link are not available here and were ignored.";
+
+describe("links to results", () => {
+  test("a link restores the seed, qualities, ranker and exclusion, matching the same state set by hand", async () => {
+    const seed = linkSeed();
+    const { context, page, problems } = await open({}, { path: `#${LINK.replace("{seed}", seed)}` });
+    await page.locator(".md-result").first().waitFor();
+    assert.match(await page.getByRole("combobox").inputValue(), /^Synthetic track 107 /);
+    assert.match(await folkChip(page).textContent(), /, liked$/);
+    assert.match(await page.getByRole("button", { name: /^More energetic/ }).textContent(), /, disliked$/);
+    assert.equal(await page.getByRole("radio", { name: /Baseline/ }).isChecked(), true);
+    assert.equal(await page.getByRole("checkbox", { name: "Exclude the seed artist" }).isChecked(), true);
+    assert.doesNotMatch(await page.locator(".md-status").textContent(), /ignored/);
+    const linked = await titles(page);
+    assert.equal(linked.length, 10);
+
+    const manual = await open();
+    await pickSeed(manual.page, "Synthetic track 107");
+    await folkChip(manual.page).click();
+    const energetic = manual.page.getByRole("button", { name: /^More energetic/ });
+    await energetic.click();
+    await energetic.click();
+    await manual.page.getByRole("radio", { name: /Baseline/ }).check();
+    await manual.page.getByRole("checkbox", { name: "Exclude the seed artist" }).check();
+    assert.deepEqual(await titles(manual.page), linked);
+    const params = await linkParams(manual.page);
+    assert.deepEqual([...params.keys()], ["seed", "like", "dislike", "ranker", "exclude"]);
+    assert.deepEqual([...params.values()], [String(seed), "genre:Folk", "more:energy", "baseline", "1"]);
+    assert.deepEqual([...problems, ...manual.problems], []);
+    await close(manual.page, manual.context);
+    await close(page, context);
+  });
+
+  test("changes replace the fragment without adding history, a reload restores the list and clearing the seed clears it", async () => {
+    const seed = linkSeed();
+    const { context, page, problems } = await open();
+    const copy = page.getByRole("button", { name: "Copy link to these results" });
+    assert.equal(await page.evaluate(() => location.hash), "");
+    assert.equal(await copy.isDisabled(), true);
+    await pickSeed(page, "Synthetic track 107");
+    assert.equal(await copy.isDisabled(), false);
+    const length = await page.evaluate(() => history.length);
+    assert.equal((await linkParams(page)).get("seed"), String(seed));
+    assert.equal((await linkParams(page)).get("ranker"), "hybrid");
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    assert.deepEqual((await linkParams(page)).getAll("like"), ["less:energy"]);
+    await page.getByRole("radio", { name: /Baseline/ }).check();
+    assert.equal((await linkParams(page)).get("ranker"), "baseline");
+    await page.getByRole("checkbox", { name: "Exclude the seed artist" }).check();
+    assert.equal((await linkParams(page)).get("exclude"), "1");
+    assert.equal(await page.evaluate(() => history.length), length);
+    assert.equal(new URL(page.url()).pathname, "/");
+    const before = await titles(page);
+    await page.reload();
+    await page.locator(".md-result").first().waitFor();
+    assert.deepEqual(await titles(page), before);
+    assert.match(await page.getByRole("button", { name: /^Calmer/ }).textContent(), /, liked$/);
+    await page.getByRole("combobox").fill("Synthetic");
+    assert.equal(await page.evaluate(() => location.hash), "");
+    assert.equal(await copy.isDisabled(), true);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("unknown settings are ignored with one status sentence and the valid ones still apply", async () => {
+    const seed = linkSeed();
+    const bad = "seed=999999999&like=genre%3ANo%20such%20genre&like=genre%3AFolk&dislike=less%3Atempo&ranker=random&exclude=1";
+    const { context, page, problems } = await open({}, { path: `#${bad}` });
+    assert.equal(await page.locator(".md-status").textContent(), `Pick a seed track to see recommendations. ${IGNORED}`);
+    assert.equal(await page.locator(".md-result").count(), 0);
+    assert.equal(await page.getByRole("combobox").inputValue(), "");
+    assert.match(await folkChip(page).textContent(), /, liked$/);
+    assert.equal(await page.getByRole("radio", { name: /Hybrid/ }).isChecked(), true);
+    assert.equal(await page.getByRole("checkbox", { name: "Exclude the seed artist" }).isChecked(), true);
+    assert.equal(await page.evaluate(() => location.hash), `#${bad}`);
+
+    const partial = await open({}, { path: `#seed=${seed}&like=tag%3Anope&ranker=hybrid` });
+    await partial.page.locator(".md-result").first().waitFor();
+    const status = await partial.page.locator(".md-status").textContent();
+    assert.ok(status.startsWith("10 recommendations from the hybrid ranker for ") && status.endsWith(` ${IGNORED}`), status);
+    assert.deepEqual([...(await linkParams(partial.page)).keys()], ["seed", "ranker"]);
+
+    // An ordinary in-page anchor is not a link to results and is left alone.
+    const anchor = await open({}, { path: "#music-discovery-demo" });
+    assert.equal(await anchor.page.locator(".md-status").textContent(), "Pick a seed track to see recommendations.");
+    assert.equal(await anchor.page.evaluate(() => location.hash), "#music-discovery-demo");
+    assert.deepEqual([...problems, ...partial.problems, ...anchor.problems], []);
+    await close(partial.page, partial.context);
+    await close(anchor.page, anchor.context);
+    await close(page, context);
+  });
+
+  test("Copy link puts the address on the clipboard, or shows it in a selected field when that fails", async () => {
+    const { context, page, problems } = await open({ permissions: ["clipboard-read", "clipboard-write"] });
+    await pickSeed(page);
+    const copy = page.getByRole("button", { name: "Copy link to these results" });
+    await copy.click();
+    await page.waitForFunction(() => document.querySelector(".md-status").textContent === "Link copied.");
+    const href = await page.evaluate(() => location.href);
+    assert.match(href, /#seed=/);
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), href);
+    const field = page.getByLabel("Link to these results");
+    assert.equal(await field.isVisible(), false);
+
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = () => Promise.reject(new DOMException("Denied", "NotAllowedError"));
+    });
+    await copy.click();
+    await field.waitFor();
+    assert.equal(await field.inputValue(), href);
+    assert.equal(await field.getAttribute("readonly"), "");
+    assert.deepEqual(await field.evaluate((el) => [el.selectionStart, el.selectionEnd, document.activeElement === el]), [0, href.length, true]);
+    assert.match(await page.locator(".md-status").textContent(), /could not be copied/);
+    assert.deepEqual(await axeViolations(page), []);
+    await page.setViewportSize({ width: 320, height: 700 });
+    const widths = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+    assert.ok(widths[0] <= widths[1], `scrollWidth ${widths[0]} > ${widths[1]}`);
+    assert.ok((await copy.boundingBox()).height >= 44);
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    assert.equal(await field.isVisible(), false);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("with several demos on a page none reads or writes the fragment", async () => {
+    const hash = `#${LINK.replace("{seed}", linkSeed())}`;
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.coverage.startJSCoverage();
+    await page.route(base, (route) => {
+      const html = readFileSync(join(bundle, "index.html"), "utf8");
+      return route.fulfill({ contentType: "text/html", headers: { "content-security-policy": CSP },
+        body: html.replace("</main>", '<div id="second-demo" data-music-discovery></div></main>') });
+    });
+    await page.goto(base + hash);
+    await page.locator("#second-demo input[role=combobox]").waitFor();
+    const first = page.locator("#music-discovery-demo");
+    assert.equal(await first.getByRole("combobox").inputValue(), "");
+    assert.equal(await page.getByRole("button", { name: "Copy link to these results" }).count(), 0);
+    await first.getByRole("button", { name: "Pick a random track" }).click();
+    await first.locator(".md-result").first().waitFor();
+    assert.equal(await page.evaluate(() => location.hash), hash);
+    await close(page, context);
+  });
+});
+
 // --- study mode ----------------------------------------------------------------
 
 const study = (options) => open(options, { path: "study.html", mount: "#music-discovery-study button" });
@@ -595,6 +752,19 @@ async function doTask(page, { preference = "List A", last = false } = {}) {
 }
 
 describe("study page", () => {
+  test("ignores a link fragment and leaves it unchanged", async () => {
+    const hash = `#${LINK.replace("{seed}", linkSeed())}`;
+    const { context, page, problems } = await open({}, { path: `study.html${hash}`, mount: "#music-discovery-study button" });
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    assert.equal(await page.getByRole("combobox").inputValue(), "");
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    await page.locator(".md-result").first().waitFor();
+    assert.equal(await page.evaluate(() => location.hash), hash);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   test("shows two unlabelled lists and never names a ranker", async () => {
     const { context, page, problems } = await study();
     assert.match(await page.locator("#music-discovery-study").textContent(), /By sending the file you agree/);

@@ -5,6 +5,7 @@ const MAX_SUGGESTIONS = 8;
 const FETCH_DEADLINE_MS = 30_000;
 const NEXT_STATE = { neutral: "like", like: "dislike", dislike: "neutral" };
 const STATE_WORDS = { neutral: "not selected", like: "liked", dislike: "disliked" };
+const AXIS_DIRECTIONS = { more: 1, less: -1 };
 const STATE_MARKS = { neutral: "", like: "+", dislike: "−" };
 const SVG_NS = "http://www.w3.org/2000/svg";
 const THUMB_PATH =
@@ -311,11 +312,16 @@ export class SeedPicker {
   }
 
   pick(row) {
+    this.select(row);
+    this.onChange();
+  }
+
+  /** Show `row` as the seed without firing `onChange`, for restoring saved state. */
+  select(row) {
     this.row = row;
     this.input.value = this.labels[row];
     this.suggestions = [];
     this.closeList();
-    this.onChange();
   }
 }
 
@@ -324,6 +330,7 @@ export class QualityPicker {
   constructor(data, { heading, onChange }) {
     this.onChange = onChange;
     this.qualities = new Map(); // "genre:Rock" -> {kind, name, direction, state}
+    this.setters = new Map(); // every chip's key -> function that sets its state
     this.id = makeIds();
     const group = (title, items) =>
       h("div", { class: "md-chip-group", role: "group", "aria-label": title }, h("h3", { class: "md-subhead", text: title }), h("div", { class: "md-chips" }, items));
@@ -353,15 +360,35 @@ export class QualityPicker {
       mark.textContent = STATE_MARKS[entry.state];
       state.textContent = `, ${STATE_WORDS[entry.state]}`;
     };
-    paint();
-    button.addEventListener("click", () => {
-      entry.state = NEXT_STATE[entry.state];
-      if (entry.state === "neutral") this.qualities.delete(key);
+    const set = (next) => {
+      entry.state = next;
+      if (next === "neutral") this.qualities.delete(key);
       else this.qualities.set(key, entry);
       paint();
+    };
+    paint();
+    this.setters.set(key, set);
+    button.addEventListener("click", () => {
+      set(NEXT_STATE[entry.state]);
       this.onChange();
     });
     return button;
+  }
+
+  /**
+   * Set the chip for a preference string such as "genre:Folk" or "less:energy" to `state`
+   * ("like" or "dislike") without firing `onChange`. Returns false if no chip matches.
+   */
+  setQuality(text, state) {
+    const split = text.indexOf(":");
+    const kind = text.slice(0, split);
+    const name = text.slice(split + 1);
+    const direction = AXIS_DIRECTIONS[kind];
+    const key = direction ? `axis:${name}:${direction}` : `${kind}:${name}`;
+    const set = (direction || kind === "genre" || kind === "tag") && this.setters.get(key);
+    if (!set) return false;
+    set(state);
+    return true;
   }
 }
 
