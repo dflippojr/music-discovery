@@ -135,12 +135,18 @@ class HybridRanker:
         self._catalog: Catalog | None = None
         self._metadata: _Metadata | None = None
         self._popularity: np.ndarray | None = None
+        self._artists: np.ndarray | None = None
+        self._genres: np.ndarray | None = None
 
     def _prepare(self, catalog: Catalog) -> tuple[_Metadata, np.ndarray]:
         if self._catalog is not catalog or self._metadata is None:
             self._metadata = _Metadata(catalog)
             self._popularity = (
                 catalog.frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
+            )
+            self._artists = catalog.frame["artist"].astype(str).to_numpy()
+            self._genres = (
+                catalog.frame["genre_top"].astype("string").to_numpy(dtype=object)
             )
             self._catalog = catalog
         return self._metadata, self._popularity
@@ -175,7 +181,7 @@ class HybridRanker:
             return []
         order = np.lexsort((catalog.track_ids[candidates], -relevance[candidates]))
         pool = candidates[order[: max(config.pool_size, preference.k)]]
-        picks, variety = self._mmr(catalog, pool, relevance[pool], preference.k)
+        picks, variety = self._mmr(pool, relevance[pool], preference.k)
 
         results = []
         for row in picks:
@@ -188,9 +194,11 @@ class HybridRanker:
         return results
 
     def _mmr(
-        self, catalog: Catalog, pool: np.ndarray, scores: np.ndarray, k: int
+        self, pool: np.ndarray, scores: np.ndarray, k: int
     ) -> tuple[list[int], dict[int, float]]:
         """Greedy MMR over the pool, which is in relevance order.
+
+        Reads the artist and genre arrays that `_prepare` cached for the catalog.
 
         Returns the picked rows and, for each pick that jumped a more relevant
         track, lambda times the redundancy it avoided.
@@ -199,9 +207,8 @@ class HybridRanker:
         lam = config.mmr_lambda
         span = scores.max() - scores.min()
         rel = (scores - scores.min()) / span if span else np.zeros(len(scores))
-        frame = catalog.frame
-        artists = frame["artist"].astype(str).to_numpy()[pool]
-        genres = frame["genre_top"].astype("string").to_numpy(dtype=object)[pool]
+        artists = self._artists[pool]
+        genres = self._genres[pool]
         artist_taken: set[str] = set()
         genre_count: dict[str, int] = {}
         remaining = list(range(len(pool)))

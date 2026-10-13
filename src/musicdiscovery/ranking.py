@@ -166,11 +166,11 @@ class BaselineRanker:
         explained = [t for t in ordered if t.value > 0][:_MAX_EXPLANATIONS]
         if not explained:
             explained = ordered[:1]
-        record = catalog.frame.iloc[row]
+        frame = catalog.frame
         return Recommendation(
-            track_id=int(record["track_id"]),
-            title=str(record.get("title", "")),
-            artist=str(record["artist"]),
+            track_id=int(catalog.track_ids[row]),
+            title=str(frame["title"].iat[row]) if "title" in frame else "",
+            artist=str(frame["artist"].iat[row]),
             score=float(sum(t.value for t in parts)),
             terms=parts,
             explanations=tuple(t.text for t in explained),
