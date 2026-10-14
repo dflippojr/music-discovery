@@ -375,7 +375,12 @@ The profile is the strength-weighted mean of the seeds' clip vectors, as in
 the profile ranker. A track's score is its cosine similarity to that profile,
 plus a cosine to the `--describe` vector when given, plus the baseline's
 fixed-weight quality terms. Only tracks with a vector can be returned, so
-scoring stays inside the embedded catalog. Seed tracks are never returned,
+scoring stays inside the embedded catalog. Seeds without a vector (such as the
+six that failed to decode) are left out of the profile. If no seed has a vector
+and there is no `--describe` text, the ranker returns an empty list and
+`recommend` prints a note on stderr, because nothing says what to sound like;
+the evaluator scores that query as undefined (NaN), so it drops out of the
+means. Seed tracks are never returned,
 `--exclude-seed-artist` works as in the baseline, and ties go to the lower
 track id.
 

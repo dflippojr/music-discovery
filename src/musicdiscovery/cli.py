@@ -79,6 +79,14 @@ def _run_recommend(args: argparse.Namespace) -> int:
         else:
             ranker = make_ranker(args.ranker)
         results = ranker.rank(preference, catalog)
+        if not results and isinstance(ranker, AudioEmbeddingRanker):
+            missing = ranker.seeds_without_vector(preference, catalog)
+            if missing and len(missing) == len(preference.seeds):
+                print(
+                    "recommend: no seed has an audio vector "
+                    f"({', '.join(str(t) for t in missing)}); nothing to rank on",
+                    file=sys.stderr,
+                )
     except (
         AudioEmbeddingError,
         CatalogError,
