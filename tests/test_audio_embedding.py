@@ -346,11 +346,31 @@ def test_ranker_stays_inside_the_embedded_catalog(catalog):
     assert not {r.track_id for r in results} & set(skip)
 
 
-def test_seed_without_a_vector_falls_back_to_quality_terms(catalog):
+def test_no_seed_vector_returns_nothing(catalog):
     ranker = AudioEmbeddingRanker(store=store_for(catalog, skip=(100,)))
-    results = ranker.rank(Preference.from_strings([100], ["genre:Jazz"], k=5), catalog)
-    assert all(r.terms[0].value == 0.0 for r in results)
-    assert {genre_of(catalog, r.track_id) for r in results} == {"Jazz"}
+    assert ranker.rank(Preference((100,), k=5), catalog) == []
+    liked = Preference.from_strings([100], ["genre:Jazz"], k=5)
+    assert ranker.rank(liked, catalog) == []
+    assert ranker.seeds_without_vector(liked, catalog) == (100,)
+
+
+def test_only_seeds_with_vectors_contribute(catalog):
+    ranker = AudioEmbeddingRanker(store=store_for(catalog, skip=(100,)))
+    other = int(catalog.track_ids[catalog.track_ids != 100][0])
+    both = ranker.rank(Preference((100, other), k=5), catalog)
+    alone = ranker.rank(Preference((other,), k=5), catalog)
+    assert both and [r.track_id for r in both] == [r.track_id for r in alone]
+    assert all(r.terms[0].value != 0.0 for r in both)
+
+
+def test_description_still_ranks_when_no_seed_has_a_vector(catalog):
+    description = describe_vector("Jazz", FakeEncoder())
+    ranker = AudioEmbeddingRanker(
+        store=store_for(catalog, skip=(100,)), description=description
+    )
+    results = ranker.rank(Preference((100,), k=5), catalog)
+    assert len(results) == 5
+    assert results[0].explanations[0] == "sounds like your description: Jazz"
 
 
 def test_ranker_errors_without_vectors(catalog, tmp_path):
@@ -419,6 +439,18 @@ def test_recommend_with_the_audio_embedding_ranker(catalog, capsys, monkeypatch)
     assert "--describe needs" in capsys.readouterr().err
     assert main([*args, "--vectors", "data/none.npz"]) == 1
     assert "no audio vectors" in capsys.readouterr().err
+
+
+def test_recommend_without_a_seed_vector_says_so(catalog, capsys):
+    write_catalog(catalog)
+    store_for(catalog, skip=(100,)).save(DEFAULT_VECTORS)
+    args = ["recommend", "--seed", "100", "--ranker", "audio-embedding"]
+    assert main(args) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no seed has an audio vector (100)" in captured.err
+    assert main([*args, "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
 
 
 def test_embed_audio_command(catalog, capsys, monkeypatch):

@@ -331,7 +331,9 @@ class AudioEmbeddingRanker:
     The profile is the strength-weighted mean of the vectors of the seeds that
     have one. Only tracks with a vector can be returned, so scoring stays inside
     the embedded catalog. An optional description vector (from
-    `describe_vector`) adds a text-to-audio term.
+    `describe_vector`) adds a text-to-audio term. When no seed has a vector and
+    there is no description, nothing in the query says what to sound like, so
+    the ranker returns an empty list instead of ordering tracks by id.
     """
 
     def __init__(
@@ -361,6 +363,13 @@ class AudioEmbeddingRanker:
             self._catalog = catalog
         return self._aligned
 
+    def seeds_without_vector(
+        self, preference: Preference, catalog: Catalog
+    ) -> tuple[int, ...]:
+        """The seeds that have no cached clip vector."""
+        has = self.aligned(catalog).has
+        return tuple(s for s in preference.seeds if not has[catalog.position[s]])
+
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
         preference.validate(catalog)
         aligned = self.aligned(catalog)
@@ -372,6 +381,8 @@ class AudioEmbeddingRanker:
             for row, w in zip(seed_rows, preference.seed_weights(), strict=True)
             if aligned.has[row]
         ]
+        if not pairs and self.description is None:
+            return []
         similarity = np.zeros(len(catalog))
         if pairs:
             rows, weights = zip(*pairs, strict=True)
