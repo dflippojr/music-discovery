@@ -410,14 +410,15 @@ class Context:
     def __init__(self, catalog: Catalog):
         frame = catalog.frame
         self.catalog = catalog
-        self.genres = frame["genre_top"].astype("string").to_numpy(dtype=object)
+        # A missing top genre is "": it never equals a seed's genre, so it is a miss.
+        self.genres = (
+            frame["genre_top"].astype("string").fillna("").to_numpy(dtype=object)
+        )
         self.tags = [frozenset(t) for t in frame["tags"]]
         self.artists = frame["artist"].astype(str).to_numpy()
         self.percentile = frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
         self.relevant_total = {
-            g: int(np.sum(self.genres == g))
-            for g in set(self.genres)
-            if isinstance(g, str)
+            g: int(np.sum(self.genres == g)) for g in set(self.genres) if g
         }
 
 
@@ -441,7 +442,7 @@ def query_metrics(
         return out, rows
 
     seed_genre = ctx.genres[seed_row]
-    if isinstance(seed_genre, str):
+    if seed_genre:
         hits = (ctx.genres[rows] == seed_genre).astype(float)
         out["genre_precision"] = float(hits.mean())
         gains = hits / np.log2(np.arange(2, len(hits) + 2))
