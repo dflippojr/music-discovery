@@ -196,6 +196,16 @@ def test_inconsistent_or_unreadable_files_are_rejected(tmp_path):
         study.load_sessions(folder)
 
 
+def test_a_deeply_nested_file_is_rejected_by_name(tmp_path, capsys):
+    folder = tmp_path / "r"
+    folder.mkdir()
+    (folder / "deep.json").write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    with pytest.raises(study.StudyError, match=r"deep\.json: not readable JSON"):
+        study.load_sessions(folder)
+    assert main(["analyze-study", str(folder), "--out-dir", str(tmp_path / "o")]) == 1
+    assert "analyze-study: deep.json: not readable JSON" in capsys.readouterr().err
+
+
 def test_duplicate_sessions_and_missing_directories_are_rejected(tmp_path):
     folder = tmp_path / "r"
     write(folder, "a.json", make_session(1, ["A"] * 4))

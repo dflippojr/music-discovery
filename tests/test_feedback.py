@@ -83,6 +83,15 @@ def test_read_log_keeps_good_events_and_describes_bad_lines(log):
     assert "not in the shown list" in result.problems[2]
 
 
+def test_a_deeply_nested_line_is_reported_not_a_crash(tmp_path):
+    nested = "[" * 100_000 + "]" * 100_000
+    path = write_log(tmp_path / "nested.jsonl", event(100, 1), nested, event(101, -1))
+    result = feedback.read_log(path)
+    assert len(result.events) == 2
+    assert len(result.problems) == 1
+    assert result.problems[0].startswith("line 2: not JSON")
+
+
 def test_summaries(log):
     summary = feedback.summarise(feedback.read_log(log).events)
     hybrid, baseline = summary.rankers["hybrid"], summary.rankers["baseline"]

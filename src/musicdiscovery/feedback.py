@@ -89,7 +89,7 @@ def read_log(path: Path) -> LogRead:
             continue
         try:
             body = json.loads(line)
-        except ValueError as error:
+        except (ValueError, RecursionError) as error:
             problems.append(f"line {number}: not JSON ({error})")
             continue
         if (problem := _line_problem(validator, body)) is not None:

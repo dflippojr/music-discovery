@@ -138,7 +138,7 @@ def load_sessions(directory: Path) -> list[dict]:
     for path in files:
         try:
             body = json.loads(path.read_text("utf-8"))
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RecursionError) as error:
             raise StudyError(f"{path.name}: not readable JSON ({error})") from error
         problems = _problems(validator, body)
         if problems:
