@@ -56,12 +56,29 @@ def test_occupied_port_creates_no_handle_or_bundle(launcher):
     assert not list(launcher.DATA.iterdir())
 
 
+def test_reuse_address_server_on_port_creates_no_handle_or_bundle(launcher):
+    # A competing server with the stdlib default reuse flag, as another
+    # worktree's launcher would be; on Windows this once bound the same port.
+    other = ThreadingHTTPServer(("127.0.0.1", 0), launcher.Handler)
+    thread = threading.Thread(target=other.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(OSError):
+            launcher.start(other.server_port)
+    finally:
+        other.shutdown()
+        other.server_close()
+        thread.join(timeout=5)
+    assert not launcher.HANDLE.exists()
+    assert not list(launcher.DATA.iterdir())
+
+
 @pytest.fixture
 def seeding(launcher, monkeypatch):
     """Real owned children with a pipe handshake and no data dependencies."""
     children = []
     ports = []
-    original_server = launcher.ThreadingHTTPServer
+    original_server = launcher.ExclusiveHTTPServer
     original_popen = subprocess.Popen
     unrelated = launcher.DATA / "run-unrelated"
     unrelated.mkdir(parents=True, exist_ok=True)
@@ -120,7 +137,7 @@ def seeding(launcher, monkeypatch):
 
         monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
 
-    monkeypatch.setattr(launcher, "ThreadingHTTPServer", server)
+    monkeypatch.setattr(launcher, "ExclusiveHTTPServer", server)
     # Check that cleanup cannot race a live child still writing the bundle.
     original_remove = launcher.remove_bundle
 
@@ -194,7 +211,7 @@ def assert_restart(launcher, monkeypatch, seeding):
                 launcher_server.shutdown()
 
     # Capture the real server for failure teardown without signalling others.
-    server_factory = launcher.ThreadingHTTPServer
+    server_factory = launcher.ExclusiveHTTPServer
     launcher_server = None
 
     def capture_server(*args, **kwargs):
@@ -202,7 +219,7 @@ def assert_restart(launcher, monkeypatch, seeding):
         launcher_server = server_factory(*args, **kwargs)
         return launcher_server
 
-    monkeypatch.setattr(launcher, "ThreadingHTTPServer", capture_server)
+    monkeypatch.setattr(launcher, "ExclusiveHTTPServer", capture_server)
     monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", serve)
     worker = threading.Thread(target=stop_when_ready, daemon=True)
     worker.start()
