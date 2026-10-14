@@ -205,6 +205,34 @@ def test_adherence_counts_results_that_move_the_axis(catalog):
     assert query_metrics(ctx, less, down)[0]["adherence"] == 1.0
 
 
+def test_missing_genre_is_a_miss_and_a_genreless_seed_is_nan():
+    frame = make_frame()
+    frame["genre_top"] = frame["genre_top"].astype(object)
+    frame.loc[frame.index[:5], "genre_top"] = None
+    cat = Catalog(frame)
+    ctx = Context(cat)
+    genreless = [i for i, g in enumerate(ctx.genres) if not g]
+    assert len(genreless) == 5
+    seed_row = next(i for i, g in enumerate(ctx.genres) if g)
+    seed_genre = ctx.genres[seed_row]
+    same = [i for i, g in enumerate(ctx.genres) if g == seed_genre and i != seed_row][
+        :5
+    ]
+    query = Query(0, "test", int(cat.track_ids[seed_row]), ())
+    metrics = query_metrics(ctx, query, _bare(cat, same + genreless[:5]))[0]
+    assert metrics["genre_precision"] == 0.5
+    seedless = Query(1, "test", int(cat.track_ids[genreless[0]]), ())
+    metrics = query_metrics(ctx, seedless, _bare(cat, same))[0]
+    assert np.isnan(metrics["genre_precision"])
+    assert np.isnan(metrics["genre_ndcg"])
+
+    queries = generate_queries(cat, per_split=20)
+    seeds = {int(cat.track_ids[i]) for i in genreless}
+    assert seeds & {q.seed for q in queries}
+    report = evaluate(cat, queries, ["baseline", "hybrid"], resamples=50)
+    assert set(report["rankers"]) >= {"baseline", "hybrid"}
+
+
 def test_undefined_metrics_are_none(catalog):
     splits = ["validation"] * 3 + ["test"] * 3
     queries = [Query(i, s, 100 + i, ("genre:Folk",)) for i, s in enumerate(splits)]
