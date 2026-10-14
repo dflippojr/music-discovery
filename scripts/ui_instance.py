@@ -147,6 +147,22 @@ def recover():
     print(f"Recovered {metadata['instance']}; handle and synthetic bundle removed")
 
 
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """Refuse a port another listener holds, even one that set SO_REUSEADDR.
+
+    On Windows, SO_REUSEADDR lets a second socket bind a listening port, so the
+    stock server would report ready while requests reach the first instance.
+    POSIX keeps the reuse flag so a restart after TIME_WAIT still binds.
+    """
+
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Content-Security-Policy", CSP)
@@ -227,7 +243,7 @@ def start(port):
     bundle = DATA / instance
     identity = process_identity(os.getpid())
     # Bind first: an occupied port fails before creating any synthetic data.
-    server = ThreadingHTTPServer(
+    server = ExclusiveHTTPServer(
         ("127.0.0.1", port), partial(Handler, directory=str(bundle))
     )
     server.instance = instance
