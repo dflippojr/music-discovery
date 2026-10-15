@@ -25,7 +25,13 @@ from musicdiscovery.profiles import (
     ndcg,
     reciprocal_rank,
 )
-from musicdiscovery.ranking import BaselineRanker, Ranker, Recommendation, _allowed
+from musicdiscovery.ranking import (
+    BaselineRanker,
+    Ranker,
+    Recommendation,
+    _allowed,
+    display_title,
+)
 
 K = 10
 QUERY_SEED = 20261005
@@ -61,7 +67,7 @@ def _bare(catalog: Catalog, rows: Sequence[int]) -> list[Recommendation]:
     return [
         Recommendation(
             track_id=int(catalog.track_ids[row]),
-            title=str(frame["title"].iloc[row]) if "title" in frame else "",
+            title=display_title(frame, row, int(catalog.track_ids[row])),
             artist=str(frame["artist"].iloc[row]),
             score=0.0,
             terms=(),

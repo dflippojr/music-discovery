@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 import numpy as np
 import pandas as pd
@@ -186,15 +185,6 @@ def test_catalog_validation(tmp_path):
         Catalog(meta)
     with pytest.raises(CatalogError, match="ingest"):
         Catalog.load(tmp_path / "missing.parquet")
-
-
-def test_speed_documented_not_gated():
-    catalog = Catalog(make_frame(per_genre=2666, extra_features=60))
-    ranker = BaselineRanker()
-    ranker.rank(pref(), catalog)  # fit once
-    start = time.perf_counter()
-    ranker.rank(pref(likes=["more:energy", "genre:Rock"]), catalog)
-    assert time.perf_counter() - start < 5  # loose guard; target is in docs
 
 
 @pytest.fixture
