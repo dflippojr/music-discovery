@@ -1,7 +1,10 @@
 """Check the installed CLI contract without datasets or audio."""
 
+import shutil
 import subprocess
+import sys
 from importlib.metadata import version
+from pathlib import Path
 
 import pytest
 
@@ -9,8 +12,10 @@ from musicdiscovery.cli import main
 
 
 def test_installed_version():
+    script = shutil.which("musicdiscovery", path=str(Path(sys.executable).parent))
+    assert script is not None
     result = subprocess.run(
-        ["musicdiscovery", "--version"], capture_output=True, text=True, check=True
+        [script, "--version"], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == version("musicdiscovery")
     assert result.stderr == ""
