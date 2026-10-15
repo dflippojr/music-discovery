@@ -9,6 +9,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import URLError
 
 import pytest
 
@@ -54,7 +55,9 @@ def serve():
                 pass
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        ).start()
         servers.append(server)
         return f"http://127.0.0.1:{server.server_port}"
 
@@ -91,7 +94,11 @@ def test_doctor_passes_a_healthy_synthetic_instance(serve, monkeypatch, capsys):
     assert capsys.readouterr().out.count("PASS ") == 4
 
 
-def test_doctor_fails_when_not_ready(capsys):
+def test_doctor_fails_when_not_ready(monkeypatch, capsys):
+    def refuse(url):
+        raise URLError(ConnectionRefusedError("refused"))
+
+    monkeypatch.setattr(doctor, "fetch_json", refuse)
     url = f"http://127.0.0.1:{free_port()}"
     checks = by_name(doctor.run_checks(url, "run-0123456789abcdef"))
     assert not checks["ready"].ok
