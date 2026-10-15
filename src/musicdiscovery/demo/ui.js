@@ -2,7 +2,7 @@
 // quality chips and thumb buttons. No state beyond what each piece owns.
 
 const MAX_SUGGESTIONS = 8;
-const FETCH_DEADLINE_MS = 30_000;
+export const FETCH_DEADLINE_MS = 30_000;
 const NEXT_STATE = { neutral: "like", like: "dislike", dislike: "neutral" };
 const STATE_WORDS = { neutral: "not selected", like: "liked", dislike: "disliked" };
 const AXIS_DIRECTIONS = { more: 1, less: -1 };
