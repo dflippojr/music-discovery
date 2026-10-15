@@ -1,4 +1,4 @@
-"""Seed and seed-artist exclusion is shared by all six rankers."""
+"""Seed and seed-artist exclusion is shared by all seven rankers."""
 
 import pytest
 from test_audio_embedding import store_for
@@ -9,7 +9,7 @@ from musicdiscovery.catalog import Catalog
 from musicdiscovery.evaluation import PopularRanker, RandomRanker
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import Preference
-from musicdiscovery.profile_ranker import ProfileRanker
+from musicdiscovery.profile_ranker import ProfileDiverseRanker, ProfileRanker
 from musicdiscovery.ranking import BaselineRanker, _allowed
 
 
@@ -21,6 +21,7 @@ RANKERS = [
     BaselineRanker,
     HybridRanker,
     ProfileRanker,
+    ProfileDiverseRanker,
     RandomRanker,
     PopularRanker,
     _audio_embedding,

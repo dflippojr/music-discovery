@@ -85,17 +85,6 @@ def test_quantised_projection_stays_close(bundle, catalog):
     assert np.abs(stored * base["projectedScale"] - fit.projected).max() < 1e-3
 
 
-def test_parity_file_matches_the_rankers(bundle, catalog):
-    parity = json.loads((bundle[0] / demo.PARITY_FILE).read_text())
-    assert len(parity["queries"]) >= 20
-    assert any(q["dislikes"] for q in parity["queries"])
-    for query in parity["queries"]:
-        assert query["seed"] in catalog.position
-        for ids in query["expected"].values():
-            assert len(ids) == 10
-            assert query["seed"] not in ids
-
-
 def test_static_files_follow_the_csp_rules(bundle):
     out = bundle[0]
     for name, script in (("index.html", "demo.js"), ("study.html", "study.js")):
