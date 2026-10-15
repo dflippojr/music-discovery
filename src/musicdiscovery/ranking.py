@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+import pandas as pd
 
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.preference import AXES, Preference
@@ -35,6 +36,14 @@ class Recommendation:
     score: float
     terms: tuple[ScoreTerm, ...]
     explanations: tuple[str, ...]
+
+
+def display_title(frame, row: int, track_id: int) -> str:
+    """The title, or `Track <id>` as the demo shows when it is missing or blank."""
+    title = frame["title"].iat[row] if "title" in frame else None
+    if title is None or pd.isna(title) or not str(title).strip():
+        return f"Track {track_id}"
+    return str(title)
 
 
 class Ranker(Protocol):
@@ -167,9 +176,10 @@ class BaselineRanker:
         if not explained:
             explained = ordered[:1]
         frame = catalog.frame
+        track_id = int(catalog.track_ids[row])
         return Recommendation(
-            track_id=int(catalog.track_ids[row]),
-            title=str(frame["title"].iat[row]) if "title" in frame else "",
+            track_id=track_id,
+            title=display_title(frame, row, track_id),
             artist=str(frame["artist"].iat[row]),
             score=float(sum(t.value for t in parts)),
             terms=parts,

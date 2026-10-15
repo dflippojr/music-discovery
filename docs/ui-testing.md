@@ -86,8 +86,11 @@ verify its UI state; verify reload resets for every journey that changes state.
 
 Use media preference light/dark; no app switch. Verify computed --md-bg is
 #ffffff/light or #14171a/dark. Primary states: demo empty/results, study
-consent/seed/lists/done. Test every journey on desktop 1440x900 and iPhone SE,
-iPhone 15, Pixel 7, iPad Mini in both themes, phones/tablet portrait/landscape.
+consent/seed/lists/done. Run every journey on desktop 1440x900 and iPhone SE in
+the light theme; the journeys do not depend on the colour scheme, and every page
+load asserts the computed --md-bg for the active scheme. Run the layout and
+accessibility checks on both devices in both themes, and on iPhone 15, Pixel 7,
+iPad Mini in both themes, phones/tablet portrait/landscape.
 The typeahead is the menu and its partly entered query is the form for live
 resize: open suggestions at 1440, shrink stepwise to 375 and return to 1440
 without reload; retain query, active option, selected ranker/quality, focus,
@@ -106,7 +109,8 @@ font at default scaling. Source/license popups must remain local.
 
 npm with committed package-lock.json. playwright.config.mjs and tests/ui/*.spec.mjs
 use Playwright Test with desktop Chromium light/dark and iPhone SE WebKit
-light/dark projects. Command: npm run test:ui -- --workers=1. No retries/skips.
+light/dark projects. journeys.spec.mjs runs in the two light projects only;
+layout.spec.mjs and accessibility.spec.mjs run in all four. Command: npm run test:ui -- --workers=1. No retries/skips.
 webServer runs npm run ui:start with reuseExistingServer=false and local
 health readiness. Global teardown invokes npm run ui:stop; each fresh browser
 context rejects external requests. Run npm run ui:stop even after interruption.
@@ -121,7 +125,7 @@ console-error guard reports; take evidence screenshots in Chromium.
 GitHub visibility verified public. Existing runners are ubuntu-latest;
 UI CI MUST use GitHub-hosted ubuntu-latest, never a self-hosted runner.
 The scoped UI job installs Python 3.12/package, Node 24, npm ci, Chromium and
-WebKit with dependencies, runs all projects with one worker, always tears down
+WebKit with dependencies, runs all four projects with one worker, always tears down
 and uploads reports/traces. Existing Python/Node/CSP/Sonar checks stay intact.
 
 ## Teardown

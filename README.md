@@ -58,8 +58,8 @@ Dependabot checks Python packages and GitHub Actions at the repository root,
 and npm manifests at `/` and `/src/musicdiscovery/demo`, every week. The demo
 manifest currently declares only its module type, with no dependencies to update.
 
-The SonarCloud workflow analyses `src` and `tests`, imports Python and browser
-JavaScript coverage, and waits for the quality gate. Keep SonarCloud Automatic
+The SonarCloud workflow analyses `src` and `tests`, imports the Python and browser
+JavaScript coverage that CI uploads for the same commit, and waits for the quality gate. Keep SonarCloud Automatic
 Analysis disabled when using this workflow. Fork PRs are skipped. Same-repository
 PRs, including Dependabot PRs, run analysis when their token is available.
 
