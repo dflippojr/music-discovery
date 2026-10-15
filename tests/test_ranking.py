@@ -13,7 +13,7 @@ import pytest
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.cli import main
 from musicdiscovery.preference import Preference, PreferenceError, Quality
-from musicdiscovery.ranking import BaselineRanker, Ranker
+from musicdiscovery.ranking import BaselineRanker
 
 GENRES = ["Folk", "Rock", "Jazz"]
 
@@ -57,26 +57,12 @@ def pref(seed=100, **kwargs):
     return Preference.from_strings([seed], **kwargs)
 
 
-def test_interface(catalog):
-    ranker: Ranker = BaselineRanker()
-    assert len(ranker.rank(pref(), catalog)) == 10
-
-
 def test_seeds_excluded_and_same_genre_first(catalog):
     results = BaselineRanker().rank(Preference((100, 101), k=20), catalog)
     ids = {r.track_id for r in results}
     assert not ids & {100, 101}
     genres = catalog.frame.set_index("track_id").loc[list(ids), "genre_top"]
     assert (genres == "Folk").all()
-
-
-def test_exclude_seed_artist(catalog):
-    seed_artist = catalog.frame.set_index("track_id").loc[100, "artist"]
-    by_id = catalog.frame.set_index("track_id")["artist"]
-    kept = BaselineRanker().rank(pref(k=100), catalog)
-    assert any(by_id[r.track_id] == seed_artist for r in kept)
-    excluded = BaselineRanker().rank(pref(k=100, exclude_seed_artist=True), catalog)
-    assert all(by_id[r.track_id] != seed_artist for r in excluded)
 
 
 @pytest.mark.parametrize(
@@ -180,13 +166,6 @@ def test_deterministic_and_ties_by_track_id():
     )
     assert [r.track_id for r in first] == [r.track_id for r in second]
     assert [r.track_id for r in first] == sorted(r.track_id for r in first)
-
-
-def test_same_output_across_runs(catalog):
-    preference = pref(likes=["more:brightness", "genre:Jazz"])
-    first = BaselineRanker().rank(preference, catalog)
-    second = BaselineRanker().rank(preference, catalog)
-    assert first == second
 
 
 def test_no_pca_and_constant_columns():

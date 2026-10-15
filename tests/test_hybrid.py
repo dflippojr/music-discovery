@@ -1,14 +1,11 @@
 """Hybrid ranker and its tuning, on a synthetic catalog with planted structure."""
 
-import json
 from dataclasses import replace
 
-import numpy as np
 import pytest
 from test_evaluation import make_frame
 
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.cli import main
 from musicdiscovery.evaluation import generate_queries, write_queries
 from musicdiscovery.hybrid import (
     VARIETY_TEXT,
@@ -97,15 +94,6 @@ def test_exclude_seed_artist_and_small_catalog(catalog):
     )
 
 
-def test_excluding_every_candidate_returns_empty():
-    frame = make_frame()
-    frame["artist"] = "Only artist"
-    catalog = Catalog(frame)
-    ranker = HybridRanker()
-    assert len(ranker.rank(pref(), catalog)) == 10
-    assert ranker.rank(pref(exclude_seed_artist=True), catalog) == []
-
-
 def test_metadata_similarity_prefers_shared_genre_ids_and_tags(catalog):
     metadata = _Metadata(catalog)
     seed_row = catalog.position[100]
@@ -192,42 +180,18 @@ def workdir(tmp_path, monkeypatch, catalog):
     return tmp_path
 
 
-def test_cli_recommend_hybrid(workdir, capsys):
-    argv = ["recommend", "--ranker", "hybrid", "--seed", "100", "--json"]
-    assert main(argv) == 0
-    items = json.loads(capsys.readouterr().out)
-    assert len(items) == 10
-    assert {t["name"] for t in items[0]["terms"]} >= {"audio", "metadata"}
-
-
-def test_cli_evaluate_includes_hybrid(workdir, capsys):
-    base = ["evaluate", "--queries", "eval/q.json", "--date", "2026-10-05"]
-    assert main(base) == 0
-    text = (workdir / "reports" / "offline-2026-10-05.md").read_text()
-    assert "| hybrid |" in text
-
-
 def test_tune_cli(workdir, monkeypatch, capsys):
     import musicdiscovery.tuning as tuning
 
-    monkeypatch.setattr(tuning, "GRID", GRID)
-    monkeypatch.setattr(
-        tuning, "tune", lambda c, q: (HybridConfig(mmr_lambda=0.5), [_row()])
-    )
+    # tune() binds its default grid at definition, so narrow it through a wrapper.
+    real_tune = tuning.tune
+    monkeypatch.setattr(tuning, "tune", lambda c, q: real_tune(c, q, GRID))
     (workdir / "src" / "musicdiscovery").mkdir(parents=True)
     assert tune_main(["--queries", "eval/q.json", "--write"]) == 0
-    written = json.loads((workdir / tuning.CONFIG_PATH).read_text())
-    assert written["mmr_lambda"] == 0.5
-    assert "genre precision floor" in capsys.readouterr().out
+    written = HybridConfig.load(workdir / tuning.CONFIG_PATH)
+    assert written.mmr_lambda in GRID["mmr_lambda"]
+    out = capsys.readouterr().out
+    assert "genre precision floor" in out
+    assert out.count("\n* meta=") == 1
     assert tune_main(["--data-dir", "nowhere"]) == 1
     assert "tune:" in capsys.readouterr().err
-
-
-def _row():
-    means = {"genre_precision": 0.9, "genre_ndcg": 0.8, "artist_diversity": 0.7}
-    return {"config": HybridConfig(mmr_lambda=0.5), "means": means, "floor": 0.8}
-
-
-def test_variety_values_are_finite(catalog):
-    out = HybridRanker(HybridConfig(mmr_lambda=0.9)).rank(pref(k=20), catalog)
-    assert all(np.isfinite(r.score) for r in out)

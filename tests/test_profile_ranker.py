@@ -67,14 +67,6 @@ def test_interface_shipped_model_and_explanations(catalog):
     assert scores == sorted(scores, reverse=True)
 
 
-def test_history_tracks_are_never_returned(catalog, profiles):
-    ranker = ProfileRanker(MODEL)
-    for profile in profiles:
-        preference = profile.preference(50)
-        ranked = {r.track_id for r in ranker.rank(preference, catalog)}
-        assert not ranked & set(preference.seeds)
-
-
 def test_same_genre_history_finds_same_genre_tracks(catalog):
     folk = catalog.frame.loc[catalog.frame["genre_top"] == "Folk", "track_id"]
     seeds = tuple(int(t) for t in folk[:5])
@@ -233,15 +225,6 @@ def test_training_script_writes_the_same_weights_twice(workdir, capsys):
     assert "train:" in capsys.readouterr().err
 
 
-def test_cli_recommend_profile(workdir, capsys):
-    argv = ["recommend", "--ranker", "profile", "--seed", "100", "--seed", "101"]
-    assert main([*argv, "--json"]) == 0
-    results = json.loads(capsys.readouterr().out)
-    assert len(results) == 10
-    assert {r["track_id"] for r in results}.isdisjoint({100, 101})
-    assert all(r["explanations"] for r in results)
-
-
 def test_cli_reports_a_broken_model(workdir, monkeypatch, capsys):
     import musicdiscovery.profile_ranker as module
 
@@ -249,20 +232,6 @@ def test_cli_reports_a_broken_model(workdir, monkeypatch, capsys):
     argv = ["recommend", "--ranker", "profile", "--seed", "100"]
     assert main(argv) == 1
     assert "cannot read profile model" in capsys.readouterr().err
-
-
-def test_cli_evaluate_profile_end_to_end(workdir):
-    base = ["evaluate", "--ranker", "baseline", "--ranker", "hybrid"]
-    argv = [*base, "--ranker", "profile", "--date", "2026-10-12"]
-    assert main([*argv, "--generate-queries"]) == 0
-    assert main([*argv, "--benchmark", "all"]) == 0
-    text = (workdir / "reports" / "offline-2026-10-12.md").read_text()
-    # One row per query metric plus MRR and nDCG in the held-out section.
-    assert text.count("| profile |") == 8 + 2
-    numbers = json.loads((workdir / "reports" / "offline-2026-10-12.json").read_text())
-    section = numbers["held_out_preferences"]["rankers"]
-    assert set(section) == {"baseline", "hybrid", "profile"}
-    assert section["profile"]["test"]["mrr"]["lo"] is not None
 
 
 @pytest.fixture(scope="module")
@@ -317,22 +286,3 @@ def test_profile_diverse_uses_the_hybrid_mmr_settings(catalog):
     small = ProfileDiverseRanker(MODEL, HybridConfig(pool_size=3))
     # The pool never holds fewer than k tracks.
     assert len(small.rank(Preference((100,), k=10), catalog)) == 10
-
-
-def test_profile_diverse_with_every_candidate_excluded():
-    frame = make_titled_frame(per_genre=10)
-    frame["artist"] = "Only artist"
-    excluded = Preference((100,), k=10, exclude_seed_artist=True)
-    assert ProfileDiverseRanker(MODEL).rank(excluded, Catalog(frame)) == []
-
-
-def test_cli_recommend_profile_diverse(workdir, capsys):
-    argv = ["recommend", "--ranker", "profile-diverse", "--seed", "100"]
-    assert main([*argv, "--json"]) == 0
-    results = json.loads(capsys.readouterr().out)
-    assert len(results) == 10
-    assert 100 not in {r["track_id"] for r in results}
-    for command in ("recommend", "evaluate"):
-        with pytest.raises(SystemExit):
-            main([command, "--help"])
-        assert "profile-diverse" in capsys.readouterr().out

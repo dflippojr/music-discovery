@@ -310,20 +310,6 @@ def data_dir(tmp_path):
     return tmp_path / "data"
 
 
-def test_cli_generate_then_evaluate(tmp_path, data_dir, capsys):
-    queries = tmp_path / "q.json"
-    base = ["evaluate", "--data-dir", str(data_dir), "--queries", str(queries)]
-    assert main([*base, "--generate-queries"]) == 0
-    assert queries.exists()
-    out = tmp_path / "reports"
-    rankers = ["--ranker", "baseline", "--ranker", "random"]
-    argv = [*base, "--out-dir", str(out), "--date", "2026-10-05", *rankers]
-    assert main(argv) == 0
-    assert (out / "offline-2026-10-05.md").exists()
-    assert (out / "offline-2026-10-05.json").exists()
-    assert "wrote" in capsys.readouterr().out
-
-
 @pytest.mark.parametrize("extra", [["--date", "tomorrow"], []])
 def test_cli_errors(tmp_path, data_dir, capsys, extra):
     missing = str(tmp_path / "none.json")
@@ -704,7 +690,7 @@ def test_split_needs_a_strong_play_on_each_side():
         _split(np.random.default_rng(0), weak)
 
 
-def test_cli_profile_benchmark_end_to_end(tmp_path, data_dir):
+def test_cli_profile_benchmark_end_to_end(tmp_path, data_dir, capsys):
     out = tmp_path / "reports"
     base = [
         "evaluate",
@@ -719,17 +705,24 @@ def test_cli_profile_benchmark_end_to_end(tmp_path, data_dir):
         "--ranker",
         "baseline",
         "--ranker",
+        "hybrid",
+        "--ranker",
+        "profile",
+        "--ranker",
         "random",
     ]
     assert main([*base, "--generate-queries"]) == 0
     assert main([*base, "--generate-profiles"]) == 0
 
     assert main([*base, "--date", "2026-10-01", "--benchmark", "profiles"]) == 0
+    assert "wrote" in capsys.readouterr().out
     text = (out / "offline-2026-10-01.md").read_text()
     assert "## Held-out preferences" in text
     assert "### MRR@10" in text
     assert "### nDCG@10" in text
     assert text.count("| baseline |") == 2
+    assert "| hybrid |" in text
+    assert text.count("| profile |") == 2
     assert f"below {WEAK_SIGNAL_THRESHOLD} are dropped" in text
     assert f"profile seed {PROFILE_SEED}" in text
     assert "Synthetic tastes reward rankers that share the generator's" in text
@@ -740,11 +733,15 @@ def test_cli_profile_benchmark_end_to_end(tmp_path, data_dir):
     assert section["profiles_path"] == "p.json"
     assert len(section["profiles_sha256"]) == 64
     assert "queries" not in numbers
+    assert set(section["rankers"]) == {"baseline", "random", "hybrid", "profile"}
+    assert section["rankers"]["profile"]["test"]["mrr"]["lo"] is not None
 
     assert main([*base, "--date", "2026-10-02", "--benchmark", "all"]) == 0
     text = (out / "offline-2026-10-02.md").read_text()
     assert "## Same-genre rate@10" in text
     assert text.index("## Held-out preferences") < text.index("## Limits")
+    # One row per query metric plus MRR and nDCG in the held-out section.
+    assert text.count("| profile |") == 8 + 2
     both = json.loads((out / "offline-2026-10-02.json").read_text())
     assert both["held_out_preferences"]["rankers"] == section["rankers"]
 
