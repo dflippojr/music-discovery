@@ -19,7 +19,7 @@ from musicdiscovery.audio_embedding import (
     embed_archive,
 )
 from musicdiscovery.catalog import Catalog, CatalogError
-from musicdiscovery.demo import TARGET_BYTES, DemoError, export_demo
+from musicdiscovery.demo import SOURCE_FILE, TARGET_BYTES, DemoError, export_demo
 from musicdiscovery.evaluation import (
     BENCHMARKS,
     DEFAULT_PROFILES,
@@ -170,7 +170,7 @@ def _run_embed_audio(args: argparse.Namespace) -> int:
 def _run_export_demo(args: argparse.Namespace) -> int:
     try:
         catalog = Catalog.load(args.data_dir / "catalog" / CATALOG_NAME)
-        size = export_demo(catalog, args.out_dir)
+        size = export_demo(catalog, args.out_dir, release=args.release)
     except (CatalogError, DemoError, EvaluationError, OSError) as error:
         print(f"export-demo: {error}", file=sys.stderr)
         return 1
@@ -188,6 +188,8 @@ def _run_export_demo(args: argparse.Namespace) -> int:
         f"export-demo: first load {size.initial / 1024:.1f} KiB compressed, "
         f"deferred {size.deferred / 1024:.1f} KiB"
     )
+    source = json.loads((args.out_dir / SOURCE_FILE).read_text(encoding="utf-8"))
+    print(f"export-demo: stamped {SOURCE_FILE} with {source['sha']}")
     if size.compressed >= TARGET_BYTES:
         print("export-demo: bundle is over the size target", file=sys.stderr)
         return 1
@@ -332,6 +334,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     export.add_argument("out_dir", type=Path, help="directory to write the bundle to")
     export.add_argument("--data-dir", type=Path, default=Path("data"))
+    export.add_argument(
+        "--release",
+        action="store_true",
+        help="refuse to export from a work tree with uncommitted changes",
+    )
 
     study = subparsers.add_parser(
         "analyze-study",

@@ -43,6 +43,7 @@ def test_export_writes_every_file(bundle):
         demo.CATALOG_FILE,
         demo.SOURCES_FILE,
         demo.PARITY_FILE,
+        demo.SOURCE_FILE,
     ):
         assert (out / name).is_file()
     assert set(size.files) == {
@@ -52,6 +53,44 @@ def test_export_writes_every_file(bundle):
     }
     assert size.initial + size.deferred == size.compressed
     assert 0 < size.compressed < size.raw < demo.TARGET_BYTES
+
+
+def test_bundle_is_stamped_with_the_checked_out_commit(bundle):
+    source = json.loads((bundle[0] / demo.SOURCE_FILE).read_text())
+    head = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert source["repo"] == "dflippojr/music-discovery"
+    assert source["sha"] in (head, head + "-dirty")
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", source["built"])
+    assert source["paths"] == ["src/musicdiscovery", "scripts/vendor-into-site"]
+    assert all((ROOT / path).exists() for path in source["paths"])
+
+
+def fake_git(monkeypatch, status):
+    answers = {"rev-parse": "a" * 40, "status": status}
+    monkeypatch.setattr(demo, "_git", lambda *args: answers[args[0]])
+
+
+def test_dirty_tree_marks_the_sha_and_blocks_a_release(monkeypatch):
+    fake_git(monkeypatch, "")
+    assert demo.build_source(release=True)["sha"] == "a" * 40
+    fake_git(monkeypatch, " M src/musicdiscovery/demo.py")
+    assert demo.build_source()["sha"] == "a" * 40 + "-dirty"
+    with pytest.raises(demo.DemoError, match="uncommitted changes"):
+        demo.build_source(release=True)
+
+
+def test_stamp_needs_a_git_checkout(monkeypatch):
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(demo.subprocess, "run", no_git)
+    with pytest.raises(demo.DemoError, match="git checkout"):
+        demo.build_source()
 
 
 def test_catalog_arrays_line_up(bundle, catalog):
@@ -112,6 +151,19 @@ def test_cli_exports_and_reports_size(tmp_path, capsys, monkeypatch):
     said = capsys.readouterr().out
     assert "KiB compressed" in said and "catalog.json" in said
     assert (out / "catalog.json").is_file()
+    assert "stamped SOURCE.json with " in said
+
+
+def test_cli_release_refuses_a_dirty_tree(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data" / "catalog"
+    data.mkdir(parents=True)
+    make_frame(per_genre=60).to_parquet(data / "catalog.parquet", index=False)
+    fake_git(monkeypatch, " M README.md")
+    argv = ["export-demo", str(tmp_path / "o"), "--data-dir", str(tmp_path / "data")]
+    assert main([*argv, "--release"]) == 1
+    assert "uncommitted changes" in capsys.readouterr().err
+    assert not (tmp_path / "o").exists()
 
 
 def test_cli_refuses_to_write_outside_the_working_directory(
@@ -158,21 +210,49 @@ def test_table_and_text_helpers():
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX shell")
-def test_vendor_script_copies_runtime_files(bundle, tmp_path):
+def test_vendor_script_copies_runtime_files_and_the_stamp(bundle, tmp_path):
     script = ROOT / "scripts" / "vendor-into-site"
+    source = tmp_path / "bundle"
+    shutil.copytree(bundle[0], source)
+    stamp = {
+        "repo": demo.SOURCE_REPO,
+        "sha": "0123456789abcdef0123456789abcdef01234567",
+        "built": "2026-10-16T09:30:00Z",
+        "paths": list(demo.SOURCE_PATHS),
+    }
+    (source / demo.SOURCE_FILE).write_text(json.dumps(stamp, indent=2) + "\n")
+
+    def vendor(bundle_dir, target):
+        return subprocess.run(
+            ["sh", str(script), str(bundle_dir), str(target)],
+            capture_output=True,
+            text=True,
+        )
+
     target = tmp_path / "site" / "demo"
-    run = subprocess.run(
-        ["sh", str(script), str(bundle[0]), str(target)], capture_output=True, text=True
-    )
+    run = vendor(source, target)
     assert run.returncode == 0, run.stderr
+    assert stamp["sha"] in run.stdout
     assert sorted(p.name for p in target.iterdir()) == sorted(
-        [*demo.STATIC_FILES, demo.CATALOG_FILE, demo.SOURCES_FILE]
+        [*demo.STATIC_FILES, demo.CATALOG_FILE, demo.SOURCE_FILE, demo.SOURCES_FILE]
     )
-    empty = subprocess.run(
-        ["sh", str(script), str(tmp_path), str(tmp_path / "t")],
-        capture_output=True,
-        text=True,
-    )
+    vendored = json.loads((target / demo.SOURCE_FILE).read_text())
+    assert list(vendored) == ["repo", "sha", "vendored", "paths"]
+    assert {k: vendored[k] for k in ("repo", "sha", "paths")} == {
+        k: stamp[k] for k in ("repo", "sha", "paths")
+    }
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", vendored["vendored"])
+
+    stamp["sha"] += "-dirty"
+    (source / demo.SOURCE_FILE).write_text(json.dumps(stamp, indent=2) + "\n")
+    dirty = vendor(source, tmp_path / "dirty")
+    assert dirty.returncode == 1 and "--release" in dirty.stderr
+    assert not (tmp_path / "dirty").exists()
+
+    (source / demo.SOURCE_FILE).unlink()
+    unstamped = vendor(source, tmp_path / "unstamped")
+    assert unstamped.returncode == 1 and "SOURCE.json is missing" in unstamped.stderr
+    empty = vendor(tmp_path / "nothing", tmp_path / "t")
     assert empty.returncode == 1 and "missing" in empty.stderr
     usage = subprocess.run(["sh", str(script)], capture_output=True, text=True)
     assert usage.returncode == 2
