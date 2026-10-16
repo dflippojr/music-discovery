@@ -45,6 +45,17 @@ from musicdiscovery.study import run as run_study
 MAX_REPORTED_LINES = 20
 
 
+def positive_int(text: str) -> int:
+    """Parse an argparse value that must be a whole number of at least 1."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} must be at least 1")
+    return value
+
+
 def _run_ingest(data_dir: Path) -> int:
     try:
         result = ingest(data_dir)
@@ -281,7 +292,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recommend.add_argument("--vectors", type=Path, default=DEFAULT_VECTORS)
     recommend.add_argument(
-        "--threads", type=int, default=4, help="CPU threads for --describe"
+        "--threads",
+        type=positive_int,
+        default=4,
+        help="CPU threads for --describe, at least 1 (default: 4)",
     )
     recommend.add_argument("--json", action="store_true", help="print JSON")
     evaluate = subparsers.add_parser(
@@ -325,8 +339,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--limit", type=int, help="embed a seeded sample of this many tracks"
     )
     embed.add_argument("--sample-seed", type=int, default=0)
-    embed.add_argument("--batch-size", type=int, default=4)
-    embed.add_argument("--threads", type=int, default=4, help="CPU threads")
+    embed.add_argument(
+        "--batch-size",
+        type=positive_int,
+        default=4,
+        help="clips per encoder call, at least 1 (default: 4)",
+    )
+    embed.add_argument(
+        "--threads",
+        type=positive_int,
+        default=4,
+        help="CPU threads, at least 1 (default: 4)",
+    )
     export = subparsers.add_parser(
         "export-demo", help="Write the static demo bundle for the browser"
     )

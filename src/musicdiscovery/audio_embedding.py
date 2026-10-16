@@ -66,6 +66,8 @@ class SentenceTransformerEncoder:
     """
 
     def __init__(self, model_id: str = MODEL_ID, threads: int = 4):
+        if threads < 1:
+            raise AudioEmbeddingError("threads must be at least 1")
         try:
             import torch
             from sentence_transformers import SentenceTransformer
@@ -235,6 +237,8 @@ def embed_archive(
     failure and the run goes on. Both paths must be inside the working
     directory.
     """
+    if batch_size < 1:
+        raise AudioEmbeddingError("batch_size must be at least 1")
     archive, out = confined(archive), confined(out)
     if not archive.exists():
         raise AudioEmbeddingError(f"no audio archive at {archive}")
