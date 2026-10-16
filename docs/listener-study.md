@@ -136,5 +136,6 @@ The same text is written into every report.
 1. `musicdiscovery ingest` and `musicdiscovery export-demo build/demo` (see
    [demo.md](demo.md)); serve or vendor the bundle, and give participants the
    address of `study.html`.
-2. Collect the files into `ratings/`.
+2. Collect the files into `ratings/`. Files saved by Windows tools with a UTF-8
+   byte-order mark are accepted.
 3. `musicdiscovery analyze-study ratings` writes the report.

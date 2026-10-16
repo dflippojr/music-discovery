@@ -196,6 +196,14 @@ def test_inconsistent_or_unreadable_files_are_rejected(tmp_path):
         study.load_sessions(folder)
 
 
+def test_a_bom_prefixed_session_file_is_read(tmp_path):
+    folder = tmp_path / "ratings"
+    folder.mkdir()
+    body = json.dumps(make_session(1, ["A"] * 4))
+    (folder / "a.json").write_text("\ufeff" + body, encoding="utf-8")
+    assert len(study.load_sessions(folder)) == 1
+
+
 def test_a_deeply_nested_file_is_rejected_by_name(tmp_path, capsys):
     folder = tmp_path / "r"
     folder.mkdir()
