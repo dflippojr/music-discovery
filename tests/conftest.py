@@ -7,7 +7,7 @@ from hypothesis import HealthCheck, settings
 
 settings.register_profile(
     "ci",
-    max_examples=60,
+    max_examples=100,
     derandomize=True,
     database=None,
     deadline=None,
