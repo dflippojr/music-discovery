@@ -148,7 +148,11 @@ class HybridRanker:
             self._catalog = catalog
         return self._metadata, self._popularity
 
-    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+    def relevance(
+        self, preference: Preference, catalog: Catalog
+    ) -> tuple[list[tuple[str, str, np.ndarray]], np.ndarray, np.ndarray]:
+        """Each score term per track, their sum before MMR, and which tracks may
+        be shown."""
         config = self.config
         base_terms, _, allowed = self._baseline.score_terms(preference, catalog)
         metadata, popularity = self._prepare(catalog)
@@ -172,7 +176,11 @@ class HybridRanker:
             )
         )
         relevance = np.sum([values for _, _, values in terms], axis=0)
+        return terms, relevance, allowed
 
+    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+        config = self.config
+        terms, relevance, allowed = self.relevance(preference, catalog)
         candidates = np.flatnonzero(allowed)
         if not len(candidates):
             return []

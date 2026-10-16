@@ -2,8 +2,9 @@
 
 The catalogs are synthetic: missing or NA top genres, empty or sparse tags,
 duplicate, blank, non-Latin and emoji titles, repeated or constant feature
-rows, catalogs with and without the axis feature columns, and tracks with and
-without a clip vector. The `ci` profile (tests/conftest.py) is derandomized and
+rows, exact twins of a track, catalogs with and without the axis feature
+columns, and tracks with and without a clip vector. The `ci` profile
+(tests/conftest.py) is derandomized and
 bounded; HYPOTHESIS_PROFILE=deep searches further.
 """
 
@@ -29,8 +30,10 @@ from musicdiscovery.audio_embedding import (
 from musicdiscovery.catalog import METADATA_COLUMNS, Catalog
 from musicdiscovery.demo import build_catalog
 from musicdiscovery.evaluation import Query, RandomRanker, evaluate, make_ranker
+from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
 from musicdiscovery.profiles import SPLITS
+from musicdiscovery.ranking import BaselineRanker
 
 GENRES = ("Rock", "Folk", "Hip-Hop", "Électronique", "民谣")
 TAGS = ("loud", "lo-fi", "ambient", "東京", "🎸")
@@ -89,6 +92,9 @@ def frames(draw, axes: bool | None = None) -> pd.DataFrame:
                 **dict(zip(columns, features[i], strict=True)),
             }
         )
+    # Exact twins under new ids: every score ties, so the tie-break shows.
+    for i, source in enumerate(draw(st.lists(st.integers(0, n - 1), max_size=3))):
+        rows.append({**rows[source], "track_id": 1_000_001 + i})
     return pd.DataFrame(rows)
 
 
@@ -273,6 +279,7 @@ def test_evaluate_never_raises_on_missing_metadata(case):
 
 LINE_RANKER = Path(__file__).parent / "demo" / "rank-lines.mjs"
 JS_RANKERS = ("baseline", "hybrid")
+TIE = 1e-9  # scores this close are a tie that float rounding may break either way
 
 
 @pytest.fixture(scope="module")
@@ -315,7 +322,7 @@ def bundled_rankers(catalog: Catalog, bundle: dict) -> dict:
     n, base, meta = bundle["count"], bundle["baseline"], bundle["hybrid"]
     projected = _decoded(base["projected"], "<i2").reshape(n, base["dims"])
     projected *= base["projectedScale"]
-    baseline = make_ranker("baseline")
+    baseline = BaselineRanker()
     fit = baseline._fitted(catalog)
     norms = np.linalg.norm(projected, axis=1)
     norms[norms == 0] = 1.0
@@ -323,7 +330,7 @@ def bundled_rankers(catalog: Catalog, bundle: dict) -> dict:
     axis_z = _decoded(base["axisData"], "<i2").reshape(n, -1) * base["axisScale"]
     for i, axis in enumerate(sorted(AXES)):
         fit.z[:, fit.columns[AXES[axis].column]] = axis_z[:, i]
-    hybrid = make_ranker("hybrid")
+    hybrid = HybridRanker()
     hybrid._baseline = baseline
     metadata, _ = hybrid._prepare(catalog)
     metadata.values = _decoded(meta["values"], "<u2") * meta["valueScale"]
@@ -349,8 +356,21 @@ def test_js_rankers_match_python(case, js_rank):
     )
     for name, got in zip(JS_RANKERS, replies, strict=True):
         assert "error" not in got, (name, got)
-        expected = rankers[name].rank(preference, catalog)
-        assert [r["id"] for r in got] == [r.track_id for r in expected], name
+        ranker = rankers[name]
+        expected = ranker.rank(preference, catalog)
+        assert len(got) == len(expected), name
+        score = ranker.score_terms if name == "baseline" else ranker.relevance
+        terms, scores, _ = score(preference, catalog)
+        rows = np.column_stack([values for *_, values in terms])
         for js, py in zip(got, expected, strict=True):
-            assert js["score"] == pytest.approx(py.score, abs=1e-9), name
+            if js["id"] != py.track_id:
+                # Different terms can sum to scores equal in exact arithmetic
+                # (s + 0.1 - 0.1 against s) that round apart differently in each
+                # language; past such a tie the lists may part ways. Tracks with
+                # identical terms must still go to the lower track id in both.
+                a, b = catalog.position[js["id"]], catalog.position[py.track_id]
+                assert abs(scores[a] - scores[b]) <= TIE, (name, js["id"], py.track_id)
+                assert not np.array_equal(rows[a], rows[b]), name
+                break
+            assert js["score"] == pytest.approx(py.score, abs=TIE), name
             assert tuple(js["explanations"]) == py.explanations, name
