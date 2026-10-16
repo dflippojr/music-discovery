@@ -1,6 +1,7 @@
 // JavaScript port of the baseline and hybrid rankers (src/musicdiscovery/ranking.py
 // and hybrid.py). It reads the bundle written by `musicdiscovery export-demo`.
-// A Node test checks that it returns the same top 10 as Python on fixed queries.
+// A Node test checks that it returns the same top 10 as Python on fixed queries,
+// and tests/test_ranker_contract.py checks it on generated catalogs.
 
 const Z_FALLBACK_AXES = ["brightness", "energy", "noisiness"];
 
@@ -182,8 +183,8 @@ export class Rankers {
   build(row, terms) {
     const parts = terms.map((t) => ({ name: t.name, text: t.text, value: t.values[row] }));
     const ordered = [...parts].sort((a, b) => b.value - a.value);
-    let explained = ordered.filter((t) => t.value > 0).slice(0, this.data.baseline.maxExplanations);
-    if (!explained.length) explained = ordered.slice(0, 1);
+    // Only terms that raised the score explain it, as in Python.
+    const explained = ordered.filter((t) => t.value > 0).slice(0, this.data.baseline.maxExplanations);
     return {
       row,
       id: this.data.ids[row],
@@ -196,6 +197,8 @@ export class Rankers {
 
   rankBaseline(preference, k) {
     const { terms, allowed } = this.scoreTerms(preference);
+    // No feature signal and nothing asked for: return nothing, as in Python.
+    if (terms.length === 1 && terms[0].values.every((v) => v === 0)) return [];
     const scores = sumTerms(terms, this.n);
     const candidates = [];
     for (let row = 0; row < this.n; row += 1) if (allowed[row]) candidates.push(row);
