@@ -19,6 +19,7 @@ from musicdiscovery.evaluation import (
     Query,
     RandomRanker,
     _bare,
+    catalog_version,
     evaluate,
     evaluate_profiles,
     generate_queries,
@@ -280,6 +281,25 @@ def test_report_has_tables_limits_and_version(tmp_path, catalog, queries):
     assert numbers["catalog"]["ingest_version"] == 1
     assert len(numbers["queries_sha256"]) == 64
     assert set(numbers["rankers"]) == {"baseline", "random", "popular"}
+
+
+@pytest.mark.parametrize("body", ["[]", "null", '"abc"', "5", "{not json"])
+def test_a_damaged_manifest_is_reported_not_a_crash(tmp_path, catalog, body):
+    manifest = tmp_path / "catalog.json"
+    manifest.write_text(body, encoding="utf-8")
+    with pytest.raises(EvaluationError, match="catalog.json"):
+        catalog_version(manifest, catalog)
+
+
+def test_cli_reports_a_damaged_manifest(tmp_path, data_dir, catalog, queries, capsys):
+    path = tmp_path / "queries.json"
+    write_queries(path, queries, catalog)
+    (data_dir / "catalog" / "catalog.json").write_text("[]", encoding="utf-8")
+    argv = ["evaluate", "--data-dir", str(data_dir), "--queries", str(path)]
+    assert main([*argv, "--ranker", "baseline"]) == 1
+    err = capsys.readouterr().err
+    assert "catalog.json is not an ingest manifest" in err
+    assert "Traceback" not in err
 
 
 def test_render_handles_missing_values():
