@@ -105,7 +105,7 @@ def test_first_explanation_is_largest_term(catalog):
         assert item.score == pytest.approx(sum(t.value for t in item.terms))
 
 
-def test_explanation_fallback_when_nothing_positive(catalog):
+def test_no_explanation_when_nothing_positive(catalog):
     results = BaselineRanker().rank(
         pref(
             dislikes=["genre:Rock", "genre:Jazz", "genre:Folk"],
@@ -113,7 +113,9 @@ def test_explanation_fallback_when_nothing_positive(catalog):
         ),
         catalog,
     )
-    assert all(r.explanations for r in results)
+    unexplained = [r for r in results if not any(t.value > 0 for t in r.terms)]
+    assert unexplained and all(not r.explanations for r in unexplained)
+    assert all(r.explanations for r in results if r not in unexplained)
 
 
 @pytest.mark.parametrize(("field", "sign"), [("likes", 1), ("dislikes", -1)])

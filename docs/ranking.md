@@ -53,13 +53,18 @@ there is no "slower" axis.
 Score is the sum of the terms. Seed tracks are never returned; with
 `--exclude-seed-artist` neither is any track by a seed artist. Ties go to the
 lower track id. The ranker has no randomness, so equal input gives equal output.
+If the seeds' features sit at the catalog mean (for example, every track has the
+same features) and nothing is liked or disliked, no term tells tracks apart, so
+the ranker returns an empty list instead of the lowest track ids.
 
 ## Explanations
 
 Each recommendation carries its score terms. Its explanations are the texts of
 the top three positive terms, largest first, for example `similar sound to the
-seed`, `same genre: Folk`, `more energetic, as asked`. If no term is positive,
-the largest term is used, so every result has at least one explanation. The
+seed`, `same genre: Folk`, `more energetic, as asked`. If no term is positive
+(a track that sounds unlike the seed and matches nothing asked for, which only
+a small catalog runs down to), the result has no explanation rather than an
+untrue one. The
 demo page can also show every term of a result with its signed contribution
 ([demo.md](demo.md#score-detail)).
 
