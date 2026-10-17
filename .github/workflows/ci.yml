@@ -9,8 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  # Linux and Windows, because the owner and workers develop on Windows and
+  # #87 and #28 were Windows-only. The Windows leg's pytest run includes the
+  # launcher lifecycle on real sockets (tests/test_ui_lifecycle.py).
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -27,11 +35,25 @@ jobs:
       - name: Test with coverage
         run: pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
       - name: Upload Python coverage for SonarCloud
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: error
+      # The console smoke keeps the runner's default encoding. Setting
+      # PYTHONIOENCODING or PYTHONUTF8 here would hide #28's class of crash.
+      - name: Build a catalog with titles a legacy console cannot encode
+        if: runner.os == 'Windows'
+        run: python scripts/build_console_catalog.py data/console-smoke
+      - name: Check the console is not UTF-8, so the smoke can catch a crash
+        if: runner.os == 'Windows'
+        # A block scalar, so YAML does not read " #28" below as a comment.
+        run: |
+          python -c "import sys; e = sys.stdout.encoding; print('stdout encoding:', e); sys.exit('::error::stdout is UTF-8, so the smoke cannot catch #28' if e.lower() == 'utf-8' else 0)"
+      - name: Recommend from that catalog to the runner's console
+        if: runner.os == 'Windows'
+        run: musicdiscovery recommend --data-dir data/console-smoke --seed 100 -k 5
 
   demo:
     runs-on: ubuntu-latest
@@ -112,7 +134,8 @@ jobs:
           if-no-files-found: ignore
 
   # The single check to require. It always runs and passes only when every job
-  # above passed, so a failed, cancelled or skipped job turns it red.
+  # above passed, both test legs included, so a failed, cancelled or skipped
+  # job turns it red.
   gate:
     name: gate
     needs: [test, demo, ui]

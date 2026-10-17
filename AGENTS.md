@@ -32,6 +32,9 @@ so local runs and CI use the same floor.
   ruff check .
   ruff format --check .
   pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
+  # test, Windows only: recommend to a console at its default encoding
+  python scripts/build_console_catalog.py data/console-smoke
+  musicdiscovery recommend --data-dir data/console-smoke --seed 100 -k 5
   # demo
   python scripts/build_demo_fixture.py .demo-fixture
   npm run test:parity
@@ -72,7 +75,12 @@ A failure prints the shrunk catalog and query, plus a `@reproduce_failure`
 line that replays it.
 
 Use `ruff format .` to format code. The package uses the `src/` layout;
-tests require an installed package. CI runs these checks on Python 3.12.
+tests require an installed package. CI runs these checks on Python 3.12. The
+`test` job runs on both Linux and Windows; `demo` and `ui` run on Linux only.
+On Windows, CI leaves the console at the runner's default encoding, so do not
+set `PYTHONIOENCODING` or `PYTHONUTF8` in `ci.yml` to make a failure go away.
+`tests/test_ui_lifecycle.py` starts two real launchers on one port and stops
+one, so #87's class of bug fails on the Windows leg.
 
 Never commit datasets or audio, whether raw or generated. Keep datasets under
 the ignored `data/` directory. Tests must use synthetic fixtures only and must

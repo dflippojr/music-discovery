@@ -23,6 +23,14 @@ job_test() {
   run ruff check .
   run ruff format --check .
   run pytest --cov=musicdiscovery --cov-report=term-missing --cov-report=xml:coverage.xml
+  # CI runs the console smoke on its Windows leg only, at the default encoding.
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      run python scripts/build_console_catalog.py data/console-smoke
+      run python -c "import sys; e = sys.stdout.encoding; print('stdout encoding:', e); sys.exit('stdout is UTF-8, so the smoke cannot catch #28' if e.lower() == 'utf-8' else 0)"
+      run musicdiscovery recommend --data-dir data/console-smoke --seed 100 -k 5
+      ;;
+  esac
 }
 
 job_demo() {

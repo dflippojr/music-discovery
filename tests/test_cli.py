@@ -2,9 +2,8 @@
 
 import shutil
 import subprocess
-import sys
+import sysconfig
 from importlib.metadata import version
-from pathlib import Path
 
 import pytest
 
@@ -12,7 +11,8 @@ from musicdiscovery.cli import main
 
 
 def test_installed_version():
-    script = shutil.which("musicdiscovery", path=str(Path(sys.executable).parent))
+    # Not next to sys.executable: a Windows install outside a venv puts it in Scripts.
+    script = shutil.which("musicdiscovery", path=sysconfig.get_path("scripts"))
     assert script is not None
     result = subprocess.run(
         [script, "--version"], capture_output=True, text=True, check=True
