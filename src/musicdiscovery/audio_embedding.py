@@ -159,6 +159,8 @@ class VectorStore:
             raise AudioEmbeddingError("vector cache has duplicate track ids")
         if not np.all(np.isfinite(self.vectors)):
             raise AudioEmbeddingError("vector cache has non-finite values")
+        if not isinstance(self.meta, dict):
+            raise AudioEmbeddingError("vector cache meta is not a JSON object")
 
     @property
     def failures(self) -> dict[str, str]:
@@ -186,7 +188,10 @@ class VectorStore:
                 f"no audio vectors at {path}; run `musicdiscovery embed-audio`"
             )
         try:
-            with np.load(path, allow_pickle=False) as data:
+            loaded = np.load(path, allow_pickle=False)
+            if not isinstance(loaded, np.lib.npyio.NpzFile):
+                raise ValueError("not an .npz archive")
+            with loaded as data:
                 return cls(
                     data["track_ids"], data["vectors"], json.loads(str(data["meta"]))
                 )

@@ -61,7 +61,12 @@ class _Fit:
         x = catalog.features
         mean = x.mean(axis=0)
         std = x.std(axis=0)
-        std[std == 0] = 1.0
+        # A constant column standardises to exactly zero; its float mean can be
+        # off by rounding, which would scale that error up to a unit of noise.
+        constant = (x == x[:1]).all(axis=0)
+        if len(x):
+            mean[constant] = x[0, constant]
+        std[constant] = 1.0
         self.z = np.clip((x - mean) / std, -_FEATURE_CLIP, _FEATURE_CLIP)
         self.columns = {c: i for i, c in enumerate(catalog.feature_columns)}
         dims = min(dimensions, *self.z.shape)
@@ -141,6 +146,10 @@ class BaselineRanker:
 
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
         terms, scores, allowed = self.score_terms(preference, catalog)
+        if len(terms) == 1 and not terms[0][2].any():
+            # The seeds' features say nothing (they sit at the catalog mean)
+            # and nothing is liked or disliked: return nothing, not the lowest ids.
+            return []
         candidates = np.flatnonzero(allowed)
         # Highest score first; ties go to the lower track id.
         order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
@@ -172,9 +181,9 @@ class BaselineRanker:
             ScoreTerm(name, float(values[row]), text) for name, text, values in terms
         )
         ordered = sorted(parts, key=lambda t: -t.value)
+        # Only terms that raised the score explain it; a track that nothing in
+        # the query favours gets no explanation rather than an untrue one.
         explained = [t for t in ordered if t.value > 0][:_MAX_EXPLANATIONS]
-        if not explained:
-            explained = ordered[:1]
         frame = catalog.frame
         track_id = int(catalog.track_ids[row])
         return Recommendation(

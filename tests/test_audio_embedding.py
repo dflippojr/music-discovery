@@ -283,6 +283,20 @@ def test_vector_store_load_errors(tmp_path):
         VectorStore.load(bad)
 
 
+def test_vector_store_rejects_a_plain_npy_and_a_non_object_meta(tmp_path):
+    npy = tmp_path / "v.npz"
+    np.save(npy, np.eye(2, 6, dtype=np.float32))  # writes v.npz.npy
+    (tmp_path / "v.npz.npy").replace(npy)
+    with pytest.raises(AudioEmbeddingError, match="cannot read"):
+        VectorStore.load(npy)
+    bad_meta = tmp_path / "m.npz"
+    np.savez(
+        bad_meta, track_ids=np.array([1]), vectors=np.eye(1, 4), meta=np.array('["x"]')
+    )
+    with pytest.raises(AudioEmbeddingError, match="meta"):
+        VectorStore.load(bad_meta)
+
+
 # --- the encoder --------------------------------------------------------------
 
 
@@ -464,6 +478,10 @@ def test_recommend_with_the_audio_embedding_ranker(catalog, capsys, monkeypatch)
     assert "--describe needs" in capsys.readouterr().err
     assert main([*args, "--vectors", "data/none.npz"]) == 1
     assert "no audio vectors" in capsys.readouterr().err
+    np.save(Path("data") / "plain.npy", np.eye(2, 6, dtype=np.float32))
+    (Path("data") / "plain.npy").replace(Path("data") / "plain.npz")
+    assert main([*args, "--vectors", "data/plain.npz"]) == 1
+    assert "cannot read audio vectors" in capsys.readouterr().err
 
 
 def test_recommend_without_a_seed_vector_says_so(catalog, capsys):
@@ -495,6 +513,14 @@ def test_embed_audio_command(catalog, capsys, monkeypatch):
     assert "embedded 59 of 60 tracks, 1 failed, 0 already done" in out
     assert main([*command, "--archive", "data/none.zip"]) == 1
     assert "no audio archive" in capsys.readouterr().err
+    np.savez(
+        Path("data") / "list-meta.npz",
+        track_ids=np.array([1]),
+        vectors=np.eye(1, 4),
+        meta=np.array('["x"]'),
+    )
+    assert main([*command[:-1], "data/list-meta.npz"]) == 1
+    assert "meta is not a JSON object" in capsys.readouterr().err
 
 
 def test_embed_audio_rejects_non_positive_batch_size_and_threads(

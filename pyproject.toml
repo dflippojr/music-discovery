@@ -13,7 +13,7 @@ dependencies = ["numpy>=1.26", "pandas>=2.2", "pyarrow>=17", "jsonschema>=4.18"]
 
 [project.optional-dependencies]
 audio = ["sentence-transformers>=6.1", "torch>=2.6", "pillow>=10", "av>=14"]
-dev = ["pytest>=8", "pytest-cov>=6", "ruff>=0.9", "psutil>=6", "av>=14"]
+dev = ["pytest>=8", "pytest-cov>=6", "hypothesis>=6.100", "ruff>=0.9", "psutil>=6", "av>=14"]
 
 [project.scripts]
 musicdiscovery = "musicdiscovery.cli:main"
@@ -27,6 +27,10 @@ musicdiscovery = ["hybrid_config.json", "profile_ranker.json", "study-ratings.sc
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"
+
+[tool.coverage.report]
+# Coverage measured 99% when this floor was set; the floor is one point below.
+fail_under = 98
 
 [tool.ruff]
 target-version = "py312"

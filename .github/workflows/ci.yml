@@ -50,6 +50,11 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Build the demo bundle from the synthetic catalog
         run: python scripts/build_demo_fixture.py .demo-fixture
+      - name: Check the bundle is stamped with the commit under test
+        run: |
+          sha=$(python -c 'import json; print(json.load(open(".demo-fixture/SOURCE.json"))["sha"])')
+          echo "SOURCE.json sha: $sha"
+          test "$sha" = "$GITHUB_SHA"
       - name: Install browser test tools
         run: |
           npm ci
@@ -105,3 +110,22 @@ jobs:
             playwright-report/
             test-results/
           if-no-files-found: ignore
+
+  # The single check to require. It always runs and passes only when every job
+  # above passed, so a failed, cancelled or skipped job turns it red.
+  gate:
+    name: gate
+    needs: [test, demo, ui]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every CI job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          failed=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')
+          if [ -n "$failed" ]; then
+            echo "::error::These CI jobs did not pass: $failed"
+            exit 1
+          fi

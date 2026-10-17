@@ -672,7 +672,17 @@ def catalog_version(manifest_path: Path | None, catalog: Catalog) -> dict:
     """What the report says about the catalog, from ingest's manifest if present."""
     info: dict = {"dataset": DATASET_VERSION, "tracks": len(catalog)}
     if manifest_path is not None and manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise EvaluationError(
+                f"cannot read ingest manifest {manifest_path} ({error})"
+            ) from error
+        if not isinstance(manifest, dict):
+            raise EvaluationError(
+                f"{manifest_path} is not an ingest manifest (expected a JSON object); "
+                "run `musicdiscovery ingest` again"
+            )
         info["ingest_version"] = manifest.get("ingest_version")
         info["source_sha1"] = manifest.get("source_sha1")
         info["subset"] = manifest.get("subset")
