@@ -48,7 +48,9 @@ jobs:
         run: python scripts/build_console_catalog.py data/console-smoke
       - name: Check the console is not UTF-8, so the smoke can catch a crash
         if: runner.os == 'Windows'
-        run: python -c "import sys; e = sys.stdout.encoding; print('stdout encoding:', e); sys.exit('::error::stdout is UTF-8, so the smoke cannot catch #28' if e.lower() == 'utf-8' else 0)"
+        # A block scalar, so YAML does not read " #28" below as a comment.
+        run: |
+          python -c "import sys; e = sys.stdout.encoding; print('stdout encoding:', e); sys.exit('::error::stdout is UTF-8, so the smoke cannot catch #28' if e.lower() == 'utf-8' else 0)"
       - name: Recommend from that catalog to the runner's console
         if: runner.os == 'Windows'
         run: musicdiscovery recommend --data-dir data/console-smoke --seed 100 -k 5
