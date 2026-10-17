@@ -16,9 +16,11 @@ permissions:
   contents: read
   pull-requests: read
 
+# A new push cancels a superseded PR run. Runs on main are never cancelled, so
+# every merge is analysed even when several land together.
 concurrency:
   group: sonar-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   sonar:
