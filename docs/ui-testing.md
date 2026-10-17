@@ -7,7 +7,7 @@ Contract version: 1
 Target: music-discovery's static recommendation demo and blind listener study.
 Only http://127.0.0.1:4173 is allowed. Never attach to an existing instance.
 The launcher binds loopback exclusively before generating a fresh synthetic
-catalog with scripts/build_demo_fixture.py (450 made-up tracks, IDs 100–549).
+catalog with scripts/build_demo_fixture.py --no-shape (450 made-up tracks, IDs 100–549).
 Data stays in ignored data/ui-testing/run-<random>/; its owned process handle
 is data/ui-testing/instance.json. No catalog data or audio is downloaded.
 The pages have no backend, accounts, telemetry, email, payments, webhooks or

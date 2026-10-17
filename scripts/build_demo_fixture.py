@@ -1,11 +1,12 @@
 """Write a demo bundle from a synthetic catalog, for the browser and Node tests.
 
-Usage: python scripts/build_demo_fixture.py <out_dir>
+Usage: python scripts/build_demo_fixture.py [--no-shape] <out_dir>
 
 The catalog is made up (see tests/test_evaluation.py); no dataset is read.
 A second catalog shaped like the real one (tests/catalog_factory.py) is
 exported to <out_dir>/shape and its exclusion cases go in exclusion.json, so the
 parity test also runs on missing genres, sparse tags and non-Latin titles.
+--no-shape skips it and keeps <out_dir> flat (the disposable UI instance).
 """
 
 import json
@@ -53,6 +54,9 @@ SHAPE_TRACKS = 400
 
 
 def main(argv: list[str]) -> int:
+    shape = argv[1:2] != ["--no-shape"]
+    if not shape:
+        argv = [argv[0], *argv[2:]]
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
@@ -64,12 +68,16 @@ def main(argv: list[str]) -> int:
     cases = {"repeated": exclusion_cases(Catalog(frame))}
     frame["artist"] = "Only artist"
     cases["one_artist"] = exclusion_cases(Catalog(frame))
-    shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
-    shape_size = export_demo(shaped, Path(argv[1]) / "shape")
-    cases["shape"] = exclusion_cases(shaped)
+    if shape:
+        shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
+        shape_size = export_demo(shaped, Path(argv[1]) / "shape")
+        cases["shape"] = exclusion_cases(shaped)
     (Path(argv[1]) / "exclusion.json").write_text(json.dumps(cases), encoding="utf-8")
     print(f"wrote {argv[1]}: {size.raw} bytes, {size.compressed} bytes gzip")
-    print(f"wrote {argv[1]}/shape: {shape_size.raw} bytes from {SHAPE_TRACKS} tracks")
+    if shape:
+        print(
+            f"wrote {argv[1]}/shape: {shape_size.raw} bytes from {SHAPE_TRACKS} tracks"
+        )
     return 0
 
 
