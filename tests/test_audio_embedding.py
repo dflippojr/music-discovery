@@ -220,6 +220,23 @@ def test_embed_archive_refuses_wrong_or_missing_inputs(tmp_path, catalog):
         embed_archive(catalog, archive, out, other, expected_sha1=None)
 
 
+def test_embed_archive_refuses_a_non_positive_batch_size(tmp_path, catalog):
+    archive = write_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    for batch_size in (0, -1):
+        with pytest.raises(AudioEmbeddingError, match="batch_size must be at least 1"):
+            embed_archive(
+                catalog,
+                archive,
+                out,
+                FakeEncoder(),
+                batch_size=batch_size,
+                expected_sha1=None,
+                decode=fake_decode,
+            )
+    assert not out.exists()
+
+
 def test_decode_clip_resamples_to_16k_mono():
     pytest.importorskip("av")
     rate, seconds = 44_100, 1.5
@@ -287,6 +304,14 @@ def test_encoder_without_the_audio_extra(monkeypatch):
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
     with pytest.raises(AudioEmbeddingError, match="audio extra"):
         SentenceTransformerEncoder()
+
+
+def test_encoder_refuses_non_positive_threads(monkeypatch):
+    torch = types.SimpleNamespace(set_num_threads=pytest.fail)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    for threads in (0, -1):
+        with pytest.raises(AudioEmbeddingError, match="threads must be at least 1"):
+            SentenceTransformerEncoder(threads=threads)
 
 
 def test_encoder_settings_and_calls(monkeypatch):
@@ -483,7 +508,7 @@ def test_embed_audio_command(catalog, capsys, monkeypatch):
     )
     monkeypatch.setattr(cli, "embed_archive", fake_embed)
     command = ["embed-audio", "--archive", "data/audio.zip", "--vectors", "data/v.npz"]
-    assert main(command) == 0
+    assert main([*command, "--batch-size", "2", "--threads", "1"]) == 0
     out = capsys.readouterr().out
     assert "embedded 59 of 60 tracks, 1 failed, 0 already done" in out
     assert main([*command, "--archive", "data/none.zip"]) == 1
@@ -496,3 +521,35 @@ def test_embed_audio_command(catalog, capsys, monkeypatch):
     )
     assert main([*command[:-1], "data/list-meta.npz"]) == 1
     assert "meta is not a JSON object" in capsys.readouterr().err
+
+
+def test_embed_audio_rejects_non_positive_batch_size_and_threads(
+    catalog, capsys, monkeypatch
+):
+    write_catalog(catalog)
+    write_archive(Path("data") / "audio.zip", catalog)
+
+    def fake_embed(*args, **kwargs):
+        return embed_archive(*args, **kwargs, expected_sha1=None, decode=fake_decode)
+
+    monkeypatch.setattr(
+        cli, "SentenceTransformerEncoder", lambda threads: FakeEncoder()
+    )
+    monkeypatch.setattr(cli, "embed_archive", fake_embed)
+    command = ["embed-audio", "--archive", "data/audio.zip", "--vectors", "data/v.npz"]
+    recommend = ["recommend", "--seed", "100", "--ranker", "audio-embedding"]
+    cases = [
+        [*command, "--batch-size"],
+        [*command, "--threads"],
+        [*recommend, "--describe", "Rock", "--threads"],
+    ]
+    for args in cases:
+        for value in ("0", "-1", "two"):
+            with pytest.raises(SystemExit) as info:
+                main([*args, value])
+            assert info.value.code == 2
+            err = capsys.readouterr().err
+            assert f"argument {args[-1]}: '{value}'" in err
+            if value != "two":
+                assert "must be at least 1" in err
+    assert not Path("data/v.npz").exists()
