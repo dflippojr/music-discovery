@@ -155,12 +155,7 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
     POSIX keeps the reuse flag so a restart after TIME_WAIT still binds.
     """
 
-    allow_reuse_address = os.name != "nt"
-
-    def server_bind(self):
-        if os.name == "nt":
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+    # Scratch: #87 fix reverted to prove the Windows lane fails.
 
 
 class Handler(SimpleHTTPRequestHandler):
