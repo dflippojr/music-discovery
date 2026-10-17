@@ -92,6 +92,13 @@ def test_a_deeply_nested_line_is_reported_not_a_crash(tmp_path):
     assert result.problems[0].startswith("line 2: not JSON")
 
 
+def test_a_bom_prefixed_log_is_read(tmp_path, capsys):
+    path = tmp_path / "feedback.jsonl"
+    path.write_text("\ufeff" + json.dumps(event(100, 1)) + "\n", encoding="utf-8")
+    assert main(["feedback-report", "feedback.jsonl"]) == 0
+    assert "1 valid events." in capsys.readouterr().out
+
+
 def test_summaries(log):
     summary = feedback.summarise(feedback.read_log(log).events)
     hybrid, baseline = summary.rankers["hybrid"], summary.rankers["baseline"]

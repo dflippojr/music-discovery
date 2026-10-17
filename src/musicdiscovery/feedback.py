@@ -77,7 +77,7 @@ def read_log(path: Path) -> LogRead:
     Like the other commands' paths, `path` must be inside the working directory.
     """
     try:
-        text = confined(path).read_text("utf-8")
+        text = confined(path).read_text("utf-8-sig")
     except EvaluationError as error:
         raise FeedbackError(str(error)) from error
     except (OSError, UnicodeDecodeError) as error:
