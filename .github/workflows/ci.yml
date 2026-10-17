@@ -50,6 +50,11 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Build the demo bundle from the synthetic catalog
         run: python scripts/build_demo_fixture.py .demo-fixture
+      - name: Check the bundle is stamped with the commit under test
+        run: |
+          sha=$(python -c 'import json; print(json.load(open(".demo-fixture/SOURCE.json"))["sha"])')
+          echo "SOURCE.json sha: $sha"
+          test "$sha" = "$GITHUB_SHA"
       - name: Install browser test tools
         run: |
           npm ci

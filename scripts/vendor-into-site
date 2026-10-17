@@ -3,7 +3,9 @@
 # Usage: scripts/vendor-into-site <bundle_dir> <target_dir>
 # <bundle_dir> is the output of `musicdiscovery export-demo`. The site's own
 # repository decides where the demo goes and how it is linked; this only copies
-# the runtime files (not parity.json, which is for tests).
+# the runtime files (not parity.json, which is for tests) and SOURCE.json, the
+# commit the bundle was built from. The site's copy of SOURCE.json records when
+# it was vendored instead of when the bundle was built.
 set -eu
 
 if [ "$#" -ne 2 ]; then
@@ -12,16 +14,30 @@ if [ "$#" -ne 2 ]; then
 fi
 bundle=$1
 target=$2
+files="index.html study.html demo.css demo.js study.js study-lib.js feedback-log.js ui.js ranker.js catalog.json sources.json"
 
-for name in index.html study.html demo.css demo.js study.js study-lib.js feedback-log.js ui.js ranker.js catalog.json sources.json; do
+for name in $files SOURCE.json; do
   if [ ! -f "$bundle/$name" ]; then
     echo "vendor-into-site: $bundle/$name is missing; run musicdiscovery export-demo first" >&2
     exit 1
   fi
 done
 
+sha=$(sed -n 's/^  "sha": "\([^"]*\)",$/\1/p' "$bundle/SOURCE.json")
+if ! printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "vendor-into-site: $bundle/SOURCE.json has no clean commit (sha \"$sha\"); run musicdiscovery export-demo --release from a clean checkout" >&2
+  exit 1
+fi
+
 mkdir -p "$target"
-for name in index.html study.html demo.css demo.js study.js study-lib.js feedback-log.js ui.js ranker.js catalog.json sources.json; do
+for name in $files; do
   cp "$bundle/$name" "$target/$name"
 done
-echo "vendor-into-site: copied the demo bundle into $target"
+vendored=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+sed "s/^  \"built\": \"[^\"]*\",\$/  \"vendored\": \"$vendored\",/" \
+  "$bundle/SOURCE.json" > "$target/SOURCE.json"
+if ! grep -q '"vendored"' "$target/SOURCE.json"; then
+  echo "vendor-into-site: $bundle/SOURCE.json has no build time" >&2
+  exit 1
+fi
+echo "vendor-into-site: copied the demo bundle at $sha into $target"

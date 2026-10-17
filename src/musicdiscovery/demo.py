@@ -9,8 +9,10 @@ import base64
 import gzip
 import json
 import shutil
+import subprocess
 from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 
@@ -27,6 +29,11 @@ FORMAT_VERSION = 1
 CATALOG_FILE = "catalog.json"
 SOURCES_FILE = "sources.json"  # fetched after the page is ready
 PARITY_FILE = "parity.json"
+SOURCE_FILE = "SOURCE.json"  # which commit the bundle was built from
+SOURCE_REPO = "dflippojr/music-discovery"
+# Repository paths the bundle is built from; a site compares these with main.
+SOURCE_PATHS = ("src/musicdiscovery", "scripts/vendor-into-site")
+DIRTY_SUFFIX = "-dirty"
 DEFERRED_FILES = (SOURCES_FILE,)
 STATIC_FILES = (
     "index.html",
@@ -230,9 +237,45 @@ def measure(out_dir: Path) -> BundleSize:
     return BundleSize(sizes)
 
 
-def export_demo(catalog: Catalog, out_dir: Path) -> BundleSize:
-    """Write the bundle into `out_dir` (inside the working directory)."""
+def _git(*args: str) -> str:
+    package = Path(__file__).resolve().parent
+    try:
+        run = subprocess.run(
+            ["git", "-C", str(package), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise DemoError(
+            "cannot read the source commit; export from a git checkout of "
+            f"{SOURCE_REPO} ({error})"
+        ) from error
+    return run.stdout.strip()
+
+
+def build_source(release: bool = False) -> dict:
+    """The commit the bundle is built from; `-dirty` if tracked files changed."""
+    sha = _git("rev-parse", "HEAD")
+    if _git("status", "--porcelain", "--untracked-files=no"):
+        if release:
+            raise DemoError("the work tree has uncommitted changes; commit them first")
+        sha += DIRTY_SUFFIX
+    return {
+        "repo": SOURCE_REPO,
+        "sha": sha,
+        "built": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "paths": list(SOURCE_PATHS),
+    }
+
+
+def export_demo(catalog: Catalog, out_dir: Path, release: bool = False) -> BundleSize:
+    """Write the bundle into `out_dir` (inside the working directory).
+
+    With `release`, refuse to export from a work tree with uncommitted changes.
+    """
     out_dir = confined(out_dir)
+    source_stamp = build_source(release)
     out_dir.mkdir(parents=True, exist_ok=True)
     source = resources.files("musicdiscovery").joinpath("demo")
     for name in STATIC_FILES:
@@ -241,4 +284,7 @@ def export_demo(catalog: Catalog, out_dir: Path) -> BundleSize:
     _write_json(out_dir / CATALOG_FILE, build_catalog(catalog))
     _write_json(out_dir / SOURCES_FILE, build_sources(catalog))
     _write_json(out_dir / PARITY_FILE, build_parity(catalog))
+    (out_dir / SOURCE_FILE).write_text(
+        json.dumps(source_stamp, indent=2) + "\n", encoding="utf-8"
+    )
     return measure(out_dir)
