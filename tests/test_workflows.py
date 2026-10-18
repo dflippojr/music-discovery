@@ -36,7 +36,7 @@ def test_trusted_gate_guard_runs_from_main_and_runs_no_pull_request_code():
     header = target.split("\njobs:\n", 1)[0]
     assert re.search(
         r"^on:\n  pull_request_target:\n"
-        r"    types: \[opened, synchronize, reopened, edited, labeled, unlabeled\]\n",
+        r"    types: \[opened, synchronize, reopened, edited, labeled, unlabeled, closed\]\n",
         header,
         re.M,
     )
