@@ -7,12 +7,17 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 # The one dflippojr/.github commit both guards load, workflow and script alike.
 GUARD_SHA = "e2c7fae8508be0359f3abaf136caade46ee7479c"
+GUARD_WORKFLOWS = "dflippojr/.github/.github/workflows"
+READ_PERMISSIONS = (
+    r"^permissions:\n  contents: read\n  issues: read\n  pull-requests: read\n"
+)
 
 
 def _code(path: Path) -> str:
-    """The workflow without its comment lines, so a key named in a comment doesn't count."""
+    """The workflow without comment lines, so a key named in a comment doesn't count."""
     lines = path.read_text(encoding="utf-8").splitlines()
-    return "\n".join(line for line in lines if not line.lstrip().startswith("#")) + "\n"
+    code = [line for line in lines if not line.lstrip().startswith("#")]
+    return "\n".join(code) + "\n"
 
 
 def _jobs(workflow: str) -> dict[str, str]:
@@ -22,7 +27,7 @@ def _jobs(workflow: str) -> dict[str, str]:
     return dict(zip(parts[1::2], parts[2::2], strict=True))
 
 
-def test_trusted_gate_guard_runs_from_the_default_branch_and_runs_no_pull_request_code():
+def test_trusted_gate_guard_runs_from_main_and_runs_no_pull_request_code():
     # Under pull_request a pull request supplies its own judge, so it could
     # swap the guard for a green no-op. pull_request_target reads this caller
     # from main, and the called workflow only fetches the pull request's
@@ -37,17 +42,14 @@ def test_trusted_gate_guard_runs_from_the_default_branch_and_runs_no_pull_reques
     )
     assert "pull_request:" not in target
     assert "workflow_dispatch" not in target
-    assert re.search(
-        r"^permissions:\n  contents: read\n  issues: read\n  pull-requests: read\n  checks: write\n",
-        header,
-        re.M,
-    )
-    assert "group: gate-guard-target-${{ github.event.pull_request.head.sha }}" in header
+    assert re.search(READ_PERMISSIONS + r"  checks: write\n", header, re.M)
+    group = "group: gate-guard-target-${{ github.event.pull_request.head.sha }}"
+    assert group in header
     assert "cancel-in-progress: true" in header
     jobs = _jobs(target)
     assert set(jobs) == {"judge"}
     judge = jobs["judge"]
-    assert f"    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@{GUARD_SHA}\n" in judge
+    assert f"    uses: {GUARD_WORKFLOWS}/gate-guard-target.yml@{GUARD_SHA}\n" in judge
     assert f"      guard-ref: {GUARD_SHA}\n" in judge
     for unsafe in (
         "steps:",
@@ -67,13 +69,13 @@ def test_ci_gate_needs_the_pinned_gate_guard_with_owner_only_labels():
     # request can rewrite it. It loads the same reviewed script as the trusted
     # guard, and counts only a label the owner applied.
     ci = _code(WORKFLOWS / "ci.yml")
-    assert re.search(r"^on:\n  push:\n    branches: \[main\]\n  pull_request:\n", ci, re.M)
+    on = r"^on:\n  push:\n    branches: \[main\]\n  pull_request:\n"
+    assert re.search(on, ci, re.M)
     assert "pull_request_target" not in ci
-    header = ci.split("\njobs:\n", 1)[0]
-    assert re.search(r"^permissions:\n  contents: read\n  issues: read\n  pull-requests: read\n", header, re.M)
+    assert re.search(READ_PERMISSIONS, ci.split("\njobs:\n", 1)[0], re.M)
     jobs = _jobs(ci)
     guard = jobs["gate-guard"]
-    assert f"    uses: dflippojr/.github/.github/workflows/gate-guard.yml@{GUARD_SHA}\n" in guard
+    assert f"    uses: {GUARD_WORKFLOWS}/gate-guard.yml@{GUARD_SHA}\n" in guard
     assert f"      guard-ref: {GUARD_SHA}\n" in guard
     assert "      require-owner-label-actor: true\n" in guard
     assert "self-hosted" not in guard
