@@ -57,8 +57,15 @@ so local runs and CI use the same floor.
   Under `### Gate changes`, list any test you deleted or skipped and any check
   you loosened, with the reason.
 
-The required check is the `gate` job in `ci.yml`. It passes only when the
-`test`, `demo` and `ui` jobs all passed.
+The required checks are the `gate` job in `ci.yml` and `gate-guard`. `gate`
+passes only when the `test`, `demo`, `ui` and `gate-guard` jobs all passed.
+`gate-guard` is the check run that `.github/workflows/gate-guard-target.yml`
+posts from `main` under `pull_request_target`, so a PR can't rewrite its own
+judge. Deleting or skipping a test, adding a retry, or editing workflows,
+coverage or Sonar config needs the owner-applied `gate-change-approved` label and
+an entry under `### Gate changes`. Never apply that label yourself. A push after
+the owner applied it makes it stale, so the owner has to apply it again.
+`tests/test_workflows.py` pins how both guards are wired.
 
 `tests/test_ranker_contract.py` checks the laws every ranker keeps (result
 shape, abstaining without signal, no crash on missing metadata, determinism,

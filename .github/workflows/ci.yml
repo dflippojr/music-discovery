@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: read
+  # gate-guard reads the pull request's labels and the owner's label events. A
+  # called workflow can't hold more than its caller grants.
+  issues: read
+  pull-requests: read
 
 jobs:
   # Linux and Windows, because the owner and workers develop on Windows and
@@ -133,12 +137,27 @@ jobs:
             test-results/
           if-no-files-found: ignore
 
-  # The single check to require. It always runs and passes only when every job
-  # above passed, both test legs included, so a failed, cancelled or skipped
-  # job turns it red.
+  # The shared gate guard, called at a full SHA of dflippojr/.github main;
+  # guard-ref names the same SHA, so the script that judges the pull request is
+  # the one that was reviewed. It fails a pull request that deletes or skips
+  # tests, adds retries, or edits workflows, coverage or Sonar config, unless
+  # the owner applied gate-change-approved. Labels are read when the job runs:
+  # after the owner applies one, re-run this job. This job is an early signal
+  # inside gate, not the judge: a pull request can replace it, and it accepts a
+  # label applied before the newest push. The judge is the gate-guard check
+  # that gate-guard-target.yml posts from main.
+  gate-guard:
+    uses: dflippojr/.github/.github/workflows/gate-guard.yml@e2c7fae8508be0359f3abaf136caade46ee7479c
+    with:
+      guard-ref: e2c7fae8508be0359f3abaf136caade46ee7479c
+      require-owner-label-actor: true
+
+  # The check to require, next to gate-guard. It always runs and passes only
+  # when every job above passed, both test legs included, so a failed,
+  # cancelled or skipped job turns it red.
   gate:
     name: gate
-    needs: [test, demo, ui]
+    needs: [test, demo, ui, gate-guard]
     if: always()
     runs-on: ubuntu-latest
     steps:

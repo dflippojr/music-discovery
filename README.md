@@ -76,6 +76,17 @@ After configuring the secrets and landing the workflow, verify a `main` push,
 an ordinary same-repository PR, and a real Dependabot PR. Attach workflow-run and
 SonarCloud PR/head-commit result links to [#31](https://github.com/dflippojr/music-discovery/issues/31).
 
+The ruleset for `main` requires two status checks, both from GitHub Actions:
+`gate` from `ci.yml`, and `gate-guard`, the check run that
+`.github/workflows/gate-guard-target.yml` posts from `main` under
+`pull_request_target`. That guard is the shared one from
+[dflippojr/.github](https://github.com/dflippojr/.github), pinned by full SHA.
+It fails a PR that deletes or skips tests, adds retries, or edits workflows,
+coverage or Sonar config, unless the owner applied `gate-change-approved` after
+the newest push. A PR can't rewrite it, because GitHub reads it from `main`.
+`ci.yml` also calls the guard inside `gate`, as an early signal that a PR can
+change; the trusted check is the one that counts.
+
 ## License
 
 Code is MIT licensed (see [LICENSE](LICENSE)). Catalog data (FMA metadata and features) is CC BY 4.0; see [docs/catalog.md](docs/catalog.md) for the source, checksums and attribution.
