@@ -1,4 +1,4 @@
-"""Checks on how CI wires the shared gate guard from dflippojr/.github (#104)."""
+"""Checks on how the workflows wire gate-guard (#104) and review-v3 (#126)."""
 
 import re
 from pathlib import Path
@@ -11,6 +11,9 @@ GUARD_WORKFLOWS = "dflippojr/.github/.github/workflows"
 READ_PERMISSIONS = (
     r"^permissions:\n  contents: read\n  issues: read\n  pull-requests: read\n"
 )
+REVIEW_WORKFLOW = "dflippojr/agent-harness/.github/workflows/review.yml@review-v3"
+# The label the owner's review runner registers under (#126).
+REVIEW_RUNS_ON = '["self-hosted","Windows","X64","music-discovery-review"]'
 
 
 def _code(path: Path) -> str:
@@ -89,3 +92,34 @@ def test_every_dflippojr_github_reference_uses_the_one_guard_sha():
     for path in WORKFLOWS.glob("*.yml"):
         refs.update(re.findall(r"dflippojr/\.github/\S+@(\S+)", _code(path)))
     assert refs == {GUARD_SHA}
+
+
+def test_review_caller_runs_review_v3_only_from_main_on_trusted_triggers():
+    # pull_request_target reads this caller from main, and the owner's runner
+    # hook permits only this file on main. A pull_request trigger would run a
+    # fork's copy of the caller on the self-hosted runner, so it stays out.
+    review = _code(WORKFLOWS / "review.yml")
+    header = review.split("\njobs:\n", 1)[0]
+    assert re.search(
+        r"^on:\n  pull_request_target:\n    types: \[opened\]\n  workflow_dispatch:\n",
+        header,
+        re.M,
+    )
+    assert "pull_request:" not in review
+    # A called workflow can't hold more than its caller grants, so issues: read
+    # has to be here for review-v3 to fetch the spec.
+    assert re.search(
+        r"^permissions:\n  contents: read\n  pull-requests: write\n"
+        r"  checks: write\n  issues: read\n",
+        header,
+        re.M,
+    )
+    jobs = _jobs(review)
+    assert set(jobs) == {"review"}
+    job = jobs["review"]
+    assert "head.repo.full_name == github.repository" in job
+    assert "dependabot[bot]" in job
+    assert f"    uses: {REVIEW_WORKFLOW}\n" in job
+    assert f"      runs_on: '{REVIEW_RUNS_ON}'\n" in job
+    assert "      tooling_ref: review-v3\n" in job
+    assert "secrets" not in job
