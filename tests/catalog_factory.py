@@ -159,15 +159,18 @@ def from_shape(profile: dict, n: int, seed: int = 0) -> pd.DataFrame:
         genre_ids.append([int(g) + 1, *(int(i) for i in more)])
     frame["genre_ids"] = genre_ids
 
+    tag_counts = _buckets(profile["tag_count"], n, rng)
     vocabulary = [
         f"tag{i:03d}"
-        for i in range(max(5, _count(profile["distinct_tags_per_track"], n)))
+        for i in range(
+            max(5, int(tag_counts.max()), _count(profile["distinct_tags_per_track"], n))
+        )
     ]
     tag_weights = 1 / np.arange(1, len(vocabulary) + 1)
     tag_weights /= tag_weights.sum()
     frame["tags"] = [
-        sorted(set(rng.choice(vocabulary, size=int(size), p=tag_weights)))
-        for size in _buckets(profile["tag_count"], n, rng)
+        sorted(rng.choice(vocabulary, size=int(size), replace=False, p=tag_weights))
+        for size in tag_counts
     ]
     if not frame["tags"].map(len).gt(0).any():
         frame.at[0, "tags"] = [vocabulary[0]]
@@ -200,6 +203,8 @@ def from_shape(profile: dict, n: int, seed: int = 0) -> pd.DataFrame:
     ]
     centres = rng.normal(scale=1.5, size=(len(genres), len(columns)))
     values = centres[genre_rows] + rng.normal(size=(n, len(columns)))
+    missing = _rows(n, _count(profile["audio"]["without_features"], n), rng)
+    values[missing] = np.nan
     features = pd.DataFrame(values.astype(np.float32), columns=columns)
     return pd.concat([frame, features], axis=1)
 

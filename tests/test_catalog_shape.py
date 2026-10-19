@@ -5,7 +5,9 @@ import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from contextlib import chdir
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -111,6 +113,28 @@ def test_every_edge_case_occurs(frame, data_dir):
     assert frame["tags"].map(len).ge(2).any()
 
 
+@pytest.mark.parametrize("tag_count", [2, 10, 15])
+def test_generated_tags_preserve_sampled_counts(tag_count):
+    shape = deepcopy(SHAPE)
+    shape["tag_count"] = {str(tag_count): 1.0}
+    shape["missing"]["tags"] = 0.0
+    # A small vocabulary still needs enough distinct tags for the sampled count.
+    shape["distinct_tags_per_track"] = 0.0
+    frame = from_shape(shape, 100)
+    lengths = frame["tags"].map(len)
+    assert lengths.eq(0).sum() == 1  # the forced missing-tags edge case
+    assert lengths[lengths.gt(0)].eq(tag_count).all()
+    assert all(len(tags) == len(set(tags)) for tags in frame["tags"])
+
+
+@pytest.mark.parametrize("share", [0.0, 0.25, 1.0])
+def test_generated_catalog_matches_missing_feature_share(share):
+    shape = deepcopy(SHAPE)
+    shape["audio"]["without_features"] = share
+    frame = from_shape(shape, 100)
+    assert profile(frame)["audio"]["without_features"] == share
+
+
 def recommend(data_dir, capsys, *argv):
     code = main(["recommend", "--data-dir", str(data_dir), "-k", "5", *argv])
     out = capsys.readouterr()
@@ -148,10 +172,20 @@ def test_recommend_by_audio_with_a_seed_that_has_no_vector(frame, data_dir, caps
     assert len(json.loads(out)) == 5
 
 
-def test_recommend_prints_non_latin_names_on_a_legacy_console(frame, data_dir):
+@pytest.mark.parametrize("separate_scripts_dir", [False, True])
+def test_recommend_prints_non_latin_names_on_a_legacy_console(
+    frame, data_dir, monkeypatch, separate_scripts_dir
+):
+    if separate_scripts_dir:
+        # A Windows base install keeps python.exe outside its scripts directory.
+        executable = Path(sys.executable)
+        monkeypatch.setattr(
+            sys, "executable", str(executable.parent.parent / executable.name)
+        )
     seed = _rows(frame, "title", lambda t: isinstance(t, str) and not t.isascii())[0]
     argv = ["recommend", "--data-dir", str(data_dir), "--seed", str(seed)]
-    script = shutil.which("musicdiscovery", path=str(Path(sys.executable).parent))
+    script = shutil.which("musicdiscovery", path=sysconfig.get_path("scripts"))
+    assert script is not None
     env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
     run = subprocess.run(
         [script, *argv],

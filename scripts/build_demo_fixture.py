@@ -16,7 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from catalog_factory import from_shape, load_shape  # noqa: E402
 from test_evaluation import make_frame  # noqa: E402
 
 from musicdiscovery.catalog import Catalog  # noqa: E402
@@ -69,6 +68,8 @@ def main(argv: list[str]) -> int:
     frame["artist"] = "Only artist"
     cases["one_artist"] = exclusion_cases(Catalog(frame))
     if shape:
+        from catalog_factory import from_shape, load_shape
+
         shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
         shape_size = export_demo(shaped, Path(argv[1]) / "shape")
         cases["shape"] = exclusion_cases(shaped)
