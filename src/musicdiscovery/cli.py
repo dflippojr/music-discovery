@@ -19,7 +19,7 @@ from musicdiscovery.audio_embedding import (
     embed_archive,
 )
 from musicdiscovery.catalog import Catalog, CatalogError
-from musicdiscovery.demo import TARGET_BYTES, DemoError, export_demo
+from musicdiscovery.demo import SOURCE_FILE, TARGET_BYTES, DemoError, export_demo
 from musicdiscovery.evaluation import (
     BENCHMARKS,
     DEFAULT_PROFILES,
@@ -43,6 +43,17 @@ from musicdiscovery.study import DEFAULT_RATINGS_DIR, StudyError
 from musicdiscovery.study import run as run_study
 
 MAX_REPORTED_LINES = 20
+
+
+def positive_int(text: str) -> int:
+    """Parse an argparse value that must be a whole number of at least 1."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} must be at least 1")
+    return value
 
 
 def _run_ingest(data_dir: Path) -> int:
@@ -170,7 +181,7 @@ def _run_embed_audio(args: argparse.Namespace) -> int:
 def _run_export_demo(args: argparse.Namespace) -> int:
     try:
         catalog = Catalog.load(args.data_dir / "catalog" / CATALOG_NAME)
-        size = export_demo(catalog, args.out_dir)
+        size = export_demo(catalog, args.out_dir, release=args.release)
     except (CatalogError, DemoError, EvaluationError, OSError) as error:
         print(f"export-demo: {error}", file=sys.stderr)
         return 1
@@ -188,6 +199,8 @@ def _run_export_demo(args: argparse.Namespace) -> int:
         f"export-demo: first load {size.initial / 1024:.1f} KiB compressed, "
         f"deferred {size.deferred / 1024:.1f} KiB"
     )
+    source = json.loads((args.out_dir / SOURCE_FILE).read_text(encoding="utf-8"))
+    print(f"export-demo: stamped {SOURCE_FILE} with {source['sha']}")
     if size.compressed >= TARGET_BYTES:
         print("export-demo: bundle is over the size target", file=sys.stderr)
         return 1
@@ -281,7 +294,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recommend.add_argument("--vectors", type=Path, default=DEFAULT_VECTORS)
     recommend.add_argument(
-        "--threads", type=int, default=4, help="CPU threads for --describe"
+        "--threads",
+        type=positive_int,
+        default=4,
+        help="CPU threads for --describe, at least 1 (default: 4)",
     )
     recommend.add_argument("--json", action="store_true", help="print JSON")
     evaluate = subparsers.add_parser(
@@ -325,13 +341,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--limit", type=int, help="embed a seeded sample of this many tracks"
     )
     embed.add_argument("--sample-seed", type=int, default=0)
-    embed.add_argument("--batch-size", type=int, default=4)
-    embed.add_argument("--threads", type=int, default=4, help="CPU threads")
+    embed.add_argument(
+        "--batch-size",
+        type=positive_int,
+        default=4,
+        help="clips per encoder call, at least 1 (default: 4)",
+    )
+    embed.add_argument(
+        "--threads",
+        type=positive_int,
+        default=4,
+        help="CPU threads, at least 1 (default: 4)",
+    )
     export = subparsers.add_parser(
         "export-demo", help="Write the static demo bundle for the browser"
     )
     export.add_argument("out_dir", type=Path, help="directory to write the bundle to")
     export.add_argument("--data-dir", type=Path, default=Path("data"))
+    export.add_argument(
+        "--release",
+        action="store_true",
+        help="refuse to export from a work tree with uncommitted changes",
+    )
 
     study = subparsers.add_parser(
         "analyze-study",

@@ -16,7 +16,7 @@ A pilot-stage evaluation, not a product. Built and merged:
 - Learned profile ranker over a listener's history (CPU only): [docs/ranking.md](docs/ranking.md)
 - EmbeddingGemma 2 audio-embedding ranker with text-to-audio queries (offline, CPU only): [docs/ranking.md](docs/ranking.md#audio-embedding-ranker)
 - Offline evaluation harness and reports: [docs/evaluation.md](docs/evaluation.md), [reports/](reports/)
-- Static demo page: [docs/demo.md](docs/demo.md)
+- Static demo page: [docs/demo.md](docs/demo.md); production signals from the live demo: [docs/production-signals.md](docs/production-signals.md)
 - Listener study tooling (blind study page and analysis command): [docs/listener-study.md](docs/listener-study.md), [#9](https://github.com/dflippojr/music-discovery/issues/9)
 
 Remaining:
@@ -75,6 +75,17 @@ a green job in this state is not evidence of analysis or a passing quality gate.
 After configuring the secrets and landing the workflow, verify a `main` push,
 an ordinary same-repository PR, and a real Dependabot PR. Attach workflow-run and
 SonarCloud PR/head-commit result links to [#31](https://github.com/dflippojr/music-discovery/issues/31).
+
+The ruleset for `main` requires two status checks, both from GitHub Actions:
+`gate` from `ci.yml`, and `gate-guard`, the check run that
+`.github/workflows/gate-guard-target.yml` posts from `main` under
+`pull_request_target`. That guard is the shared one from
+[dflippojr/.github](https://github.com/dflippojr/.github), pinned by full SHA.
+It fails a PR that deletes or skips tests, adds retries, or edits workflows,
+coverage or Sonar config, unless the owner applied `gate-change-approved` after
+the newest push. A PR can't rewrite it, because GitHub reads it from `main`.
+`ci.yml` also calls the guard inside `gate`, as an early signal that a PR can
+change; the trusted check is the one that counts.
 
 ## License
 

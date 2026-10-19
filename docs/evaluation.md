@@ -219,6 +219,8 @@ Each line is checked against `src/musicdiscovery/feedback-log.schema.json`. A
 line that is not JSON, does not match the schema, or names a rated track that is
 not at its rank in the shown list is reported on stderr with its line number and
 skipped. The command fails only when the file cannot be read or no line is valid.
+A UTF-8 byte-order mark, which Windows PowerShell 5.1 writes when it saves a
+merged log with `-Encoding utf8`, is accepted and ignored.
 Within one shown list (same ranker, seeds, qualities, exclusion and track order)
 the latest action on a track counts, and a `rating` of 0 means that rating was
 taken back. The report then prints:

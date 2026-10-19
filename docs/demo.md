@@ -28,11 +28,28 @@ python -m http.server -d build/demo 8000    # open http://localhost:8000/
 | `catalog.json` | compact catalog and precomputed data (see below); the first download |
 | `sources.json` | FMA source page URL per track; fetched after the page is ready |
 | `parity.json` | expected top 10 from Python on fixed queries; for tests, not vendored |
+| `SOURCE.json` | the commit the bundle was built from (see below) |
 
 `export-demo` prints each file's raw and gzip size and the bundle total, and
 exits non-zero if the compressed bundle (every file listed above except
 `parity.json`) reaches 2 MiB (the target for the small catalog). It also reports the first-load size (everything
 but `sources.json`) and the deferred size separately. The generated bundle is never committed.
+
+`SOURCE.json` records where the bundle came from:
+
+```json
+{
+  "repo": "dflippojr/music-discovery",
+  "sha": "<full git HEAD>",
+  "built": "2026-10-16T09:30:00Z",
+  "paths": ["src/musicdiscovery", "scripts/vendor-into-site"]
+}
+```
+
+`paths` are the repository paths the bundle is built from, so a site can tell
+whether `main` has changed them since. If tracked files have uncommitted changes,
+`sha` ends in `-dirty`. `export-demo --release` refuses to export from such a work
+tree, and `export-demo` fails outside a git checkout of this repository.
 
 ## What is in `catalog.json`
 
@@ -202,8 +219,15 @@ returned files into a report.
 This repository only delivers the bundle. To copy it into a site checkout:
 
 ```sh
+musicdiscovery export-demo --release build/demo
 scripts/vendor-into-site build/demo "<site checkout>/public/<chosen path>"
 ```
+
+The script copies the runtime files and `SOURCE.json`, and refuses a bundle
+without `SOURCE.json` or with a `-dirty` SHA. The site's copy of `SOURCE.json`
+uses the site's provenance format: `vendored`, the time of the copy, replaces
+`built`. [production-signals.md](production-signals.md) says how to compare the
+live copy with `main`.
 
 The site's repository decides the path (it must be inside what that site deploys)
 and any header or cache rules, as well as where the demo is linked from.
