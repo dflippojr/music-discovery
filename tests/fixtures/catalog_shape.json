@@ -1,0 +1,170 @@
+{
+  "profile_version": 1,
+  "source": {
+    "subset": "small",
+    "source_sha1": "f0df49ffe5f2a6008d7dc83c6915b31835dfe733",
+    "ingest_version": 1
+  },
+  "tracks": 7995,
+  "missing": {
+    "title": 0.0,
+    "artist": 0.0,
+    "album": 0.0,
+    "genre_top": 0.0,
+    "duration": 0.0,
+    "listens": 0.0,
+    "license_url": 0.0,
+    "source_url": 0.0,
+    "genre_ids": 0.0,
+    "tags": 0.8298
+  },
+  "genres": {
+    "Electronic": 0.1251,
+    "Experimental": 0.1251,
+    "Folk": 0.1245,
+    "Hip-Hop": 0.1251,
+    "Instrumental": 0.1251,
+    "International": 0.1251,
+    "Pop": 0.1251,
+    "Rock": 0.1251
+  },
+  "genre_id_count": {
+    "1": 0.2667,
+    "2": 0.4208,
+    "3": 0.2125,
+    "4": 0.0745,
+    "5": 0.0184,
+    "6": 0.0048,
+    "7": 0.0015,
+    "8": 0.0009
+  },
+  "tag_count": {
+    "0": 0.8298,
+    "1": 0.0346,
+    "2": 0.0173,
+    "3": 0.023,
+    "4": 0.0221,
+    "5": 0.0101,
+    "6": 0.0203,
+    "7": 0.0069,
+    "8": 0.0076,
+    "9": 0.0025,
+    "10+": 0.0258
+  },
+  "distinct_tags_per_track": 0.149,
+  "tracks_per_artist_quantiles": {
+    "0": 1.0,
+    "0.01": 1.0,
+    "0.1": 1.0,
+    "0.25": 1.0,
+    "0.5": 1.0,
+    "0.75": 4.0,
+    "0.9": 8.0,
+    "0.99": 26.96,
+    "1": 208.0
+  },
+  "title": {
+    "non_ascii": 0.0188,
+    "rtl": 0.0003,
+    "scripts": {
+      "cjk": 0.0005,
+      "cyrillic": 0.0013,
+      "arabic": 0.0003,
+      "hebrew": 0.0,
+      "greek": 0.0004,
+      "emoji": 0.0003,
+      "latin": 0.0151,
+      "other": 0.0013
+    },
+    "length_quantiles": {
+      "0": 1.0,
+      "0.01": 3.0,
+      "0.1": 6.0,
+      "0.25": 9.0,
+      "0.5": 14.0,
+      "0.75": 20.0,
+      "0.9": 30.0,
+      "0.99": 59.0,
+      "1": 152.0
+    },
+    "duplicate_rate": 0.0515,
+    "distinct_per_track": 0.9709
+  },
+  "artist": {
+    "non_ascii": 0.0275,
+    "rtl": 0.0,
+    "scripts": {
+      "cjk": 0.0,
+      "cyrillic": 0.0003,
+      "arabic": 0.0,
+      "hebrew": 0.0,
+      "greek": 0.0,
+      "emoji": 0.0,
+      "latin": 0.0266,
+      "other": 0.0006
+    },
+    "length_quantiles": {
+      "0": 2.0,
+      "0.01": 3.0,
+      "0.1": 6.0,
+      "0.25": 9.0,
+      "0.5": 12.0,
+      "0.75": 15.0,
+      "0.9": 20.0,
+      "0.99": 35.0,
+      "1": 60.0
+    },
+    "duplicate_rate": 0.8505,
+    "distinct_per_track": 0.2883
+  },
+  "duration_quantiles": {
+    "0": 60.0,
+    "0.01": 66.0,
+    "0.1": 114.0,
+    "0.25": 161.0,
+    "0.5": 215.0,
+    "0.75": 279.0,
+    "0.9": 356.0,
+    "0.99": 542.06,
+    "1": 600.0
+  },
+  "listens_quantiles": {
+    "0": 196.0,
+    "0.01": 455.94,
+    "0.1": 786.0,
+    "0.25": 1265.5,
+    "0.5": 2493.0,
+    "0.75": 4906.0,
+    "0.9": 9248.0,
+    "0.99": 36674.68,
+    "1": 543252.0
+  },
+  "audio": {
+    "without_features": 0.0,
+    "without_vector": null
+  },
+  "features": {
+    "statistics": [
+      "kurtosis",
+      "max",
+      "mean",
+      "median",
+      "min",
+      "skew",
+      "std"
+    ],
+    "coefficients": {
+      "chroma_cens": 12,
+      "chroma_cqt": 12,
+      "chroma_stft": 12,
+      "mfcc": 20,
+      "rmse": 1,
+      "spectral_bandwidth": 1,
+      "spectral_centroid": 1,
+      "spectral_contrast": 7,
+      "spectral_rolloff": 1,
+      "tonnetz": 6,
+      "zcr": 1
+    }
+  }
+}

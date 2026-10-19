@@ -152,6 +152,56 @@ results. Interactions are not listens, a weak play is not excluded from
 results, and the intervals do not cover the generator's settings. The listener
 study is still the test of preference.
 
+## Shape-matched test catalogs
+
+Tests never read the real catalog, but they run on synthetic catalogs shaped
+like it. `scripts/profile_catalog.py` reads a local ingest and writes
+`tests/fixtures/catalog_shape.json`, which holds aggregate statistics only:
+
+- the share of each missing field (title, artist, album, top genre, genre ids,
+  tags, duration, listens, license and source URLs);
+- the genre, genre-id-count and tag-count distributions, and the number of
+  distinct tags per track;
+- the share of non-ASCII and right-to-left titles and artist names, the share
+  per script (CJK, Cyrillic, Arabic, Hebrew, Greek, emoji, accented Latin,
+  other), length quantiles, the duplicate rate and the tracks-per-artist quantiles;
+- duration and listens quantiles;
+- the share of tracks without features or without an audio vector, and the
+  feature column schema (statistics and coefficient counts per feature).
+
+It holds no track id, title, artist, album, tag or other row-level value; the
+only strings are field names, the top-genre labels, the feature schema and the
+archive checksum. A test checks this. `tests/catalog_factory.py`
+`from_shape(profile, n, seed)` generates a catalog with those distributions and
+made-up titles, artists and tags, and `vectors_for` a matching vector cache.
+Every edge case the code claims to handle (a missing title, album or top genre,
+no genre ids, no tags, a track without an audio vector, each title script)
+occurs at least once, even when the ingest measured none: on the 2017 `small`
+catalog no track lacks a top genre, but #89 crashed on a catalog that had one.
+
+`tests/test_catalog_shape.py` runs `recommend` (every ranker, including
+`audio-embedding` from a seed without a vector, and text output on a cp1252
+console), `evaluate` and `export-demo` on a 400-track shape-matched catalog.
+`scripts/build_demo_fixture.py` exports one to `<out_dir>/shape` and adds its
+exclusion queries to the JavaScript parity test.
+
+### Refreshing the profile
+
+After an ingest change or a new ingest, and after `embed-audio` if the vector
+cache changed:
+
+```sh
+musicdiscovery ingest
+python scripts/profile_catalog.py   # --vectors PATH if the cache is not in its default place
+git diff tests/fixtures/catalog_shape.json
+```
+
+Read the diff before committing it: it must contain only shares, quantiles and
+the schema. Without a vector cache, `audio.without_vector` is `null` and the
+generator leaves one track without a vector. The committed profile was taken
+from the 2017 `small` ingest with no vector cache; on the full cache, 6 of 7,995
+clips have no vector ([ranking.md](ranking.md#audio-embedding-ranker)).
+
 ## Feedback logs from the demo
 
 The demo page keeps a feedback log in the visitor's browser (see

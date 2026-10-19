@@ -270,7 +270,12 @@ def start(port):
         with HANDLE.open("x", encoding="utf-8") as handle:
             json.dump(metadata, handle)
         child = subprocess.Popen(
-            [sys.executable, str(ROOT / "scripts/build_demo_fixture.py"), str(bundle)],
+            [
+                sys.executable,
+                str(ROOT / "scripts/build_demo_fixture.py"),
+                "--no-shape",  # keep the bundle flat so remove_bundle can delete it
+                str(bundle),
+            ],
             cwd=ROOT,
         )
         try:

@@ -96,6 +96,11 @@ npm run test:study     # Node: study list order, session id, export shape and th
 npm run test:browser   # Chromium: CSP, console errors, toggle, axe-core, 320 px, ratings, score detail, log
 ```
 
+The fixture build also exports a 400-track catalog shaped like the real one
+(missing genres, sparse tags, non-Latin titles; see
+[evaluation.md](evaluation.md#shape-matched-test-catalogs)) to
+`.demo-fixture/shape`, and the parity test checks its exclusion queries too.
+
 The browser test serves the bundle with `Content-Security-Policy: default-src
 'self'; script-src 'self'; style-src 'self'`, fails on any console error, runs
 axe-core in light and dark mode, and checks there is no horizontal scroll at 320 px.

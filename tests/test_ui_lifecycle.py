@@ -43,6 +43,25 @@ def clean_environment():
     }
 
 
+def test_flat_fixture_builds_without_shape_helpers(tmp_path):
+    tree = checkout(tmp_path, "flat")
+    bundle = tree / "data" / "bundle"
+    result = subprocess.run(
+        [sys.executable, "scripts/build_demo_fixture.py", "--no-shape", str(bundle)],
+        cwd=tree,
+        env=clean_environment(),
+        capture_output=True,
+        text=True,
+        timeout=STARTUP_TIMEOUT,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads((bundle / "catalog.json").read_text())["count"] == 450
+    cases = json.loads((bundle / "exclusion.json").read_text())
+    assert set(cases) == {"repeated", "one_artist"}
+    assert not (bundle / "shape").exists()
+
+
 class Launcher:
     """One `ui_instance.py start` process and the lines it prints."""
 
