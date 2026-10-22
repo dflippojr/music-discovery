@@ -28,6 +28,7 @@ def make_report(scores):
     return {
         "catalog": {"source_sha1": "abc", "tracks": 7995},
         "queries_sha256": "q1",
+        "k": 10,
         "rankers": {
             ranker: {
                 split: {metric: _cell(mean) for metric, mean in metrics.items()}
@@ -152,10 +153,36 @@ def test_a_run_on_another_catalog_or_queries_is_not_comparable(baseline, path, v
         compare(baseline, run)
 
 
+@pytest.mark.parametrize("which", ["run", "baseline"])
+@pytest.mark.parametrize("cutoff", [1, 5, 20, "10", None])
+def test_a_report_with_another_cutoff_is_not_comparable(baseline, which, cutoff):
+    # The metrics are labelled @10; a k=1 run must not pass against them.
+    run = copy.deepcopy(baseline)
+    target = run if which == "run" else baseline
+    target["k"] = cutoff
+    with pytest.raises(GateError, match="cutoff"):
+        compare(baseline, run)
+
+
+@pytest.mark.parametrize("which", ["run", "baseline"])
+def test_a_report_without_a_cutoff_is_not_comparable(baseline, which):
+    run = copy.deepcopy(baseline)
+    del (run if which == "run" else baseline)["k"]
+    with pytest.raises(GateError, match="cutoff"):
+        compare(baseline, run)
+
+
 def test_a_baseline_without_a_gated_ranker_is_an_error(baseline):
     del baseline["rankers"]["hybrid"]
     with pytest.raises(GateError, match="no validation genre_ndcg for hybrid"):
         compare(baseline, make_report(SCORES))
+
+
+def test_main_exits_one_when_the_cutoffs_differ(tmp_path, baseline, capsys):
+    run = copy.deepcopy(baseline)
+    run["k"] = 1
+    assert main(setup_files(tmp_path, baseline, run)) == 1
+    assert "cutoff" in capsys.readouterr().err
 
 
 def test_render_marks_each_row(baseline):
