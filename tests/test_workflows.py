@@ -1,6 +1,11 @@
-"""Checks on how the workflows wire gate-guard (#104) and review-v3 (#126)."""
+"""Checks on how the workflows wire gate-guard (#104), review-v3 (#126) and the
+evaluation gate (#105)."""
 
+import os
 import re
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +88,7 @@ def test_ci_gate_needs_the_pinned_gate_guard_with_owner_only_labels():
     assert f"      guard-ref: {GUARD_SHA}\n" in guard
     assert "      require-owner-label-actor: true\n" in guard
     assert "self-hosted" not in guard
-    assert "    needs: [test, demo, ui, gate-guard]\n" in jobs["gate"]
+    assert "    needs: [test, demo, ui, eval-gate, gate-guard]\n" in jobs["gate"]
     assert "    if: always()\n" in jobs["gate"]
 
 
@@ -123,3 +128,163 @@ def test_review_caller_runs_review_v3_only_from_main_on_trusted_triggers():
     assert f"      runs_on: '{REVIEW_RUNS_ON}'\n" in job
     assert "      tooling_ref: review-v3\n" in job
     assert "secrets" not in job
+
+
+def test_eval_gate_always_reports_and_gate_requires_it():
+    # The job runs on every pull request, so gate can require it; the called
+    # workflow decides inside whether the diff makes it "not applicable".
+    ci = _code(WORKFLOWS / "ci.yml")
+    job = _jobs(ci)["eval-gate"]
+    assert "    uses: ./.github/workflows/eval-gate.yml\n" in job
+    assert "    if:" not in job
+    assert "eval-gate" in _jobs(ci)["gate"]
+
+
+def test_eval_gate_workflow_verifies_caches_and_compares_the_archive():
+    gate = _code(WORKFLOWS / "eval-gate.yml")
+    assert "workflow_call:" in gate
+    assert "pull_request" not in gate.split("\njobs:\n", 1)[0]
+    assert "runs-on: ubuntu-latest" in gate
+    assert "self-hosted" not in gate
+    # The key is the archive's documented SHA1; ingest verifies it, and the
+    # cache is saved only after ingest succeeded.
+    sha1 = "f0df49ffe5f2a6008d7dc83c6915b31835dfe733"
+    assert f"FMA_SHA1: {sha1}" in gate
+    assert "key: fma-metadata-${{ env.FMA_SHA1 }}" in gate
+    assert sha1 in (ROOT / "docs" / "catalog.md").read_text(encoding="utf-8")
+    assert "steps.ingest.outcome == 'success'" in gate
+    for ranker in ("baseline", "hybrid", "profile", "random", "popular"):
+        assert f"--ranker {ranker}" in gate
+    assert "python -m musicdiscovery.eval_gate reports/baseline.json" in gate
+    assert "name: eval-run" in gate
+    assert "not applicable" in gate
+
+
+def test_eval_gate_runs_nightly_on_main_through_the_same_workflow():
+    nightly = _code(WORKFLOWS / "eval-nightly.yml")
+    assert re.search(r"^on:\n  schedule:\n    - cron: ", nightly, re.M)
+    assert "pull_request" not in nightly
+    job = _jobs(nightly)["eval-gate"]
+    assert "    uses: ./.github/workflows/eval-gate.yml\n" in job
+    assert "      always: true\n" in job
+
+
+def _step(workflow: str, name: str) -> str:
+    """The body of the step called `name`, up to the next step."""
+    for step in re.split(r"^      - ", workflow, flags=re.M)[1:]:
+        if re.match(rf"name: {re.escape(name)}\n", step):
+            return step
+    raise AssertionError(f"no step named {name!r}")
+
+
+def _script(step: str) -> str:
+    """The shell text of a step's `run: |` block."""
+    block = step.split("        run: |\n", 1)[1]
+    lines = []
+    for line in block.splitlines():
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        lines.append(line)
+    return textwrap.dedent("\n".join(lines)) + "\n"
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def _bash() -> str:
+    """A Bash that runs the workflow's scripts as the hosted runner does.
+
+    On Windows that is Git for Windows' Bash, never System32's WSL launcher, which
+    a bare `bash` resolves to first. Fails, rather than skips, when there is none.
+    """
+    if os.name != "nt":
+        found = shutil.which("bash")
+    else:
+        git = shutil.which("git")
+        roots = list(Path(git).resolve().parents)[:3] if git else []
+        roots.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git")
+        bashes = (root / "bin" / "bash.exe" for root in roots)
+        found = next((str(bash) for bash in bashes if bash.is_file()), None)
+    assert found, "no usable Bash to run the eval-gate scope step (Git Bash on Windows)"
+    return found
+
+
+def _scope(tmp_path: Path, changed: str, base: str | None = None, **env: str):
+    """Run the eval-gate scope step on a two-commit repo; return (exit, output, log)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    target = repo / changed
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("two\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "head")
+    gate = _code(WORKFLOWS / "eval-gate.yml")
+    script = _script(_step(gate, "Decide whether the ranker path changed"))
+    output, summary = tmp_path / "output", tmp_path / "summary"
+    output.touch()
+    summary.touch()
+    # The caller's environment keeps PATH and SYSTEMROOT valid on every OS; drop
+    # GIT_* so an outer repository can't redirect the diff.
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    done = subprocess.run(
+        [_bash(), "-e", "-c", script],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={
+            **inherited,
+            "HOME": str(tmp_path),
+            "ALWAYS": "false",
+            "EVENT": "pull_request",
+            "BASE_SHA": base or base_sha,
+            # Forward slashes, which Bash reads on Windows too.
+            "GITHUB_OUTPUT": output.as_posix(),
+            "GITHUB_STEP_SUMMARY": summary.as_posix(),
+            **env,
+        },
+        check=False,
+    )
+    log = f"exit {done.returncode}\nstdout:\n{done.stdout}\nstderr:\n{done.stderr}"
+    return done.returncode, output.read_text(encoding="utf-8"), log
+
+
+def test_eval_gate_scope_runs_when_the_diff_touches_the_ranker_path(tmp_path):
+    code, output, log = _scope(tmp_path, "src/musicdiscovery/hybrid.py")
+    assert (code, output) == (0, "run=true\n"), log
+
+
+def test_eval_gate_scope_skips_when_the_diff_touches_nothing_relevant(tmp_path):
+    code, output, log = _scope(tmp_path, "docs/other.md")
+    assert (code, output) == (0, "run=false\n"), log
+
+
+def test_eval_gate_scope_runs_when_the_diff_cannot_be_computed(tmp_path):
+    # An unavailable base object is an error, not an irrelevant pull request:
+    # the gate fails closed and evaluates.
+    code, output, log = _scope(tmp_path, "docs/other.md", base="0" * 40)
+    assert (code, output) == (0, "run=true\n"), log
+
+
+def test_eval_gate_uploads_the_report_even_from_a_hidden_directory():
+    gate = _code(WORKFLOWS / "eval-gate.yml")
+    step = _step(gate, "Upload the run's report")
+    path = re.search(r"^          path: (\S+)$", step, re.M).group(1)
+    assert "if: always() && steps.scope.outputs.run == 'true'" in step
+    # upload-artifact skips dot-directories unless told otherwise, which is how
+    # the first hosted run uploaded nothing.
+    if any(part.startswith(".") for part in Path(path).parts):
+        assert "          include-hidden-files: true\n" in step
+    # A missing report fails the job instead of passing without evidence.
+    assert "          if-no-files-found: error\n" in step

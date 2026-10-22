@@ -780,3 +780,15 @@ def test_cli_profile_benchmark_end_to_end(tmp_path, data_dir, capsys):
 def test_unknown_benchmark_is_refused(tmp_path, catalog):
     with pytest.raises(EvaluationError, match="unknown benchmark"):
         run(catalog, Path("q.json"), ["random"], tmp_path, date.today(), None, "x")
+
+
+def test_stored_file_hashes_ignore_the_checkout_line_endings(tmp_path):
+    # eval/queries.json is CRLF on a Windows checkout and LF on Linux; the hash
+    # in a report must not depend on which one wrote it (#105).
+    from musicdiscovery.evaluation import _sha256
+
+    lf = tmp_path / "lf.json"
+    crlf = tmp_path / "crlf.json"
+    lf.write_bytes(b'{\n  "a": 1\n}\n')
+    crlf.write_bytes(b'{\r\n  "a": 1\r\n}\r\n')
+    assert _sha256(lf) == _sha256(crlf)
