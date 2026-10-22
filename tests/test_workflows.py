@@ -2,6 +2,8 @@
 evaluation gate (#105)."""
 
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -163,3 +165,101 @@ def test_eval_gate_runs_nightly_on_main_through_the_same_workflow():
     job = _jobs(nightly)["eval-gate"]
     assert "    uses: ./.github/workflows/eval-gate.yml\n" in job
     assert "      always: true\n" in job
+
+
+def _step(workflow: str, name: str) -> str:
+    """The body of the step called `name`, up to the next step."""
+    for step in re.split(r"^      - ", workflow, flags=re.M)[1:]:
+        if re.match(rf"name: {re.escape(name)}\n", step):
+            return step
+    raise AssertionError(f"no step named {name!r}")
+
+
+def _script(step: str) -> str:
+    """The shell text of a step's `run: |` block."""
+    block = step.split("        run: |\n", 1)[1]
+    lines = []
+    for line in block.splitlines():
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        lines.append(line)
+    return textwrap.dedent("\n".join(lines)) + "\n"
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def _scope(tmp_path: Path, changed: str, base: str | None = None, **env: str):
+    """Run the eval-gate scope step on a two-commit repo; return (exit, output)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    target = repo / changed
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("two\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "head")
+    gate = _code(WORKFLOWS / "eval-gate.yml")
+    script = _script(_step(gate, "Decide whether the ranker path changed"))
+    output, summary = tmp_path / "output", tmp_path / "summary"
+    output.touch()
+    summary.touch()
+    done = subprocess.run(
+        ["bash", "-e", "-c", script],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "ALWAYS": "false",
+            "EVENT": "pull_request",
+            "BASE_SHA": base or base_sha,
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            **env,
+        },
+        check=False,
+    )
+    return done.returncode, output.read_text(encoding="utf-8")
+
+
+def test_eval_gate_scope_runs_when_the_diff_touches_the_ranker_path(tmp_path):
+    code, output = _scope(tmp_path, "src/musicdiscovery/hybrid.py")
+    assert (code, output) == (0, "run=true\n")
+
+
+def test_eval_gate_scope_skips_when_the_diff_touches_nothing_relevant(tmp_path):
+    code, output = _scope(tmp_path, "docs/other.md")
+    assert (code, output) == (0, "run=false\n")
+
+
+def test_eval_gate_scope_runs_when_the_diff_cannot_be_computed(tmp_path):
+    # An unavailable base object is an error, not an irrelevant pull request:
+    # the gate fails closed and evaluates.
+    code, output = _scope(tmp_path, "docs/other.md", base="0" * 40)
+    assert (code, output) == (0, "run=true\n")
+
+
+def test_eval_gate_uploads_the_report_even_from_a_hidden_directory():
+    gate = _code(WORKFLOWS / "eval-gate.yml")
+    step = _step(gate, "Upload the run's report")
+    path = re.search(r"^          path: (\S+)$", step, re.M).group(1)
+    assert "if: always() && steps.scope.outputs.run == 'true'" in step
+    # upload-artifact skips dot-directories unless told otherwise, which is how
+    # the first hosted run uploaded nothing.
+    if any(part.startswith(".") for part in Path(path).parts):
+        assert "          include-hidden-files: true\n" in step
+    # A missing report fails the job instead of passing without evidence.
+    assert "          if-no-files-found: error\n" in step
