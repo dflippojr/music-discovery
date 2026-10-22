@@ -1,7 +1,9 @@
 """Checks on how the workflows wire gate-guard (#104), review-v3 (#126) and the
 evaluation gate (#105)."""
 
+import os
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -196,8 +198,26 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
+def _bash() -> str:
+    """A Bash that runs the workflow's scripts as the hosted runner does.
+
+    On Windows that is Git for Windows' Bash, never System32's WSL launcher, which
+    a bare `bash` resolves to first. Fails, rather than skips, when there is none.
+    """
+    if os.name != "nt":
+        found = shutil.which("bash")
+    else:
+        git = shutil.which("git")
+        roots = list(Path(git).resolve().parents)[:3] if git else []
+        roots.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git")
+        bashes = (root / "bin" / "bash.exe" for root in roots)
+        found = next((str(bash) for bash in bashes if bash.is_file()), None)
+    assert found, "no usable Bash to run the eval-gate scope step (Git Bash on Windows)"
+    return found
+
+
 def _scope(tmp_path: Path, changed: str, base: str | None = None, **env: str):
-    """Run the eval-gate scope step on a two-commit repo; return (exit, output)."""
+    """Run the eval-gate scope step on a two-commit repo; return (exit, output, log)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -215,41 +235,46 @@ def _scope(tmp_path: Path, changed: str, base: str | None = None, **env: str):
     output, summary = tmp_path / "output", tmp_path / "summary"
     output.touch()
     summary.touch()
+    # The caller's environment keeps PATH and SYSTEMROOT valid on every OS; drop
+    # GIT_* so an outer repository can't redirect the diff.
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     done = subprocess.run(
-        ["bash", "-e", "-c", script],
+        [_bash(), "-e", "-c", script],
         cwd=repo,
         capture_output=True,
         text=True,
         env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            **inherited,
             "HOME": str(tmp_path),
             "ALWAYS": "false",
             "EVENT": "pull_request",
             "BASE_SHA": base or base_sha,
-            "GITHUB_OUTPUT": str(output),
-            "GITHUB_STEP_SUMMARY": str(summary),
+            # Forward slashes, which Bash reads on Windows too.
+            "GITHUB_OUTPUT": output.as_posix(),
+            "GITHUB_STEP_SUMMARY": summary.as_posix(),
             **env,
         },
         check=False,
     )
-    return done.returncode, output.read_text(encoding="utf-8")
+    log = f"exit {done.returncode}\nstdout:\n{done.stdout}\nstderr:\n{done.stderr}"
+    return done.returncode, output.read_text(encoding="utf-8"), log
 
 
 def test_eval_gate_scope_runs_when_the_diff_touches_the_ranker_path(tmp_path):
-    code, output = _scope(tmp_path, "src/musicdiscovery/hybrid.py")
-    assert (code, output) == (0, "run=true\n")
+    code, output, log = _scope(tmp_path, "src/musicdiscovery/hybrid.py")
+    assert (code, output) == (0, "run=true\n"), log
 
 
 def test_eval_gate_scope_skips_when_the_diff_touches_nothing_relevant(tmp_path):
-    code, output = _scope(tmp_path, "docs/other.md")
-    assert (code, output) == (0, "run=false\n")
+    code, output, log = _scope(tmp_path, "docs/other.md")
+    assert (code, output) == (0, "run=false\n"), log
 
 
 def test_eval_gate_scope_runs_when_the_diff_cannot_be_computed(tmp_path):
     # An unavailable base object is an error, not an irrelevant pull request:
     # the gate fails closed and evaluates.
-    code, output = _scope(tmp_path, "docs/other.md", base="0" * 40)
-    assert (code, output) == (0, "run=true\n")
+    code, output, log = _scope(tmp_path, "docs/other.md", base="0" * 40)
+    assert (code, output) == (0, "run=true\n"), log
 
 
 def test_eval_gate_uploads_the_report_even_from_a_hidden_directory():
