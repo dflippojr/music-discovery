@@ -20,6 +20,8 @@ SPLIT = "validation"
 METRICS = {"genre_ndcg": "same-genre nDCG@10", "tag_overlap": "tag overlap@10"}
 # Runs are comparable only on the same catalog and the same stored queries.
 SAME_KEYS = (("catalog", "source_sha1"), ("catalog", "tracks"), ("queries_sha256",))
+# The metrics are labelled @10, so both reports must have been cut off at 10.
+CUTOFF = 10
 
 
 class GateError(Exception):
@@ -66,13 +68,25 @@ def _same(baseline: dict, run: dict) -> None:
             )
 
 
+def _cutoff(baseline: dict, run: dict) -> None:
+    for name, report in (("baseline", baseline), ("run", run)):
+        k = report.get("k") if isinstance(report, dict) else None
+        if type(k) is not int or k != CUTOFF:
+            raise GateError(
+                f"the {name}'s cutoff k is {k!r}, not {CUTOFF}; "
+                "the reports are not comparable"
+            )
+
+
 def compare(baseline: dict, run: dict) -> list[Check]:
     """One check per gated ranker and metric on the validation split.
 
-    A check fails when the run's point estimate is undefined, is below the lower
-    bound of the baseline's 95% interval, or is below the upper bound of
-    ``random``'s interval in the same run.
+    Both reports must have been cut off at ``CUTOFF`` (10). A check fails when
+    the run's point estimate is undefined, is below the lower bound of the
+    baseline's 95% interval, or is below the upper bound of ``random``'s
+    interval in the same run.
     """
+    _cutoff(baseline, run)
     _same(baseline, run)
     checks = []
     for ranker in GATED_RANKERS:
