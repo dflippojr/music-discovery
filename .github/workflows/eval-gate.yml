@@ -50,7 +50,10 @@ jobs:
             run=true; why="scheduled run"
           elif [ "$EVENT" != pull_request ]; then
             run=false; why="not a pull request; pull requests and the nightly run are gated"
-          elif git diff --name-only "$BASE_SHA" HEAD | grep -Eq "$paths"; then
+          elif ! changed=$(git diff --name-only "$BASE_SHA" HEAD); then
+            # Fail closed: a diff that cannot be computed is not an irrelevant one.
+            run=true; why="the changed paths could not be computed"
+          elif grep -Eq "$paths" <<< "$changed"; then
             run=true; why="the pull request touches the ranker path"
           else
             run=false; why="the pull request touches no ranker-path file"
@@ -122,4 +125,7 @@ jobs:
         with:
           name: eval-run
           path: .eval-run/
-          if-no-files-found: ignore
+          # The directory is hidden, which upload-artifact skips by default.
+          include-hidden-files: true
+          # No report is a failure, not a pass without evidence.
+          if-no-files-found: error
