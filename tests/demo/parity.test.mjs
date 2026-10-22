@@ -1,4 +1,6 @@
 // Browser rankers must give the same top 10 as Python on the fixed parity queries.
+// These queries are a sample, not a proof: the browser ranks on int16-quantised
+// features, so near-tied tracks can swap (see docs/demo.md, "Parity and browser tests").
 // Run `python scripts/build_demo_fixture.py <dir>` first; DEMO_BUNDLE points at <dir>.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

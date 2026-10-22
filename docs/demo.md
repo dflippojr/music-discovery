@@ -80,13 +80,17 @@ the study session id stay intact. You can retry again after another failure;
 there is no need to refresh and lose your in-progress session.
 Vendor both files together.
 
-Quantisation error is far below the score gaps that decide the top 10, and the
-parity test guards that.
+The browser ranks on 16-bit quantised features, so it can reorder tracks whose Python
+scores are nearly tied. In two probes of 3,000 random lists each on the synthetic
+fixture, 0.3% to 0.5% differed from Python, and every differing pair was within about
+4e-5 of score. The parity test checks 24 fixed queries as a sample, not a proof that
+the browser always returns Python's top 10.
 
 ## Parity and browser tests
 
-`ranker.js` is a line-for-line port of `ranking.py` and `hybrid.py`. Both rankers
-must return the same top 10 as Python on 24 fixed queries (likes and dislikes):
+`ranker.js` is a line-for-line port of `ranking.py` and `hybrid.py`. The test checks
+that both rankers return Python's top 10 on 24 fixed queries (likes and dislikes).
+That is a sample, not a proof, for the reason given above:
 
 ```sh
 python scripts/build_demo_fixture.py .demo-fixture   # synthetic catalog, no dataset
