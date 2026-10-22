@@ -1,4 +1,5 @@
-"""Checks on how the workflows wire gate-guard (#104) and review-v3 (#126)."""
+"""Checks on how the workflows wire gate-guard (#104), review-v3 (#126) and the
+evaluation gate (#105)."""
 
 import re
 from pathlib import Path
@@ -83,7 +84,7 @@ def test_ci_gate_needs_the_pinned_gate_guard_with_owner_only_labels():
     assert f"      guard-ref: {GUARD_SHA}\n" in guard
     assert "      require-owner-label-actor: true\n" in guard
     assert "self-hosted" not in guard
-    assert "    needs: [test, demo, ui, gate-guard]\n" in jobs["gate"]
+    assert "    needs: [test, demo, ui, eval-gate, gate-guard]\n" in jobs["gate"]
     assert "    if: always()\n" in jobs["gate"]
 
 
@@ -123,3 +124,42 @@ def test_review_caller_runs_review_v3_only_from_main_on_trusted_triggers():
     assert f"      runs_on: '{REVIEW_RUNS_ON}'\n" in job
     assert "      tooling_ref: review-v3\n" in job
     assert "secrets" not in job
+
+
+def test_eval_gate_always_reports_and_gate_requires_it():
+    # The job runs on every pull request, so gate can require it; the called
+    # workflow decides inside whether the diff makes it "not applicable".
+    ci = _code(WORKFLOWS / "ci.yml")
+    job = _jobs(ci)["eval-gate"]
+    assert "    uses: ./.github/workflows/eval-gate.yml\n" in job
+    assert "    if:" not in job
+    assert "eval-gate" in _jobs(ci)["gate"]
+
+
+def test_eval_gate_workflow_verifies_caches_and_compares_the_archive():
+    gate = _code(WORKFLOWS / "eval-gate.yml")
+    assert "workflow_call:" in gate
+    assert "pull_request" not in gate.split("\njobs:\n", 1)[0]
+    assert "runs-on: ubuntu-latest" in gate
+    assert "self-hosted" not in gate
+    # The key is the archive's documented SHA1; ingest verifies it, and the
+    # cache is saved only after ingest succeeded.
+    sha1 = "f0df49ffe5f2a6008d7dc83c6915b31835dfe733"
+    assert f"FMA_SHA1: {sha1}" in gate
+    assert "key: fma-metadata-${{ env.FMA_SHA1 }}" in gate
+    assert sha1 in (ROOT / "docs" / "catalog.md").read_text(encoding="utf-8")
+    assert "steps.ingest.outcome == 'success'" in gate
+    for ranker in ("baseline", "hybrid", "profile", "random", "popular"):
+        assert f"--ranker {ranker}" in gate
+    assert "python -m musicdiscovery.eval_gate reports/baseline.json" in gate
+    assert "name: eval-run" in gate
+    assert "not applicable" in gate
+
+
+def test_eval_gate_runs_nightly_on_main_through_the_same_workflow():
+    nightly = _code(WORKFLOWS / "eval-nightly.yml")
+    assert re.search(r"^on:\n  schedule:\n    - cron: ", nightly, re.M)
+    assert "pull_request" not in nightly
+    job = _jobs(nightly)["eval-gate"]
+    assert "    uses: ./.github/workflows/eval-gate.yml\n" in job
+    assert "      always: true\n" in job

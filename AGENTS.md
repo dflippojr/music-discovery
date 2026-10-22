@@ -81,6 +81,12 @@ HYPOTHESIS_PROFILE=deep pytest tests/test_ranker_contract.py
 A failure prints the shrunk catalog and query, plus a `@reproduce_failure`
 line that replays it.
 
+The `eval-gate` job in `ci.yml` is separate from pytest: it downloads the FMA
+metadata, evaluates the rankers on the real catalog and fails when `hybrid` or
+`profile` drops below the baseline in `reports/baseline.json`. It runs on
+ranker-path pull requests and nightly. `docs/evaluation.md` ("The evaluation
+gate") explains how to raise the baseline, which needs `gate-change-approved`.
+
 Use `ruff format .` to format code. The package uses the `src/` layout;
 tests require an installed package. CI runs these checks on Python 3.12. The
 `test` job runs on both Linux and Windows; `demo` and `ui` run on Linux only.

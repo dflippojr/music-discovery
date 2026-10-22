@@ -137,6 +137,13 @@ jobs:
             test-results/
           if-no-files-found: ignore
 
+  # The ranker-quality gate (#105): the offline evaluation on the real FMA
+  # catalog, compared with reports/baseline.json. It always reports, and says
+  # "not applicable" when a pull request touches no ranker-path file. The
+  # nightly run on main is eval-nightly.yml. See docs/evaluation.md.
+  eval-gate:
+    uses: ./.github/workflows/eval-gate.yml
+
   # The shared gate guard, called at a full SHA of dflippojr/.github main;
   # guard-ref names the same SHA, so the script that judges the pull request is
   # the one that was reviewed. It fails a pull request that deletes or skips
@@ -157,7 +164,7 @@ jobs:
   # cancelled or skipped job turns it red.
   gate:
     name: gate
-    needs: [test, demo, ui, gate-guard]
+    needs: [test, demo, ui, eval-gate, gate-guard]
     if: always()
     runs-on: ubuntu-latest
     steps:

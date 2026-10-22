@@ -64,6 +64,56 @@ over queries (1000 resamples, fixed seed), so the same inputs give identical
 numbers. The report ends with a fixed "Limits" section and records the catalog
 version from `docs/catalog.md` and the ingest manifest.
 
+## The evaluation gate
+
+CI gates ranker quality on the real FMA small catalog (#105). The `eval-gate`
+job in `ci.yml`, which `gate` requires, downloads the metadata archive, runs
+`musicdiscovery ingest` and `evaluate` for `baseline`, `hybrid`, `profile`,
+`random` and `popular`, and compares the run with the committed baseline
+through `python -m musicdiscovery.eval_gate reports/baseline.json <run>.json`.
+It is a CI job and not a pytest test because it downloads data, which tests
+must not do. Its logic is unit-tested on synthetic numbers in
+`tests/test_eval_gate.py`.
+
+- **When it runs.** On every pull request, where it records "not applicable"
+  within seconds unless the diff touches `src/musicdiscovery/rank*`, `hybrid*`,
+  `profile*`, `evaluation.py`, `eval_gate.py`, `ingest.py`, `catalog.py`,
+  `preference.py`, `eval/`, `reports/baseline.json` or the gate's workflows. A
+  pull request that changes any of those runs the full evaluation. It also runs
+  nightly on `main` (`eval-nightly.yml`) and on demand (`workflow_dispatch`).
+- **The archive.** `fma_metadata.zip` (342 MiB, CC BY 4.0, see `docs/catalog.md`)
+  is restored from the Actions cache under the key `fma-metadata-<SHA1>`, or
+  downloaded on a miss. `ingest` checks the SHA1 from `docs/catalog.md` either
+  way and refuses any other file; the cache is written only after that check.
+  Nothing is committed. Measured locally, a run with the archive in place takes about
+  two minutes (ingest 85 to 95 seconds, evaluation 10 to 30), and the download
+  adds to that on a miss.
+- **The rule.** On the **validation** split only, for `hybrid` and `profile`,
+  the job fails when the point estimate of same-genre nDCG@10 or tag
+  overlap@10 is below the **lower bound** of the baseline's 95% interval, when
+  it is undefined (`NaN`), or when it is below the upper bound of `random`'s
+  interval in the same run. Test-split numbers are in the report and never
+  gated. `audio-embedding` is not gated until its vector cache can be rebuilt
+  in CI. The run and the baseline must use the same catalog (archive SHA1 and
+  track count) and the same `eval/queries.json`, or the job fails as not
+  comparable.
+- **The output.** A pass/fail table in the job summary and the run's `.json`
+  and `.md` report as the `eval-run` artifact.
+- **The baseline.** `reports/baseline.json` holds `{"report": "<file>"}`, the
+  committed report in `reports/` that the gate uses. Report hashes of stored
+  files ignore line endings, so a Windows and a Linux run agree.
+
+### Raising the baseline
+
+A ranker change that improves the numbers does not need a new baseline: the
+gate only fails on a drop. To make the new level the floor, or to accept a
+deliberate drop, run `musicdiscovery evaluate` with the five gate rankers on a
+fresh `ingest`, commit the new `reports/offline-<date>.md` and `.json` in the
+same pull request as the ranker change, and point `reports/baseline.json` at
+it. The same applies after a change to `eval/queries.json` or a new archive.
+Changing the baseline changes the gate, so the pull request needs the owner's
+`gate-change-approved` label and an entry under "Gate changes" in its body.
+
 ## Held-out tags
 
 The same-genre rate and tag overlap reward a ranker for using the label they

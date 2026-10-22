@@ -1,0 +1,125 @@
+name: Evaluation gate
+
+# The ranker-quality gate of #105, called by ci.yml (job eval-gate, required
+# through gate) and by eval-nightly.yml. It runs the offline evaluation on the
+# real FMA small catalog and compares the hybrid and profile rankers with the
+# committed baseline (reports/baseline.json). It is a CI job and not a pytest
+# test because it downloads the catalog metadata, which AGENTS.md forbids in
+# tests. The job always finishes, so the gate job can require it: when a pull
+# request touches no ranker-path file it records "not applicable".
+on:
+  workflow_call:
+    inputs:
+      always:
+        description: Run the evaluation whatever the diff touches (nightly)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # The documented SHA1 of fma_metadata.zip (docs/catalog.md). `musicdiscovery
+  # ingest` refuses any other file, cached or downloaded, and deletes it.
+  FMA_SHA1: f0df49ffe5f2a6008d7dc83c6915b31835dfe733
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # At most 10 minutes on a cache hit. The first run, or a miss after the
+    # cache is evicted, also downloads 342 MiB.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history, so the diff against the pull request's base resolves.
+          fetch-depth: 0
+
+      - name: Decide whether the ranker path changed
+        id: scope
+        env:
+          ALWAYS: ${{ inputs.always }}
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Ranker code (rank*, hybrid*, profile*), the evaluation and ingest
+          # code, the stored queries and profiles, the baseline and the files
+          # that define this gate.
+          paths='^(src/musicdiscovery/(rank|hybrid|profile|evaluation|eval_gate|ingest|catalog|preference)|eval/|reports/baseline\.json|\.github/workflows/(ci|eval-gate|eval-nightly)\.yml)'
+          if [ "$ALWAYS" = true ]; then
+            run=true; why="scheduled run"
+          elif [ "$EVENT" != pull_request ]; then
+            run=false; why="not a pull request; pull requests and the nightly run are gated"
+          elif git diff --name-only "$BASE_SHA" HEAD | grep -Eq "$paths"; then
+            run=true; why="the pull request touches the ranker path"
+          else
+            run=false; why="the pull request touches no ranker-path file"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = false ]; then
+            echo "eval-gate: not applicable ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "eval-gate: running ($why)"
+          fi
+
+      - name: Set up Python
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the package
+        if: steps.scope.outputs.run == 'true'
+        run: python -m pip install -e .
+
+      # Keyed by the archive's SHA1, so a new archive is a new key. The file
+      # is saved only after ingest has verified it, and is never committed.
+      - name: Restore the FMA metadata archive
+        if: steps.scope.outputs.run == 'true'
+        id: fma
+        uses: actions/cache/restore@v5
+        with:
+          path: data/raw/fma_metadata.zip
+          key: fma-metadata-${{ env.FMA_SHA1 }}
+
+      - name: Ingest (downloads on a cache miss, verifies the SHA1 always)
+        if: steps.scope.outputs.run == 'true'
+        id: ingest
+        run: |
+          started=$(date +%s)
+          musicdiscovery ingest --data-dir data
+          echo "eval-gate: archive cache hit=${{ steps.fma.outputs.cache-hit || 'false' }}; ingest took $(( $(date +%s) - started )) s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the verified archive
+        if: steps.scope.outputs.run == 'true' && steps.fma.outputs.cache-hit != 'true' && steps.ingest.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: data/raw/fma_metadata.zip
+          key: fma-metadata-${{ env.FMA_SHA1 }}
+
+      - name: Evaluate baseline, hybrid, profile, random and popular
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          started=$(date +%s)
+          musicdiscovery evaluate --data-dir data --out-dir .eval-run \
+            --date "$(date -u +%F)" \
+            --ranker baseline --ranker hybrid --ranker profile \
+            --ranker random --ranker popular
+          echo "eval-gate: evaluate took $(( $(date +%s) - started )) s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare with reports/baseline.json
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m musicdiscovery.eval_gate reports/baseline.json .eval-run/offline-*.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the run's report
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-run
+          path: .eval-run/
+          if-no-files-found: ignore

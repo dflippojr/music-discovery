@@ -893,7 +893,9 @@ def render_profiles_section(section: dict) -> list[str]:
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Hash a stored JSON file with LF line endings, so a Windows checkout
+    (CRLF) and a Linux one record the same hash and reports stay comparable."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def _relative(path: Path) -> str:
