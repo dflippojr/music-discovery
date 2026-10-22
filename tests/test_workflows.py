@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 # The one dflippojr/.github commit both guards load, workflow and script alike.
-GUARD_SHA = "882623c67a5c3bab64da2136e6070a5325440b47"
+GUARD_SHA = "27bdb76481888567a6c524ebbb19bf4a6c7e7e20"
 GUARD_WORKFLOWS = "dflippojr/.github/.github/workflows"
 READ_PERMISSIONS = (
     r"^permissions:\n  contents: read\n  issues: read\n  pull-requests: read\n"

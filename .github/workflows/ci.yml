@@ -147,9 +147,9 @@ jobs:
   # label applied before the newest push. The judge is the gate-guard check
   # that gate-guard-target.yml posts from main.
   gate-guard:
-    uses: dflippojr/.github/.github/workflows/gate-guard.yml@882623c67a5c3bab64da2136e6070a5325440b47
+    uses: dflippojr/.github/.github/workflows/gate-guard.yml@27bdb76481888567a6c524ebbb19bf4a6c7e7e20
     with:
-      guard-ref: 882623c67a5c3bab64da2136e6070a5325440b47
+      guard-ref: 27bdb76481888567a6c524ebbb19bf4a6c7e7e20
       require-owner-label-actor: true
 
   # The check to require, next to gate-guard. It always runs and passes only
