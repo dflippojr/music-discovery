@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from musicdiscovery import demo
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 # The one dflippojr/.github commit both guards load, workflow and script alike.
@@ -418,8 +420,26 @@ def test_ci_only_names_only_commands_ci_yml_still_runs():
     assert not set(CI_ONLY) - commands, sorted(set(CI_ONLY) - commands)
 
 
-def _stamp_check(tmp_path: Path, stamp: str, tracked_change: bool, untracked: bool):
-    """Run job_demo's stamp check on a one-commit repo; return (exit, log)."""
+def _stamp_repo(repo: Path, tracked_change: bool, untracked: str | None) -> str:
+    """A one-commit checkout of the package, then the given changes; return HEAD."""
+    package = repo / "src" / "musicdiscovery"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "README.md").write_text("one\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    head = _git(repo, "rev-parse", "HEAD")
+    if tracked_change:
+        (repo / "README.md").write_text("two\n", encoding="utf-8")
+    if untracked:
+        (repo / untracked).parent.mkdir(parents=True, exist_ok=True)
+        (repo / untracked).write_text("new\n", encoding="utf-8")
+    return head
+
+
+def _run_stamp_check(repo: Path, sha: str) -> tuple[int, str]:
+    """Run job_demo's stamp check in `repo`, with a bundle stamped `sha`."""
     script = CI_LOCAL.read_text(encoding="utf-8")
     body = re.search(r"^job_demo\(\) \{\n(.*?)^\}\n", script, re.M | re.S).group(1)
     lines = body.splitlines()
@@ -428,20 +448,8 @@ def _stamp_check(tmp_path: Path, stamp: str, tracked_change: bool, untracked: bo
     start = starts[0]
     end = next(i for i, line in enumerate(lines) if "test:parity" in line)
     check = textwrap.dedent("\n".join(lines[start:end])) + "\n"
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    (repo / "README.md").write_text("one\n", encoding="utf-8")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "base")
-    head = _git(repo, "rev-parse", "HEAD")
-    if tracked_change:
-        (repo / "README.md").write_text("two\n", encoding="utf-8")
-    if untracked:
-        (repo / "new.txt").write_text("new\n", encoding="utf-8")
     bundle = repo / ".demo-fixture"
-    bundle.mkdir()
-    sha = stamp.replace("HEAD", head)
+    bundle.mkdir(exist_ok=True)
     (bundle / "SOURCE.json").write_text(json.dumps({"sha": sha}), encoding="utf-8")
     inherited = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     # The interpreter running the tests answers to `python`, as .venv's does.
@@ -451,10 +459,23 @@ def _stamp_check(tmp_path: Path, stamp: str, tracked_change: bool, untracked: bo
         cwd=repo,
         capture_output=True,
         text=True,
-        env={**inherited, "HOME": str(tmp_path), "PATH": path},
+        env={**inherited, "HOME": str(repo.parent), "PATH": path},
         check=False,
     )
     return done.returncode, f"exit {done.returncode}\n{done.stdout}{done.stderr}"
+
+
+def _stamp_check(
+    tmp_path: Path,
+    stamp: str,
+    tracked_change: bool,
+    untracked: bool,
+    untracked_path: str = "new.txt",
+):
+    """Run job_demo's stamp check on a one-commit repo; return (exit, log)."""
+    repo = tmp_path / "repo"
+    head = _stamp_repo(repo, tracked_change, untracked_path if untracked else None)
+    return _run_stamp_check(repo, stamp.replace("HEAD", head))
 
 
 @pytest.mark.parametrize(
@@ -468,11 +489,61 @@ def _stamp_check(tmp_path: Path, stamp: str, tracked_change: bool, untracked: bo
         ("0" * 40, False, False, False),
     ],
 )
-def test_ci_local_stamp_check_wants_head_dirty_only_with_tracked_changes(
+def test_ci_local_stamp_check_wants_head_dirty_only_for_tracked_or_source_changes(
     tmp_path, stamp, tracked_change, untracked, passes
 ):
     code, log = _stamp_check(tmp_path, stamp, tracked_change, untracked)
     assert (code == 0) == passes, log
+
+
+@pytest.mark.parametrize(
+    ("stamp", "untracked_path", "passes"),
+    [
+        # A new module that is not `git add`ed yet makes the work tree -dirty (#149).
+        ("HEAD-dirty", "src/musicdiscovery/new_module.py", True),
+        ("HEAD-dirty", "scripts/vendor-into-site/new.sh", True),
+        ("HEAD", "src/musicdiscovery/new_module.py", False),
+        ("0" * 40 + "-dirty", "src/musicdiscovery/new_module.py", False),
+    ],
+)
+def test_ci_local_stamp_check_counts_untracked_files_under_source_paths(
+    tmp_path, stamp, untracked_path, passes
+):
+    code, log = _stamp_check(tmp_path, stamp, False, True, untracked_path)
+    assert (code == 0) == passes, log
+
+
+@pytest.mark.parametrize(
+    ("tracked_change", "untracked"),
+    [
+        (False, None),
+        (True, None),
+        (False, "src/musicdiscovery/new_module.py"),
+        (False, "scripts/vendor-into-site/new.sh"),
+        (False, "notes.txt"),
+    ],
+    ids=[
+        "clean",
+        "tracked-change",
+        "untracked-package",
+        "untracked-vendor-script",
+        "untracked-elsewhere",
+    ],
+)
+def test_ci_local_stamp_check_agrees_with_build_source(
+    tmp_path, monkeypatch, tracked_change, untracked
+):
+    """The local check and build_source() stamp each work-tree state alike (#149)."""
+    repo = tmp_path / "repo"
+    head = _stamp_repo(repo, tracked_change, untracked)
+    package = repo / "src" / "musicdiscovery"
+    monkeypatch.setattr(demo, "__file__", str(package / "demo.py"))
+    exported = demo.build_source()["sha"]
+    other = head if exported != head else head + demo.DIRTY_SUFFIX
+    code, log = _run_stamp_check(repo, exported)
+    assert code == 0, log
+    code, log = _run_stamp_check(repo, other)
+    assert code == 1 and "is not stamped" in log, log
 
 
 def _ci_local_ui(tmp_path: Path, handle: bool, test_ui_exit: int):
