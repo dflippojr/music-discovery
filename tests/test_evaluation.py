@@ -343,6 +343,28 @@ def test_cli_missing_catalog(tmp_path, capsys):
     assert "no catalog" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--queries", "q.json", "--out-dir", "afile/sub", "--ranker", "random"],
+        ["--queries", "afile/q.json", "--generate-queries"],
+        ["--profiles", "afile/p.json", "--generate-profiles"],
+    ],
+    ids=["out-dir", "queries", "profiles"],
+)
+def test_cli_reports_unwritable_paths(tmp_path, data_dir, capsys, extra):
+    # A path below a regular file fails on every OS, unlike chmod.
+    (tmp_path / "afile").write_text("")
+    base = ["evaluate", "--data-dir", str(data_dir)]
+    assert main([*base, "--queries", "q.json", "--generate-queries"]) == 0
+    capsys.readouterr()
+    assert main([*base, *extra]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("evaluate: ")
+    assert err.count("\n") == 1
+    assert "Traceback" not in err
+
+
 def test_paths_outside_working_directory_are_refused(
     tmp_path, monkeypatch, catalog, queries
 ):
