@@ -307,7 +307,9 @@ class Run:
                 not (instance_dir and (ROOT / instance_dir).exists()),
                 f"{instance_dir} remains"
                 if instance_dir and (ROOT / instance_dir).exists()
-                else "instance directory removed",
+                else "instance directory removed"
+                if instance_dir
+                else "this run created no instance directory",
             ),
         ]
 
