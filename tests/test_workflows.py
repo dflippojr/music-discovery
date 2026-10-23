@@ -103,6 +103,40 @@ def test_every_dflippojr_github_reference_uses_the_one_guard_sha():
     assert refs == {GUARD_SHA}
 
 
+def _encoding_overrides(workflow: str) -> list[str]:
+    """Non-comment lines that name PYTHONIOENCODING or PYTHONUTF8 (#127)."""
+    named = re.compile(r"PYTHON(?:IOENCODING|UTF8)", re.I)
+    lines = (line.strip() for line in workflow.splitlines())
+    return [line for line in lines if not line.startswith("#") and named.search(line)]
+
+
+@pytest.mark.parametrize(
+    ("workflow", "passes"),
+    [
+        ("    env:\n      PYTHONUTF8: 1\n", False),
+        ("        run: export PYTHONIOENCODING=utf-8\n", False),
+        ('        run: $env:PYTHONUTF8 = "1"\n', False),
+        ("      # PYTHONIOENCODING or PYTHONUTF8 here would hide a crash.\n", True),
+        ("        run: python -m pytest\n", True),
+    ],
+)
+def test_encoding_check_flags_only_code_that_sets_the_variables(workflow, passes):
+    assert (_encoding_overrides(workflow) == []) == passes
+
+
+def test_no_workflow_sets_pythonioencoding_or_pythonutf8():
+    # On Windows the console smoke must keep the runner's default encoding;
+    # either variable would hide #28's class of crash (AGENTS.md).
+    paths = sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+    assert paths, f"no workflows under {WORKFLOWS}"
+    found = {
+        path.name: lines
+        for path in paths
+        if (lines := _encoding_overrides(path.read_text(encoding="utf-8")))
+    }
+    assert not found, found
+
+
 def test_review_caller_runs_review_v3_only_from_main_on_trusted_triggers():
     # pull_request_target reads this caller from main, and the owner's runner
     # hook permits only this file on main. A pull_request trigger would run a
