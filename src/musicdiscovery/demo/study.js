@@ -1,11 +1,13 @@
 // Blind listener study. For each task the listener picks a seed and qualities, sees two
 // unlabelled lists, rates every track and says which list they prefer. Which ranker made
-// which list is kept in memory only and goes into the exported file, never onto the page.
-// Nothing is sent anywhere: the listener downloads one JSON file and sends it to the owner.
+// which list goes into the exported file, never onto the page. The session so far is kept
+// in this tab's sessionStorage, so a reload or a discarded phone tab can resume it, and the
+// page asks before it is left with ratings that are not exported. Nothing is sent anywhere:
+// the listener downloads one JSON file and sends it to the owner.
 
 import { Rankers } from "./ranker.js";
-import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, newSessionId, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
-import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, resultPresentation, SeedPicker, thumbButton } from "./ui.js";
+import { balancedOrders, buildExport, CONSENT, hasRatings, LABELS, LIST_SIZE, newSessionId, restoreSession, SessionStore, sessionState, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
+import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, resultPresentation, SeedPicker, thumbButton, trackLabel } from "./ui.js";
 
 const PREFERENCES = [
   { value: "A", text: "List A" },
@@ -19,11 +21,31 @@ class Study {
     this.data = data;
     this.rankers = new Rankers(data);
     this.sources = new DeferredSources(data, root);
+    this.store = new SessionStore(() => globalThis.sessionStorage);
+    this.id = makeIds();
+    this.newSession();
+    root.classList.add("md-demo");
+    globalThis.addEventListener("beforeunload", (event) => {
+      if (!this.rated || this.exported) return;
+      event.preventDefault();
+      event.returnValue = ""; // browsers before Chrome 119 prompt only when this is set
+    });
+    const saved = restoreSession(this.store.load(), data.ids);
+    if (saved) this.offerResume(saved);
+    else this.showIntro();
+  }
+
+  newSession() {
     this.orders = balancedOrders(TASK_COUNT, randomRow);
     this.session = { id: newSessionId((bytes) => crypto.getRandomValues(bytes)), startedAt: timestamp(), tasks: [] };
-    this.id = makeIds();
-    root.classList.add("md-demo");
-    this.showIntro();
+    this.current = null;
+    this.rated = false;
+    this.exported = false;
+  }
+
+  /** Keep the session so far in this tab, once there is a task on screen to come back to. */
+  save() {
+    if (this.session.tasks.length || this.current?.task) this.store.save(sessionState(this.session, this.orders, this.current));
   }
 
   show(...children) {
@@ -46,18 +68,45 @@ class Study {
     );
   }
 
+  offerResume(saved) {
+    const done = saved.session.tasks.length;
+    const resume = h("button", { type: "button", class: "md-button", text: "Resume my session" });
+    const restart = h("button", { type: "button", class: "md-button", text: "Start over" });
+    resume.addEventListener("click", () => this.resume(saved));
+    restart.addEventListener("click", () => {
+      this.store.clear();
+      this.showIntro();
+    });
+    this.show(
+      this.heading("Listener study"),
+      h("p", { class: "md-lead", text: `This tab has a session you have not exported yet, with ${done} of ${TASK_COUNT} tasks done. Resume it where you left off, or start over?` }),
+      h("p", { class: "md-help", text: "Starting over deletes the ratings kept in this tab." }),
+      h("div", { class: "md-row" }, resume, restart),
+    );
+  }
+
+  resume({ session, orders, current }) {
+    this.session = session;
+    this.orders = orders;
+    this.rated = hasRatings({ session, current });
+    if (current?.task) this.showLists(current.task, current.seedRow);
+    else if (session.tasks.length === TASK_COUNT) this.showDone();
+    else this.showTask(current?.startedAt);
+  }
+
   // --- one task -------------------------------------------------------------
 
-  showTask() {
+  showTask(startedAt = timestamp()) {
     const index = this.session.tasks.length;
-    const startedAt = timestamp();
+    this.current = { startedAt, seedRow: null, task: null };
+    this.save();
     const next = h("button", { type: "button", class: "md-button", text: "Show the two lists", disabled: true });
     const sync = () => {
       next.disabled = this.seed.row < 0;
     };
     this.seed = new SeedPicker(this.data, { heading: "1. Pick a seed track", onChange: sync });
     this.picker = new QualityPicker(this.data, { heading: "2. Qualities (optional)", onChange: () => {} });
-    next.addEventListener("click", () => this.showLists(index, startedAt));
+    next.addEventListener("click", () => this.showLists(this.newTask(index, startedAt), this.seed.row));
     this.show(
       this.heading(`Task ${index + 1} of ${TASK_COUNT}`),
       this.seed.element,
@@ -66,10 +115,9 @@ class Study {
     );
   }
 
-  showLists(index, startedAt) {
+  newTask(index, startedAt) {
     const preference = buildPreference(this.data, this.seed.row, this.picker.qualities);
-    const seedLabel = this.seed.labels[this.seed.row];
-    const task = {
+    return {
       seedTrackId: preference.seeds[0],
       likes: preference.likes,
       dislikes: preference.dislikes,
@@ -82,6 +130,12 @@ class Study {
         results: this.rankers.rank(ranker, preference, LIST_SIZE).map((pick) => ({ trackId: pick.id, row: pick.row, rating: null, newToMe: false })),
       })),
     };
+  }
+
+  showLists(task, seedRow) {
+    const index = this.session.tasks.length;
+    this.current = { startedAt: task.startedAt, seedRow, task };
+    this.save();
     const last = index === TASK_COUNT - 1;
     const next = h("button", { type: "button", class: "md-button", text: last ? "Finish" : "Next task", disabled: true });
     const status = h("p", { class: "md-status", role: "status" });
@@ -94,13 +148,15 @@ class Study {
     next.addEventListener("click", () => {
       task.completedAt = timestamp();
       this.session.tasks.push(task);
+      this.current = null;
+      this.save();
       if (last) this.showDone();
       else this.showTask();
     });
     const lists = task.lists.map((list) => this.listSection(list, sync));
     this.show(
       this.heading(`Task ${index + 1} of ${TASK_COUNT}`),
-      h("p", { class: "md-lead", text: `Seed: ${seedLabel}` }),
+      h("p", { class: "md-lead", text: `Seed: ${trackLabel(this.data, seedRow)}` }),
       ...lists,
       this.preferenceSection(task, sync),
       status,
@@ -119,6 +175,8 @@ class Study {
     const { title, header, linkBox } = resultPresentation(this.data, result.row, rank, this.sources);
     const onRate = (value) => {
       result.rating = result.rating === value ? null : value;
+      this.rated = true;
+      this.save();
       paint();
       sync();
     };
@@ -129,9 +187,10 @@ class Study {
       down.setAttribute("aria-pressed", String(result.rating === -1));
     };
     paint();
-    const fresh = h("input", { type: "checkbox", id: this.id(`new-${list.label}-${rank}`) });
+    const fresh = h("input", { type: "checkbox", id: this.id(`new-${list.label}-${rank}`), checked: result.newToMe });
     fresh.addEventListener("change", () => {
       result.newToMe = fresh.checked;
+      this.save();
     });
     return h(
       "li",
@@ -145,9 +204,10 @@ class Study {
   preferenceSection(task, sync) {
     const name = this.id("prefer");
     const radios = PREFERENCES.map(({ value, text }) => {
-      const input = h("input", { type: "radio", name, id: this.id(`p-${value}`), value });
+      const input = h("input", { type: "radio", name, id: this.id(`p-${value}`), value, checked: task.preferred === value });
       input.addEventListener("change", () => {
         task.preferred = value;
+        this.save();
         sync();
       });
       return h("div", { class: "md-radio" }, input, h("label", { for: input.id }, h("span", { class: "md-radio-name", text })));
@@ -163,6 +223,8 @@ class Study {
     exportButton.addEventListener("click", () => {
       const body = buildExport(this.session);
       downloadJson(body, `listener-study-${this.session.id.slice(0, 8)}.json`);
+      this.exported = true;
+      this.store.clear();
       status.textContent = "Downloaded. Please send that file to the person who invited you.";
     });
     this.show(

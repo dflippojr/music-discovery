@@ -30,18 +30,21 @@ track's source page to listen, gives every track a thumbs up or down, ticks
 
 Shown on the page before the first task and sent with the invitation:
 
-> This is a short study of two ways of recommending music. You will do 5 tasks.
-> In each, you pick a track, get two lists of tracks, listen as much as you
-> like, rate each track, and say which list you prefer. Taking part is
-> voluntary and you can stop at any time by closing the page; nothing is saved
-> until you download the file at the end. The file holds a random session id,
-> your choices and ratings and the times you made them. It does not hold your
-> name, email address, IP address or anything you type. You then send the file
-> to the person who invited you. The results will be reported only in
-> aggregate, with no way to tell who rated what. By sending the file you agree
-> to it being used this way. If you change your mind afterwards, tell the
-> person who invited you and your file will be deleted, as long as the report
-> has not yet been written.
+> This is a short study of two ways of recommending music. You will do 5
+> tasks. In each, you pick a track, get two lists of tracks, listen as much as
+> you like, rate each track, and say which list you prefer. Taking part is
+> voluntary and you can stop at any time by closing the page. So that a reload
+> does not lose your work, your choices and ratings so far are kept in this
+> browser tab's own storage (sessionStorage) and nowhere else; they are
+> deleted when you download the file at the end, when you choose to start over
+> instead of resuming, or when you close the tab. The file holds a random
+> session id, your choices and ratings and the times you made them. It does
+> not hold your name, email address, IP address or anything you type. You then
+> send the file to the person who invited you. The results will be reported
+> only in aggregate, with no way to tell who rated what. By sending the file
+> you agree to it being used this way. If you change your mind afterwards,
+> tell the person who invited you and your file will be deleted, as long as
+> the report has not yet been written.
 
 ## What is recorded
 
@@ -66,6 +69,15 @@ collected. The page makes no network requests and has no analytics.
 The participant clicks "Export my ratings" on the last screen, which downloads
 one file, and sends it to the owner by whatever channel they normally use
 (email attachment or message). Nothing is uploaded and there is no backend.
+
+Until the export, the session so far is kept in the tab's `sessionStorage`
+after every rating, "New to me" tick, preference and finished task. If the page
+reloads, or a phone browser discards the tab while the participant listens on
+a source page, the page offers to resume the session where it stopped, with
+the same session id and list order, or to start over, which deletes the kept
+copy. Exporting deletes it too, and closing the tab removes it. From the first
+rating until the export, leaving the page asks for confirmation first. If the
+browser blocks storage, the session lives in the page only, as before.
 
 ## Data handling
 

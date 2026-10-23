@@ -969,6 +969,67 @@ describe("study page", () => {
     await close(page, context);
   });
 
+  test("a session resumes between tasks and on the last screen", async () => {
+    const { context, page, problems } = await study();
+    page.on("dialog", (d) => d.accept());
+    const reloadAndResume = async () => {
+      await page.reload();
+      await page.waitForSelector("#music-discovery-study button");
+      await page.getByRole("button", { name: "Resume my session" }).click();
+    };
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    const id = await page.evaluate(() => document.querySelector("#music-discovery-study").study.session.id);
+    await doTask(page);
+    await reloadAndResume();
+    assert.equal(await page.getByRole("heading", { name: "Task 2 of 5" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Show the two lists" }).isDisabled(), true);
+    for (let i = 1; i < 5; i += 1) await doTask(page, { last: i === 4 });
+    await reloadAndResume();
+    assert.equal(await page.getByRole("heading", { name: "All done, thank you" }).count(), 1);
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export my ratings" }).click()]);
+    const body = JSON.parse(readFileSync(await download.path(), "utf8"));
+    assert.equal(body.session_id, id);
+    assert.equal(body.tasks.length, 5);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("a stored session that does not fit this page or catalog is not offered", async () => {
+    const { context, page, problems } = await study();
+    page.on("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    await doTask(page);
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    const key = "music-discovery-study-session";
+    const good = JSON.parse(await page.evaluate((key) => sessionStorage.getItem(key), key));
+    const damaged = {
+      "not JSON": "{",
+      "another version": { ...good, version: 2 },
+      "too few orders": { ...good, orders: good.orders.slice(1) },
+      "a bad session id": { ...good, session: { ...good.session, id: "x" } },
+      "an unfinished earlier task": { ...good, session: { ...good.session, tasks: [{ ...good.session.tasks[0], preferred: null }] } },
+      "a swapped list order": { ...good, orders: good.orders.map((o) => [...o].reverse()) },
+      "a track from another catalog": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: l.results.map((r) => ({ ...r, trackId: -1 })) })) } } },
+      "a different seed row": { ...good, current: { ...good.current, seedRow: -1 } },
+      "no task start time": { ...good, current: { ...good.current, startedAt: undefined } },
+      "a task after the last": { ...good, session: { ...good.session, tasks: Array(5).fill(good.session.tasks[0]) } },
+    };
+    for (const [name, value] of Object.entries(damaged)) {
+      await page.evaluate(([key, text]) => sessionStorage.setItem(key, text), [key, typeof value === "string" ? value : JSON.stringify(value)]);
+      await page.reload();
+      await page.waitForSelector("#music-discovery-study button");
+      assert.equal(await page.getByRole("button", { name: "Resume my session" }).count(), 0, name);
+      assert.equal(await page.getByRole("button", { name: "I agree, start" }).count(), 1, name);
+    }
+    await page.evaluate(([key, text]) => sessionStorage.setItem(key, text), [key, JSON.stringify(good)]);
+    await page.reload();
+    await page.waitForSelector("#music-discovery-study button");
+    assert.equal(await page.getByRole("button", { name: "Resume my session" }).count(), 1);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   // Blocked site data makes reading `sessionStorage` throw; a full quota makes writes throw.
   for (const [failure, script] of [
     ["blocked", () => Object.defineProperty(window, "sessionStorage", { get() { throw new DOMException("blocked", "SecurityError"); } })],
