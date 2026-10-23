@@ -324,7 +324,7 @@ def health(url):
         return json.load(response)
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="launcher needs Node")
+# Needs node on PATH, which every CI job has; without it verify cannot launch.
 @pytest.mark.parametrize("same_port", [False, True], ids=["other-port", "same-port"])
 def test_verify_leaves_an_instance_it_did_not_start_running(
     foreign_instance, tmp_path, capsys, same_port
