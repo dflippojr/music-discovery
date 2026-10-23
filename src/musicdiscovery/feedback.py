@@ -77,14 +77,19 @@ def read_log(path: Path) -> LogRead:
     Like the other commands' paths, `path` must be inside the working directory.
     """
     try:
-        text = confined(path).read_text("utf-8-sig")
+        # newline="" stops a bare \r from ending a line; split("\n") below does that.
+        with confined(path).open(encoding="utf-8-sig", newline="") as handle:
+            text = handle.read()
     except EvaluationError as error:
         raise FeedbackError(str(error)) from error
     except (OSError, UnicodeDecodeError) as error:
         raise FeedbackError(f"cannot read {path} ({error})") from error
     validator = Draft202012Validator(_schema())
     events, problems = [], []
-    for number, line in enumerate(text.splitlines(), start=1):
+    # Not str.splitlines(): it also breaks at U+2028, U+2029 and U+0085, which JSON
+    # leaves raw inside a string. A CRLF line keeps its \r until removesuffix.
+    for number, raw in enumerate(text.split("\n"), start=1):
+        line = raw.removesuffix("\r")
         if not line.strip():
             continue
         try:
