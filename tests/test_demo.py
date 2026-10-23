@@ -70,20 +70,6 @@ def test_bundle_is_stamped_with_the_checked_out_commit(bundle):
     assert all((ROOT / path).exists() for path in source["paths"])
 
 
-def fake_git(monkeypatch, status):
-    answers = {"rev-parse": "a" * 40, "status": status}
-    monkeypatch.setattr(demo, "_git", lambda *args: answers[args[0]])
-
-
-def test_dirty_tree_marks_the_sha_and_blocks_a_release(monkeypatch):
-    fake_git(monkeypatch, "")
-    assert demo.build_source(release=True)["sha"] == "a" * 40
-    fake_git(monkeypatch, " M src/musicdiscovery/demo.py")
-    assert demo.build_source()["sha"] == "a" * 40 + "-dirty"
-    with pytest.raises(demo.DemoError, match="uncommitted changes"):
-        demo.build_source(release=True)
-
-
 def test_stamp_needs_a_git_checkout(monkeypatch):
     def no_git(*args, **kwargs):
         raise FileNotFoundError("git")
@@ -91,6 +77,75 @@ def test_stamp_needs_a_git_checkout(monkeypatch):
     monkeypatch.setattr(demo.subprocess, "run", no_git)
     with pytest.raises(demo.DemoError, match="git checkout"):
         demo.build_source()
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def checkout(tmp_path, monkeypatch, package="src/musicdiscovery", track=True):
+    """A real repository holding the package at `package`, imported from there."""
+    repo = tmp_path / "repo"
+    pkg = repo / package
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (repo / "README.md").write_text("other\n")
+    git(repo, "init", "-q")
+    git(repo, "add", "README.md", *([package] if track else []))
+    identity = (
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    )
+    git(repo, *identity, "commit", "-q", "-m", "x")
+    monkeypatch.setattr(demo, "__file__", str(pkg / "demo.py"))
+    return repo, git(repo, "rev-parse", "HEAD")
+
+
+def test_stamp_refuses_a_package_the_repository_does_not_track(tmp_path, monkeypatch):
+    checkout(tmp_path, monkeypatch, track=False)
+    with pytest.raises(demo.DemoError, match="editable install"):
+        demo.build_source()
+
+
+def test_stamp_refuses_a_package_outside_src(tmp_path, monkeypatch):
+    checkout(tmp_path, monkeypatch, package="lib/site-packages/musicdiscovery")
+    with pytest.raises(demo.DemoError, match="editable install"):
+        demo.build_source()
+
+
+def test_dirty_tree_marks_the_sha_and_blocks_a_release(tmp_path, monkeypatch):
+    repo, head = checkout(tmp_path, monkeypatch)
+    assert demo.build_source(release=True)["sha"] == head
+    (repo / "src" / "musicdiscovery" / "__init__.py").write_text("x = 1\n")
+    assert demo.build_source()["sha"] == head + "-dirty"
+    with pytest.raises(demo.DemoError, match="uncommitted changes"):
+        demo.build_source(release=True)
+
+
+def test_untracked_source_file_marks_the_sha_and_blocks_a_release(
+    tmp_path, monkeypatch
+):
+    repo, head = checkout(tmp_path, monkeypatch)
+    (repo / "src" / "musicdiscovery" / "new.py").write_text("")
+    assert demo.build_source()["sha"] == head + "-dirty"
+    with pytest.raises(demo.DemoError, match="uncommitted changes"):
+        demo.build_source(release=True)
+
+
+def test_untracked_files_outside_the_source_paths_keep_the_sha_clean(
+    tmp_path, monkeypatch
+):
+    repo, head = checkout(tmp_path, monkeypatch)
+    for path in ("data/catalog.parquet", ".demo-fixture/catalog.json", "notes.txt"):
+        (repo / path).parent.mkdir(exist_ok=True)
+        (repo / path).write_text("")
+    assert demo.build_source(release=True)["sha"] == head
 
 
 def test_catalog_arrays_line_up(bundle, catalog):
@@ -159,7 +214,8 @@ def test_cli_release_refuses_a_dirty_tree(tmp_path, capsys, monkeypatch):
     data = tmp_path / "data" / "catalog"
     data.mkdir(parents=True)
     make_frame(per_genre=60).to_parquet(data / "catalog.parquet", index=False)
-    fake_git(monkeypatch, " M README.md")
+    repo, _ = checkout(tmp_path, monkeypatch)
+    (repo / "README.md").write_text("changed\n")
     argv = ["export-demo", str(tmp_path / "o"), "--data-dir", str(tmp_path / "data")]
     assert main([*argv, "--release"]) == 1
     assert "uncommitted changes" in capsys.readouterr().err

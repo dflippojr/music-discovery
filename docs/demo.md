@@ -48,8 +48,10 @@ but `sources.json`) and the deferred size separately. The generated bundle is ne
 
 `paths` are the repository paths the bundle is built from, so a site can tell
 whether `main` has changed them since. If tracked files have uncommitted changes,
-`sha` ends in `-dirty`. `export-demo --release` refuses to export from such a work
-tree, and `export-demo` fails outside a git checkout of this repository.
+or `paths` hold untracked files, `sha` ends in `-dirty`. `export-demo --release`
+refuses to export from such a work tree. Export from an editable install
+(`pip install -e .`) in a checkout of this repository: `export-demo` fails unless
+the package it imports is that checkout's tracked `src/musicdiscovery`.
 
 ## What is in `catalog.json`
 
