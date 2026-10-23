@@ -137,6 +137,7 @@ export const TIMESTAMP_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:
 export const QUALITY_PATTERN = /^(genre|tag|more|less):[^\n]{1,60}$/u;
 const MAX_QUALITIES = 60;
 
+const isId = (value) => typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
 const isTime = (value) => typeof value === "string" && TIMESTAMP_PATTERN.test(value);
 const isQualities = (value) => Array.isArray(value) && value.length <= MAX_QUALITIES && value.every((q) => typeof q === "string" && QUALITY_PATTERN.test(q));
 
@@ -165,12 +166,12 @@ function validTask(task, order, ids) {
 export function restoreSession(state, ids) {
   if (state?.version !== SESSION_VERSION || typeof state.rated !== "boolean") return null;
   const { session, orders, current } = state;
-  if (!validOrders(orders) || !/^[0-9a-f]{32}$/.test(session?.id) || !isTime(session.startedAt) || !Array.isArray(session.tasks)) return null;
+  if (!validOrders(orders) || !isId(session?.id) || !isTime(session.startedAt) || !Array.isArray(session.tasks)) return null;
   const { tasks } = session;
   if (tasks.length > TASK_COUNT || !tasks.every((task, i) => validTask(task, orders[i], ids) && taskComplete(task) && isTime(task.completedAt))) return null;
   if (current === null) return state;
   if (tasks.length === TASK_COUNT || !isTime(current?.startedAt)) return null;
   if (current.task === null) return state;
   const task = current.task;
-  return validTask(task, orders[tasks.length], ids) && task.completedAt === null && ids[current.seedRow] === task.seedTrackId ? state : null;
+  return validTask(task, orders[tasks.length], ids) && task.completedAt === null && Number.isInteger(current.seedRow) && ids[current.seedRow] === task.seedTrackId ? state : null;
 }
