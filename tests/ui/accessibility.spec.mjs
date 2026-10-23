@@ -1,7 +1,9 @@
 import { test, expect, ready, pickSeed, expectNoOverflow } from "./fixtures.mjs";
 
-async function results(page, path) {
+// `again`: an earlier pass in this tab rated tracks, which the study keeps for resuming (#136).
+async function results(page, path, again = false) {
   await ready(page, path);
+  if (path === "/study.html" && again) await page.getByRole("button", { name: "Start over" }).click();
   if (path === "/study.html") await page.getByRole("button", { name: "I agree, start" }).click();
   await pickSeed(page);
   if (path === "/study.html") await page.getByRole("button", { name: "Show the two lists" }).click();
@@ -43,9 +45,9 @@ async function activateLabel(locator, isMobile) {
 for (const path of ["/", "/study.html"]) {
   test("#50: " + path + " reflows readable ratings at 200% text size", async ({ page, isMobile }) => {
     // A wider fallback font also exercises the space needed by Linux system fonts.
-    for (const { width, fontFamily } of [{ width: 320 }, { width: 375 }, { width: 320, fontFamily: "Verdana, sans-serif" }]) {
+    for (const [pass, { width, fontFamily }] of [{ width: 320 }, { width: 375 }, { width: 320, fontFamily: "Verdana, sans-serif" }].entries()) {
       await page.setViewportSize({ width, height: 667 });
-      await results(page, path);
+      await results(page, path, pass > 0);
       // Change the loaded stylesheet through CSSOM so WebKit also keeps the CSP intact.
       await page.evaluate(() => { document.styleSheets[0].insertRule(":root { font-size: 200%; }"); });
       if (fontFamily) await page.evaluate(family => {
@@ -88,8 +90,8 @@ for (const path of ["/", "/study.html"]) {
   });
 
   test("#51/#52: " + path + " has usable link and native-control touch areas", async ({ page, isMobile, baseURL }) => {
-    for (const viewport of [{ width: 375, height: 667 }, { width: 667, height: 375 }, { width: 320, height: 667 }]) {
-      await page.setViewportSize(viewport); await results(page, path);
+    for (const [pass, viewport] of [{ width: 375, height: 667 }, { width: 667, height: 375 }, { width: 320, height: 667 }].entries()) {
+      await page.setViewportSize(viewport); await results(page, path, pass > 0);
       await expectNoOverflow(page, viewport.width);
       for (const links of await page.locator(".md-links").all()) await expectTargets(links.locator("a"));
       for (const name of ["Source page (FMA)", "License"]) {
