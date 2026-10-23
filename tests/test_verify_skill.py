@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -10,6 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
+from urllib.request import urlopen
 
 import pytest
 from playwright_config import load_playwright_config
@@ -270,3 +272,80 @@ def test_drive_config_refuses_bad_ui_port():
     )
     assert result.returncode != 0
     assert "UI_PORT must be a whole number" in result.stderr
+
+
+@pytest.fixture
+def foreign_instance():
+    """A real launcher in this checkout that verify did not start (#148)."""
+    handle = verify.ROOT / "data/ui-testing/instance.json"
+    if handle.exists():
+        pytest.skip("another UI instance owns this checkout's handle")
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(("MUSICDISCOVERY_", "FMA_"))
+        and name not in {"DEMO_BUNDLE", "DATABASE_URL", "API_KEY", "OPENAI_API_KEY"}
+    }
+    launcher = subprocess.Popen(
+        [sys.executable, "scripts/ui_instance.py", "start", "--port", "0"],
+        cwd=verify.ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+    )
+    url = None
+    for line in launcher.stdout:
+        if line.startswith("UI_URL="):
+            url = line.strip().removeprefix("UI_URL=")
+            break
+    assert url, "the foreign launcher did not become ready"
+    instance = json.loads(handle.read_text(encoding="utf-8"))["instance"]
+    yield url, instance
+    if launcher.poll() is None:
+        # The authenticated stop removes the handle and bundle on every OS.
+        subprocess.run(
+            [sys.executable, "scripts/ui_instance.py", "stop"],
+            cwd=verify.ROOT,
+            env=env,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    if launcher.poll() is None:
+        launcher.kill()
+    launcher.wait(timeout=15)
+    launcher.stdout.close()
+
+
+def health(url):
+    with urlopen(url + "__ui_health", timeout=5) as response:
+        return json.load(response)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="launcher needs Node")
+@pytest.mark.parametrize("same_port", [False, True], ids=["other-port", "same-port"])
+def test_verify_leaves_an_instance_it_did_not_start_running(
+    foreign_instance, tmp_path, capsys, same_port
+):
+    url, instance = foreign_instance
+    port = int(url.rsplit(":", 1)[1].strip("/")) if same_port else free_port()
+
+    def must_not_drive(run):
+        raise AssertionError("verify drove an instance it did not launch")
+
+    argv = ["--port", str(port), "--out", str(tmp_path)]
+    assert verify.main(argv, drive=must_not_drive) == 1
+    printed = capsys.readouterr().out
+    # Verify neither stopped the other instance nor removed its handle or bundle.
+    assert health(url) == {"instance": instance}
+    handle = verify.ROOT / "data/ui-testing/instance.json"
+    assert json.loads(handle.read_text(encoding="utf-8"))["instance"] == instance
+    assert (verify.ROOT / "data/ui-testing" / instance).is_dir()
+    assert f"| launch | FAIL | another instance ({instance}) owns" in printed
+    assert "| cleanup | pass |" in printed
+    (evidence,) = tmp_path.iterdir()
+    cleanup = (evidence / "cleanup.txt").read_text(encoding="utf-8")
+    assert "ui:stop" not in cleanup and "ui:recover" not in cleanup
+    assert f"belongs to {instance}" in cleanup

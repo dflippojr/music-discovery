@@ -473,3 +473,61 @@ def test_ci_local_stamp_check_wants_head_dirty_only_with_tracked_changes(
 ):
     code, log = _stamp_check(tmp_path, stamp, tracked_change, untracked)
     assert (code == 0) == passes, log
+
+
+def _ci_local_ui(tmp_path: Path, handle: bool, test_ui_exit: int):
+    """Run `ci-local.sh ui` with a stub npm; return (exit, npm calls, output, tree).
+
+    With `handle`, another UI instance owns the checkout's handle before the job
+    starts, as a developer's `npm run ui:start` or another agent's run would (#148).
+    """
+    tree = tmp_path / "tree"
+    (tree / "scripts").mkdir(parents=True)
+    shutil.copy(CI_LOCAL, tree / "scripts" / "ci-local.sh")
+    if handle:
+        (tree / "data" / "ui-testing").mkdir(parents=True)
+        (tree / "data" / "ui-testing" / "instance.json").write_text(
+            json.dumps({"instance": "run-0123456789abcdef"}), encoding="utf-8"
+        )
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    # Like Playwright's webServer, the stub suite fails when it cannot start.
+    (stub / "npm").write_text(
+        '#!/usr/bin/env bash\necho "$*" >> "$NPM_LOG"\n'
+        'case "$*" in "run test:ui"*) exit "$TEST_UI_EXIT" ;; esac\n',
+        encoding="utf-8",
+    )
+    (stub / "npm").chmod(0o755)
+    calls = tmp_path / "npm.log"
+    calls.touch()
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    done = subprocess.run(
+        [_bash(), (tree / "scripts" / "ci-local.sh").as_posix(), "ui"],
+        capture_output=True,
+        text=True,
+        env={
+            **inherited,
+            "PATH": os.pathsep.join([str(stub), inherited["PATH"]]),
+            "NPM_LOG": calls.as_posix(),
+            "TEST_UI_EXIT": str(test_ui_exit),
+        },
+        check=False,
+    )
+    output = f"exit {done.returncode}\n{done.stdout}{done.stderr}"
+    return done.returncode, calls.read_text().splitlines(), output, tree
+
+
+def test_ci_local_ui_leaves_an_instance_it_did_not_start_running(tmp_path):
+    # The trap must never stop an instance the job did not start (#148).
+    code, calls, output, tree = _ci_local_ui(tmp_path, handle=True, test_ui_exit=1)
+    assert code != 0, output
+    assert not any("ui:stop" in call for call in calls), output
+    assert "run-0123456789abcdef owns data/ui-testing/instance.json" in output
+    assert (tree / "data" / "ui-testing" / "instance.json").exists()
+
+
+@pytest.mark.parametrize("test_ui_exit", [0, 1], ids=["suite-passes", "suite-fails"])
+def test_ci_local_ui_stops_its_own_instance(tmp_path, test_ui_exit):
+    code, calls, output, _ = _ci_local_ui(tmp_path, False, test_ui_exit)
+    assert (code == 0) == (test_ui_exit == 0), output
+    assert calls == ["run test:ui -- --workers=1", "run ui:stop"], output
