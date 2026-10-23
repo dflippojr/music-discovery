@@ -349,3 +349,32 @@ def test_verify_leaves_an_instance_it_did_not_start_running(
     cleanup = (evidence / "cleanup.txt").read_text(encoding="utf-8")
     assert "ui:stop" not in cleanup and "ui:recover" not in cleanup
     assert f"belongs to {instance}" in cleanup
+
+
+@pytest.mark.parametrize(
+    ("saved", "owner"),
+    [
+        (None, None),
+        ({"instance": "run-ffffffffffffffff", "pid": 1, "created": 1.0}, False),
+        ({"instance": "run-0123456789abcdef", "pid": 1, "created": 1.0}, True),
+        # A launcher that crashed before its readiness line wrote this handle.
+        ({"instance": "run-ffffffffffffffff", "pid": "launcher"}, True),
+        ("{not json", False),
+    ],
+    ids=["none", "other-instance", "launched", "crashed-before-ready", "unreadable"],
+)
+def test_handle_owner_counts_only_this_runs_launcher(tmp_path, saved, owner):
+    run = verify.Run(tmp_path, free_port(), None)
+    run.handle = tmp_path / "instance.json"
+    run.state["instance"] = "run-0123456789abcdef"
+    launcher = verify.identity(os.getpid())
+    run.state["launcher"].append(launcher)
+    if isinstance(saved, dict) and saved["pid"] == "launcher":
+        saved = {**saved, **launcher}
+    if saved is not None:
+        text = saved if isinstance(saved, str) else json.dumps(saved)
+        run.handle.write_text(text, encoding="utf-8")
+    found = run.handle_owner()
+    assert (found if found is None else found[1]) is owner
+    handle = by_name(run.leftovers())["handle"]
+    assert handle.ok is (owner is not True)

@@ -150,7 +150,12 @@ are refused; investigate rather than deleting another process's resources.
 If interrupted before a handle exists, stop reports no owned instance.
 Verify the ledger PID has exited, the instance's port (UI_PORT, default 4173)
 no longer listens, and handle and run directory are absent. Stop reads the port
-from the handle, so it never touches a listener this checkout did not start. Preserve screenshots/reports. Close owned named
+from the handle, so it never touches a listener this checkout did not start.
+The handle is shared by every instance in the checkout, so stop and recover act
+on whichever instance it names. A wrapper that tears down after itself must run
+them only for the instance it started: check for a handle before launching and
+refuse to run beside one, as the verify skill and scripts/ci-local.sh do.
+Preserve screenshots/reports. Close owned named
 playwright-cli sessions promptly; run playwright-cli close-all at completion
 in this dedicated worktree namespace. Never close another worker's sessions.
 
