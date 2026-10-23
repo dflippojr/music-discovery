@@ -181,9 +181,6 @@ def test_cleanup_after_failed_drive_leaves_nothing_running(tmp_path, capsys):
     assert not (verify.ROOT / state["instance_dir"]).exists()
 
 
-needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="needs Node")
-
-
 @pytest.mark.parametrize(
     ("ui_port", "argv", "url"),
     [
@@ -247,7 +244,6 @@ def test_verify_default_port_follows_ui_port(
     assert ports == [port]
 
 
-@needs_node
 @pytest.mark.parametrize(
     ("env", "url"),
     [
@@ -268,7 +264,6 @@ def test_drive_config_base_url_follows_ui_port(env, url):
     assert json.loads(result.stdout)["use"]["baseURL"] == url
 
 
-@needs_node
 def test_drive_config_refuses_bad_ui_port():
     result = load_playwright_config(
         ".claude/skills/verify/scripts/drive.config.mjs", UI_PORT="80"

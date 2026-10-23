@@ -3,7 +3,6 @@
 import importlib.util
 import json
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -643,9 +642,15 @@ BAD_PORTS = [
     "1023",
     "65536",
     "9" * 400,
+    "9" * 5000,  # past int()'s digit limit
 ]
-GOOD_PORTS = [("1024", 1024), ("4180", 4180), ("04180", 4180), ("65535", 65535)]
-needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="needs Node")
+GOOD_PORTS = [
+    ("1024", 1024),
+    ("4180", 4180),
+    ("04180", 4180),
+    ("0" * 5000 + "4180", 4180),
+    ("65535", 65535),
+]
 
 
 @pytest.mark.parametrize("environ", [{}, {"UI_PORT": ""}], ids=["unset", "empty"])
@@ -653,7 +658,7 @@ def test_ui_port_defaults_to_4173(launcher, environ):
     assert launcher.ui_port(environ) == 4173
 
 
-@pytest.mark.parametrize(("raw", "port"), GOOD_PORTS)
+@pytest.mark.parametrize(("raw", "port"), GOOD_PORTS, ids=lambda v: str(v)[:12])
 def test_ui_port_reads_the_variable(launcher, raw, port):
     assert launcher.ui_port({"UI_PORT": raw}) == port
 
@@ -706,7 +711,6 @@ def test_stop_ignores_ui_port(launcher, monkeypatch, capsys):
     assert "No owned UI instance remains" in capsys.readouterr().out
 
 
-@needs_node
 def test_javascript_ui_port_matches_python(launcher):
     cases = ["", *[raw for raw, _ in GOOD_PORTS], *BAD_PORTS]
     script = (
@@ -735,7 +739,6 @@ def test_javascript_ui_port_matches_python(launcher):
     assert json.loads(result.stdout) == [python(raw) for raw in cases]
 
 
-@needs_node
 @pytest.mark.parametrize(("env", "port"), [({}, 4173), ({"UI_PORT": "4180"}, 4180)])
 def test_playwright_config_uses_ui_port_on_loopback(env, port):
     result = load_playwright_config("playwright.config.mjs", **env)
@@ -748,7 +751,6 @@ def test_playwright_config_uses_ui_port_on_loopback(env, port):
     assert config["webServer"]["reuseExistingServer"] is False
 
 
-@needs_node
 @pytest.mark.parametrize("raw", ["abc", "80", "65536"])
 def test_playwright_config_refuses_bad_ui_port(raw):
     result = load_playwright_config("playwright.config.mjs", UI_PORT=raw)

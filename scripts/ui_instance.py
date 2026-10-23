@@ -53,12 +53,19 @@ def ui_port(environ=os.environ):
     raw = environ.get("UI_PORT", "")
     if raw == "":
         return DEFAULT_PORT
-    if re.fullmatch(r"[0-9]+", raw) is None or not 1024 <= int(raw) <= 65535:
+    # Drop leading zeros and cap the length first: int() refuses very long strings
+    # with its own error, which would not name UI_PORT.
+    digits = raw.lstrip("0")
+    if (
+        re.fullmatch(r"[0-9]+", raw) is None
+        or len(digits) > 5
+        or not 1024 <= int(digits or "0") <= 65535
+    ):
         raise ValueError(
             "UI_PORT must be a whole number from 1024 to 65535, "
             f"got {json.dumps(raw, ensure_ascii=False)}"
         )
-    return int(raw)
+    return int(digits)
 
 
 def remove_bundle(bundle):
