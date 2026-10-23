@@ -25,7 +25,9 @@ so local runs and CI use the same floor.
   jobs of `ci.yml` in order. Run it from Git Bash on Windows. Pass job names to
   run only some of them, for example `scripts/ci-local.sh test demo`. Before the
   first run, install the Node tools with `npm ci` and
-  `npx playwright install chromium webkit`. The commands, in CI order:
+  `npx playwright install chromium webkit`. `tests/test_workflows.py` fails
+  when the script misses a command of those jobs or runs one out of order.
+  The commands, in CI order:
 
   ```sh
   # test
@@ -37,6 +39,10 @@ so local runs and CI use the same floor.
   musicdiscovery recommend --data-dir data/console-smoke --seed 100 -k 5
   # demo
   python scripts/build_demo_fixture.py .demo-fixture
+  # demo: the bundle is stamped with the commit under test. CI wants $GITHUB_SHA;
+  # locally it is `git rev-parse HEAD`, plus -dirty when
+  # `git status --porcelain --untracked-files=no` lists a change.
+  python -c 'import json; print(json.load(open(".demo-fixture/SOURCE.json"))["sha"])'
   npm run test:parity
   npm run test:study
   STUDY_EXPORT_DIR=.study-fixture COVERAGE_DIR=coverage-js npm run test:browser

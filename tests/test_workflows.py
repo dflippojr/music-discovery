@@ -1,10 +1,12 @@
 """Checks on how the workflows wire gate-guard (#104), review-v3 (#126) and the
 evaluation gate (#105)."""
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -380,3 +382,58 @@ def test_ci_only_names_only_commands_ci_yml_still_runs():
     # A stale entry would let a later step of the same text pass unchecked.
     commands = {(job, c) for job in LOCAL_JOBS for _, c in _ci_commands(job)}
     assert not set(CI_ONLY) - commands, sorted(set(CI_ONLY) - commands)
+
+
+def _stamp_check(tmp_path: Path, stamp: str, tracked_change: bool, untracked: bool):
+    """Run job_demo's stamp check on a one-commit repo; return (exit, log)."""
+    script = CI_LOCAL.read_text(encoding="utf-8")
+    body = re.search(r"^job_demo\(\) \{\n(.*?)^\}\n", script, re.M | re.S).group(1)
+    lines = body.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip().startswith("sha="))
+    end = next(i for i, line in enumerate(lines) if "test:parity" in line)
+    check = textwrap.dedent("\n".join(lines[start:end])) + "\n"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    head = _git(repo, "rev-parse", "HEAD")
+    if tracked_change:
+        (repo / "README.md").write_text("two\n", encoding="utf-8")
+    if untracked:
+        (repo / "new.txt").write_text("new\n", encoding="utf-8")
+    bundle = repo / ".demo-fixture"
+    bundle.mkdir()
+    sha = stamp.replace("HEAD", head)
+    (bundle / "SOURCE.json").write_text(json.dumps({"sha": sha}), encoding="utf-8")
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    # The interpreter running the tests answers to `python`, as .venv's does.
+    path = os.pathsep.join([str(Path(sys.executable).parent), inherited["PATH"]])
+    done = subprocess.run(
+        [_bash(), "-e", "-c", check],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={**inherited, "HOME": str(tmp_path), "PATH": path},
+        check=False,
+    )
+    return done.returncode, f"exit {done.returncode}\n{done.stdout}{done.stderr}"
+
+
+@pytest.mark.parametrize(
+    ("stamp", "tracked_change", "untracked", "passes"),
+    [
+        ("HEAD", False, False, True),
+        ("HEAD", False, True, True),
+        ("HEAD-dirty", True, False, True),
+        ("HEAD", True, False, False),
+        ("HEAD-dirty", False, False, False),
+        ("0" * 40, False, False, False),
+    ],
+)
+def test_ci_local_stamp_check_wants_head_dirty_only_with_tracked_changes(
+    tmp_path, stamp, tracked_change, untracked, passes
+):
+    code, log = _stamp_check(tmp_path, stamp, tracked_change, untracked)
+    assert (code == 0) == passes, log
