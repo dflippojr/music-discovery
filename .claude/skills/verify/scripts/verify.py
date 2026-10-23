@@ -1,6 +1,6 @@
 """Launch, check, drive and clean up a disposable UI instance, saving evidence.
 
-Usage: python .claude/skills/verify/scripts/verify.py [--feature NAME]
+Usage: python .claude/skills/verify/scripts/verify.py [--feature NAME] [--port N]
 
 Follows docs/ui-testing.md: the same launcher as `npm run ui:start`, the same
 teardown as `npm run ui:stop`, and `npm run ui:recover` only after the owned
@@ -309,9 +309,14 @@ class Run:
 def main(argv=None, drive=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--feature", choices=FEATURES, help="drive only this area")
-    parser.add_argument("--port", type=int, default=4173)
+    parser.add_argument("--port", type=int, help="default: UI_PORT, else 4173")
     parser.add_argument("--out", type=Path, default=ROOT / ".verify")
     args = parser.parse_args(argv)
+    if args.port is None:
+        try:
+            args.port = doctor.load_launcher().ui_port()
+        except ValueError as error:
+            parser.error(str(error))
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     evidence = (args.out / stamp).resolve()
     evidence.mkdir(parents=True)

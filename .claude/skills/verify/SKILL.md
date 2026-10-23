@@ -25,6 +25,13 @@ the evidence folder and its `summary.md`. Paste that summary into the PR or
 your report. Run one verify at a time per checkout, because the contract
 allows one owned instance.
 
+The instance listens on `http://127.0.0.1:$UI_PORT`, with `UI_PORT`
+defaulting to 4173. When 4173 is taken on a shared host, set another port from
+1024 to 65535, for example `UI_PORT=4180 python
+.claude/skills/verify/scripts/verify.py`. `verify.py --port`, `doctor.py --url`
+and `VERIFY_BASE_URL` override it. An invalid `UI_PORT` stops the run before
+anything starts.
+
 ## Steps
 
 1. **Launch.** Runs the command behind `npm run ui:start`, as the contract's
