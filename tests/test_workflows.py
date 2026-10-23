@@ -8,6 +8,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 # The one dflippojr/.github commit both guards load, workflow and script alike.
@@ -288,3 +290,93 @@ def test_eval_gate_uploads_the_report_even_from_a_hidden_directory():
         assert "          include-hidden-files: true\n" in step
     # A missing report fails the job instead of passing without evidence.
     assert "          if-no-files-found: error\n" in step
+
+
+# scripts/ci-local.sh is how AGENTS.md says to prove a change, so it must run
+# what the test, demo and ui jobs of ci.yml run, in the same order (#137).
+CI_LOCAL = ROOT / "scripts" / "ci-local.sh"
+LOCAL_JOBS = ("test", "demo", "ui")
+SETUP = "one-time setup, listed in the script's header and AGENTS.md"
+# Each command of those jobs that ci-local.sh doesn't run, and why.
+CI_ONLY = {
+    ("test", "actions/checkout"): "CI checks out the commit; locally it's the tree",
+    ("test", "actions/setup-python"): "the developer provides Python 3.12",
+    ("test", 'python -m pip install -e ".[dev]"'): SETUP,
+    ("test", "actions/upload-artifact"): "uploads coverage for SonarCloud",
+    ("demo", "actions/checkout"): "CI checks out the commit; locally it's the tree",
+    ("demo", "actions/setup-python"): "the developer provides Python 3.12",
+    ("demo", "actions/setup-node"): "the developer provides Node",
+    ("demo", 'python -m pip install -e ".[dev]"'): SETUP,
+    ("demo", 'test "$sha" = "$GITHUB_SHA"'): (
+        "GITHUB_SHA exists only in CI; the script compares with HEAD instead"
+    ),
+    ("demo", "npm ci"): SETUP,
+    ("demo", "npx playwright install --with-deps chromium"): SETUP,
+    ("demo", "actions/upload-artifact"): "uploads coverage for SonarCloud",
+    ("ui", "actions/checkout"): "CI checks out the commit; locally it's the tree",
+    ("ui", "actions/setup-python"): "the developer provides Python 3.12",
+    ("ui", "actions/setup-node"): "the developer provides Node",
+    ("ui", 'python -m pip install -e ".[dev]"'): SETUP,
+    ("ui", "npm ci"): SETUP,
+    ("ui", "npx playwright install --with-deps chromium webkit"): SETUP,
+    ("ui", "actions/upload-artifact"): "uploads reports and traces as artifacts",
+}
+
+
+def _ci_commands(job: str) -> list[tuple[str, str]]:
+    """(step label, command) for each step of a ci.yml job, in order.
+
+    A `uses:` step is one command, the action without its version. A `run:`
+    step is one command per line, after its `env:` assignments as a shell
+    writes them.
+    """
+    body = _jobs(_code(WORKFLOWS / "ci.yml"))[job].split("    steps:\n", 1)[1]
+    commands = []
+    for step in re.split(r"^      - ", body, flags=re.M)[1:]:
+        step = " " * 8 + step
+        uses = re.search(r"^        uses: ([^@\s]+)", step, re.M)
+        name = re.search(r"^        name: (.+)$", step, re.M)
+        label = name.group(1) if name else uses.group(1)
+        if uses:
+            commands.append((label, uses.group(1)))
+            continue
+        env = re.search(r"^        env:\n((?:          .*\n)+)", step, re.M)
+        prefix = ""
+        if env:
+            pairs = (line.strip().split(": ", 1) for line in env.group(1).splitlines())
+            prefix = "".join(f"{key}={value} " for key, value in pairs)
+        run = re.search(r"^        run: (.*)$", step, re.M).group(1)
+        lines = _script(step).splitlines() if run == "|" else [run]
+        for line in filter(None, (line.strip() for line in lines)):
+            # A workflow command annotates the run; a local shell would print
+            # it literally, so the script leaves it out.
+            commands.append((label, prefix + line.replace("::error::", "")))
+    return commands
+
+
+def _local_commands(job: str) -> list[str]:
+    """The command lines of `job_<job>` in ci-local.sh, without the `run` wrapper."""
+    script = CI_LOCAL.read_text(encoding="utf-8")
+    found = re.search(rf"^job_{job}\(\) {{\n(.*?)^}}\n", script, re.M | re.S)
+    assert found, f"scripts/ci-local.sh has no job_{job}"
+    lines = (line.strip() for line in found.group(1).splitlines())
+    return [line.removeprefix("run ") for line in lines if line and line[0] != "#"]
+
+
+@pytest.mark.parametrize("job", LOCAL_JOBS)
+def test_ci_local_runs_every_command_of_the_ci_job_in_ci_order(job):
+    local = _local_commands(job)
+    at = 0
+    for label, command in _ci_commands(job):
+        if (job, command) in CI_ONLY:
+            continue
+        where = f"scripts/ci-local.sh job_{job}, for ci.yml step {label!r}"
+        assert command in local, f"{where}: no line runs {command!r}"
+        assert command in local[at:], f"{where}: {command!r} runs out of CI order"
+        at = local.index(command, at) + 1
+
+
+def test_ci_only_names_only_commands_ci_yml_still_runs():
+    # A stale entry would let a later step of the same text pass unchecked.
+    commands = {(job, c) for job in LOCAL_JOBS for _, c in _ci_commands(job)}
+    assert not set(CI_ONLY) - commands, sorted(set(CI_ONLY) - commands)
