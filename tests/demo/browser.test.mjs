@@ -1042,6 +1042,10 @@ describe("study page", () => {
       "a different seed row": { ...good, current: { ...good.current, seedRow: -1 } },
       "no task start time": { ...good, current: { ...good.current, startedAt: undefined } },
       "a task after the last": { ...good, session: { ...good.session, tasks: Array(5).fill(good.session.tasks[0]) } },
+      "a free-text dislike": { ...good, current: { ...good.current, task: { ...good.current.task, dislikes: ["anything I type"] } } },
+      "a list with no results": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: [] })) } } },
+      "a session start that is not a time": { ...good, session: { ...good.session, startedAt: "" } },
+      "an earlier task start that is not a time": { ...good, session: { ...good.session, tasks: [{ ...good.session.tasks[0], startedAt: "yesterday" }] } },
     };
     for (const [name, value] of Object.entries(damaged)) {
       await page.evaluate(([key, text]) => sessionStorage.setItem(key, text), [key, typeof value === "string" ? value : JSON.stringify(value)]);
@@ -1049,6 +1053,7 @@ describe("study page", () => {
       await page.waitForSelector("#music-discovery-study button");
       assert.equal(await page.getByRole("button", { name: "Resume my session" }).count(), 0, name);
       assert.equal(await page.getByRole("button", { name: "I agree, start" }).count(), 1, name);
+      assert.equal(await page.evaluate((key) => sessionStorage.getItem(key), key), null, `${name} is still kept`);
     }
     await page.evaluate(([key, text]) => sessionStorage.setItem(key, text), [key, JSON.stringify(good)]);
     await page.reload();

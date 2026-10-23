@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { balancedOrders, buildExport, newSessionId, restoreSession, SessionStore, sessionState, taskComplete, timestamp } from "../../src/musicdiscovery/demo/study-lib.js";
+import * as lib from "../../src/musicdiscovery/demo/study-lib.js";
 
 const schema = JSON.parse(readFileSync(resolve("src/musicdiscovery/study-ratings.schema.json"), "utf8"));
 
@@ -181,6 +182,24 @@ test("a stored session is restored only when it fits this catalog and protocol",
     "no current start": { ...picking, current: { ...picking.current, startedAt: undefined } },
     "a finished current task": { ...shown, current: { ...shown.current, task: { ...shownTask(), completedAt: "2026-10-06T14:09:00Z" } } },
     "another seed row": { ...shown, current: { ...shown.current, seedRow: 1 } },
+    // Each of these resumed and then exported a file the schema rejects (#144 review).
+    "a like that is not a quality": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], likes: [5] }] } },
+    "a free-text dislike": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], dislikes: ["anything I type"] }] } },
+    "a task start that is not a time": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], startedAt: "yesterday" }] } },
+    "an empty session start": { ...between, session: { ...between.session, startedAt: "" } },
+    "a finished task with no results": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], lists: between.session.tasks[0].lists.map((l) => ({ ...l, results: [] })) }] } },
+    "a completion that is not a time": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], completedAt: "2026-10-06 14:03" }] } },
+    "too many likes": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], likes: Array.from({ length: 61 }, (_, i) => `tag:t${i}`) }] } },
+    "a free-text like on the task shown": { ...shown, current: { ...shown.current, task: { ...shownTask(), likes: ["genre:\nFolk"] } } },
+    "a current start that is not a time": { ...picking, current: { ...picking.current, startedAt: "now" } },
   };
-  for (const [name, state] of Object.entries(bad)) assert.equal(restoreSession(state, IDS), null, name);
+  const offered = Object.entries(bad).filter(([, state]) => restoreSession(state, IDS) !== null);
+  assert.deepEqual(offered.map(([name]) => name), []);
+});
+
+test("a restored session is checked with the schema's own patterns", () => {
+  assert.equal(lib.TIMESTAMP_PATTERN?.source, new RegExp(schema.$defs.timestamp.pattern, "u").source);
+  assert.equal(lib.QUALITY_PATTERN?.source, new RegExp(schema.$defs.quality.pattern, "u").source);
+  for (const kind of ["likes", "dislikes"]) assert.equal(schema.$defs.task.properties[kind].maxItems, 60, kind);
+  assert.equal(schema.$defs.list.properties.results.minItems, 1);
 });
