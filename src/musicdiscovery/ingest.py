@@ -57,7 +57,9 @@ class IngestResult:
 
 
 def sha1_of(path: Path) -> str:
-    digest = hashlib.sha1()
+    # SHA1 because the FMA publishes SHA1 checksums; this guards against a
+    # corrupt or wrong download, not an attacker.
+    digest = hashlib.sha1(usedforsecurity=False)
     with path.open("rb") as handle:
         while chunk := handle.read(_CHUNK_BYTES):
             digest.update(chunk)
