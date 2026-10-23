@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the same checks as .github/workflows/ci.yml, in the same order: the test,
-# demo and ui jobs. Keep this file in step with ci.yml.
+# demo and ui jobs. Keep this file in step with ci.yml: tests/test_workflows.py
+# fails when a command of those jobs is missing here, unless its CI_ONLY says why.
 #
 # Run it from the repository root with .venv active, after the one-time setup:
 #   python -m pip install -e ".[dev]"
@@ -35,6 +36,22 @@ job_test() {
 
 job_demo() {
   run python scripts/build_demo_fixture.py .demo-fixture
+  # CI compares the stamp with $GITHUB_SHA. Here the commit under test is HEAD,
+  # with -dirty while tracked files have uncommitted changes, as build_source()
+  # in src/musicdiscovery/demo.py stamps it.
+  echo
+  echo "==> Check the bundle is stamped with the commit under test"
+  local sha expected
+  sha=$(python -c 'import json; print(json.load(open(".demo-fixture/SOURCE.json"))["sha"])')
+  echo "SOURCE.json sha: $sha"
+  expected=$(git rev-parse HEAD)
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    expected="$expected-dirty"
+  fi
+  if [ "$sha" != "$expected" ]; then
+    echo "SOURCE.json is not stamped with the commit under test, $expected" >&2
+    exit 1
+  fi
   run npm run test:parity
   run npm run test:study
   echo
