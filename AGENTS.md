@@ -101,12 +101,17 @@ tests require an installed package. CI runs these checks on Python 3.12. The
 `test` job runs on both Linux and Windows; `demo` and `ui` run on Linux only.
 On Windows, CI leaves the console at the runner's default encoding, so do not
 set `PYTHONIOENCODING` or `PYTHONUTF8` in `ci.yml` to make a failure go away.
+`tests/test_workflows.py` fails when a workflow names either one outside a comment.
 `tests/test_ui_lifecycle.py` starts two real launchers on one port and stops
 one, so #87's class of bug fails on the Windows leg.
 
 Never commit datasets or audio, whether raw or generated. Keep datasets under
 the ignored `data/` directory. Tests must use synthetic fixtures only and must
 not download catalog data or call external services.
+`tests/test_repo_hygiene.py` fails on any tracked path under `data/`, any
+tracked audio or array file, and any tracked file over 1 MiB that is not on its
+allow-list. `pytest-socket` (`--allow-hosts` in `pyproject.toml`) lets tests
+bind any socket but connect only to `127.0.0.1` and `::1`.
 
 SonarCloud settings live in `sonar-project.properties`. The SonarCloud workflow is
 `.github/workflows/sonar.yml`; it imports the coverage that `ci.yml` uploads for the same
