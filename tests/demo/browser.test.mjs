@@ -744,6 +744,23 @@ async function doTask(page, { preference = "List A", last = false } = {}) {
   await page.getByRole("button", { name: last ? "Finish" : "Next task" }).click();
 }
 
+/**
+ * Close the page as a user would, running its `beforeunload` handlers. Returns the type of
+ * the leave-page prompt it showed (accepting it), or null when it closed without one.
+ */
+async function leave(page) {
+  await collect(await page.coverage.stopJSCoverage());
+  const outcome = Promise.race([
+    page.waitForEvent("dialog").then(async (dialog) => {
+      await dialog.accept();
+      return dialog.type();
+    }),
+    page.waitForEvent("close").then(() => null),
+  ]);
+  await page.close({ runBeforeUnload: true });
+  return outcome;
+}
+
 describe("study page", () => {
   test("ignores a link fragment and leaves it unchanged", async () => {
     const hash = `#${LINK.replace("{seed}", linkSeed())}`;
@@ -839,6 +856,142 @@ describe("study page", () => {
     assert.equal(await page.getByRole("button", { name: "Next task" }).isDisabled(), true);
     await close(page, context);
   });
+
+  test("warns before leaving once a track is rated, and not before", async () => {
+    for (const rate of [false, true]) {
+      const { context, page, problems } = await study();
+      await page.getByRole("button", { name: "I agree, start" }).click();
+      await page.getByRole("button", { name: "Pick a random track" }).click();
+      await page.getByRole("button", { name: "Show the two lists" }).click();
+      if (rate) await page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ }).click();
+      assert.deepEqual(problems, []);
+      assert.equal(await leave(page), rate ? "beforeunload" : null);
+      await context.close();
+    }
+  });
+
+  test("a reloaded session resumes where it was and exports as if it never reloaded", async () => {
+    const { context, page, problems } = await study();
+    page.on("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    await doTask(page, { preference: "List B" });
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    const items = page.locator(".md-result");
+    await items.nth(0).getByRole("button", { name: /Thumbs up/ }).click();
+    await items.nth(1).getByRole("button", { name: /Thumbs down/ }).click();
+    await items.nth(6).getByRole("button", { name: /Thumbs up/ }).click();
+    await items.nth(1).getByLabel(/New to me/).check();
+    await page.getByRole("radio", { name: "No preference" }).check();
+    const shown = () =>
+      page.evaluate(() => ({
+        lead: document.querySelector("#music-discovery-study .md-lead").textContent,
+        tracks: [...document.querySelectorAll(".md-result .md-title, .md-result .md-meta")].map((e) => e.textContent),
+        pressed: [...document.querySelectorAll(".md-rate")].map((b) => b.getAttribute("aria-pressed")),
+        fresh: [...document.querySelectorAll(".md-new input")].map((c) => c.checked),
+        preferred: document.querySelector("input[type=radio]:checked")?.value ?? null,
+      }));
+    const state = () => page.evaluate(() => {
+      const s = document.querySelector("#music-discovery-study").study;
+      return { id: s.session.id, startedAt: s.session.startedAt, orders: s.orders, first: s.session.tasks[0] };
+    });
+    const before = await shown();
+    const session = await state();
+    assert.equal(before.pressed.filter((p) => p === "true").length, 3);
+
+    await page.reload();
+    await page.waitForSelector("#music-discovery-study button");
+    await page.getByRole("button", { name: "Resume my session" }).click();
+    assert.equal(await page.getByRole("heading", { name: "Task 2 of 5" }).count(), 1);
+    assert.deepEqual(await shown(), before);
+    assert.deepEqual(await state(), session);
+
+    // Finish task 2 from where it stopped, then the rest of the session.
+    for (let i = 0; i < 10; i += 1) {
+      if (before.pressed[2 * i] === "false" && before.pressed[2 * i + 1] === "false") await items.nth(i).getByRole("button", { name: /Thumbs down/ }).click();
+    }
+    await page.getByRole("button", { name: "Next task" }).click();
+    for (let i = 2; i < 5; i += 1) await doTask(page, { last: i === 4 });
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export my ratings" }).click()]);
+    const body = JSON.parse(readFileSync(await download.path(), "utf8"));
+    assert.deepEqual(Object.keys(body).sort(), Object.keys(schema.properties).sort());
+    assert.equal(body.session_id, session.id);
+    assert.equal(body.started_at, session.startedAt);
+    assert.deepEqual(body.tasks.map((t) => t.lists.map((l) => l.ranker)), session.orders);
+    assert.equal(body.tasks[0].started_at, session.first.startedAt);
+    assert.equal(body.tasks[0].completed_at, session.first.completedAt);
+    assert.deepEqual(body.tasks.map((t) => t.preferred), ["B", "none", "A", "A", "A"]);
+    const second = body.tasks[1].lists.flatMap((l) => l.results);
+    assert.deepEqual(second.slice(0, 2).map((r) => r.rating), [1, -1]);
+    assert.equal(second[6].rating, 1);
+    assert.deepEqual(second.map((r) => r.new_to_me), before.fresh);
+    for (const task of body.tasks) for (const list of task.lists) for (const r of list.results) assert.ok(r.rating === 1 || r.rating === -1);
+
+    // Exporting clears the stored session and the warning.
+    await page.reload();
+    await page.waitForSelector("#music-discovery-study button");
+    assert.equal(await page.getByRole("button", { name: "Resume my session" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "I agree, start" }).count(), 1);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("no warning after the ratings are exported", async () => {
+    const { context, page, problems } = await study();
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    for (let i = 0; i < 5; i += 1) await doTask(page, { last: i === 4 });
+    await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export my ratings" }).click()]);
+    assert.deepEqual(problems, []);
+    assert.equal(await leave(page), null);
+    await context.close();
+  });
+
+  test("declining to resume starts a fresh session and forgets the old one", async () => {
+    const { context, page, problems } = await study();
+    page.on("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    await page.getByRole("button", { name: "Pick a random track" }).click();
+    await page.getByRole("button", { name: "Show the two lists" }).click();
+    await page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ }).click();
+    const id = () => page.evaluate(() => document.querySelector("#music-discovery-study").study.session.id);
+    const old = await id();
+    await page.reload();
+    await page.waitForSelector("#music-discovery-study button");
+    await page.getByRole("button", { name: "Start over" }).click();
+    assert.equal(await page.getByRole("button", { name: "I agree, start" }).count(), 1);
+    assert.notEqual(await id(), old);
+    await page.reload();
+    await page.waitForSelector("#music-discovery-study button");
+    assert.equal(await page.getByRole("button", { name: "Resume my session" }).count(), 0);
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    assert.equal(await page.getByRole("heading", { name: "Task 1 of 5" }).count(), 1);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  // Blocked site data makes reading `sessionStorage` throw; a full quota makes writes throw.
+  for (const [failure, script] of [
+    ["blocked", () => Object.defineProperty(window, "sessionStorage", { get() { throw new DOMException("blocked", "SecurityError"); } })],
+    ["full", () => { Storage.prototype.setItem = () => { throw new DOMException("full", "QuotaExceededError"); }; }],
+  ]) {
+    test(`a session completes in memory when storage is ${failure}`, async () => {
+      const context = await browser.newContext({ acceptDownloads: true });
+      const page = await context.newPage();
+      const problems = [];
+      page.on("console", (m) => m.type() === "error" && problems.push(m.text()));
+      page.on("pageerror", (e) => problems.push(String(e)));
+      await page.addInitScript(script);
+      await page.coverage.startJSCoverage();
+      await page.goto(`${base}study.html`);
+      await page.getByRole("button", { name: "I agree, start" }).click();
+      for (let i = 0; i < 5; i += 1) await doTask(page, { last: i === 4 });
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export my ratings" }).click()]);
+      const body = JSON.parse(readFileSync(await download.path(), "utf8"));
+      assert.equal(body.tasks.length, 5);
+      assert.deepEqual(problems, []);
+      await close(page, context);
+    });
+  }
 
   for (const scheme of ["light", "dark"]) {
     test(`axe-core finds no violations on the study screens in ${scheme} mode`, async () => {
