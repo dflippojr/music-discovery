@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+import psutil
 import pytest
 from playwright_config import load_playwright_config
 
@@ -378,3 +379,90 @@ def test_handle_owner_counts_only_this_runs_launcher(tmp_path, saved, owner):
     assert (found if found is None else found[1]) is owner
     handle = by_name(run.leftovers())["handle"]
     assert handle.ok is (owner is not True)
+
+
+STAND_IN_WRAPPER = """
+import json, subprocess, sys, time
+from pathlib import Path
+
+import psutil
+
+HANDLE = Path("data/ui-testing/instance.json")
+command = sys.argv[1]
+if command == "start":
+    # Like node's wrapper: the Python launcher runs as a child.
+    sys.exit(subprocess.Popen([sys.executable, __file__, "launcher"]).wait())
+if command == "launcher":
+    # The launcher writes its handle before it prints the readiness line, then
+    # crashes or hangs once verify has recorded it (or 5 seconds have passed).
+    me = psutil.Process()
+    identity = {"pid": me.pid, "created": me.create_time()}
+    Path("launcher.json").write_text(json.dumps(identity), encoding="utf-8")
+    HANDLE.parent.mkdir(parents=True)
+    HANDLE.write_text(json.dumps({"instance": INSTANCE, **identity}), "utf-8")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            state = json.loads(Path(LAUNCH).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {"launcher": []}
+        if identity in state["launcher"]:
+            break
+        time.sleep(0.05)
+    if MODE == "timed-out":
+        time.sleep(120)
+    sys.exit(3)
+if command == "stop":
+    sys.exit("stop could not reach the instance")
+if command == "recover":
+    HANDLE.unlink()
+    print("Recovered " + INSTANCE)
+"""
+
+
+@pytest.mark.parametrize("mode", ["crashed", "timed-out"])
+def test_launch_owns_a_handle_its_launcher_wrote_before_readiness(
+    tmp_path, monkeypatch, mode
+):
+    """Launch records the wrapper's descendants while it waits for readiness."""
+    checkout = tmp_path / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    instance = "run-0123456789abcdef"
+    # verify.py runs `<node> scripts/ui-command.mjs ...` in the checkout; this
+    # stand-in for node runs the file as Python.
+    (checkout / "scripts/ui-command.mjs").write_text(
+        f"MODE = {mode!r}\nINSTANCE = {instance!r}\n"
+        f"LAUNCH = {str(evidence / 'launch.json')!r}\n{STAND_IN_WRAPPER}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(verify, "ROOT", checkout)
+    monkeypatch.setattr(verify, "LAUNCH_TIMEOUT", 10)
+    monkeypatch.setattr(verify, "EXIT_TIMEOUT", 1)
+    run = verify.Run(evidence, free_port(), None)
+    run.node = sys.executable
+
+    def must_not_drive(run):
+        raise AssertionError("verify drove an instance that never became ready")
+
+    try:
+        assert not run.execute(drive=must_not_drive)
+    finally:
+        launcher = json.loads((checkout / "launcher.json").read_text("utf-8"))
+        if verify.alive(launcher):
+            psutil.Process(launcher["pid"]).kill()
+    steps = {name: (ok, detail) for name, ok, detail in run.steps}
+    failed = "launcher exited with" if mode == "crashed" else "no readiness line"
+    assert steps["launch"][0] is False and steps["launch"][1].startswith(failed)
+    assert "another instance" not in steps["launch"][1]
+    assert steps["cleanup"] == (
+        True,
+        "no recorded process, listener, handle or instance directory remains",
+    )
+    # The launcher that wrote the handle was recorded, stopped and recovered.
+    assert launcher in run.state["launcher"]
+    cleanup = (evidence / "cleanup.txt").read_text(encoding="utf-8")
+    assert f"$ npm run ui:recover\nRecovered {instance}" in cleanup
+    assert "did not launch" not in cleanup
+    assert not run.handle.exists()

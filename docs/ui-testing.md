@@ -155,6 +155,10 @@ The handle is shared by every instance in the checkout, so stop and recover act
 on whichever instance it names. A wrapper that tears down after itself must run
 them only for the instance it started: check for a handle before launching and
 refuse to run beside one, as the verify skill and scripts/ci-local.sh do.
+That check leaves a window in scripts/ci-local.sh: an instance started in the
+same checkout after the check but before Playwright's webServer writes its
+handle makes the suite fail, and the job's ui:stop trap then stops that
+instance. Do not start an instance in a checkout while its ui job runs.
 Preserve screenshots/reports. Close owned named
 playwright-cli sessions promptly; run playwright-cli close-all at completion
 in this dedicated worktree namespace. Never close another worker's sessions.
