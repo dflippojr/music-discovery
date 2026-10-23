@@ -32,7 +32,10 @@ class Study {
     });
     const saved = restoreSession(this.store.load(), data.ids);
     if (saved) this.offerResume(saved);
-    else this.showIntro();
+    else {
+      this.store.clear(); // whatever is kept is not a session this page can resume
+      this.showIntro();
+    }
   }
 
   newSession() {

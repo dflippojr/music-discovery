@@ -131,7 +131,14 @@ export function sessionState(session, orders, current, rated) {
   return { version: SESSION_VERSION, session, orders, current, rated };
 }
 
-const isTime = (value) => typeof value === "string";
+// The rules of study-ratings.schema.json that a stored session must also keep, so a
+// resumed session cannot export a file the schema rejects (a test checks they match).
+export const TIMESTAMP_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/u;
+export const QUALITY_PATTERN = /^(genre|tag|more|less):[^\n]{1,60}$/u;
+const MAX_QUALITIES = 60;
+
+const isTime = (value) => typeof value === "string" && TIMESTAMP_PATTERN.test(value);
+const isQualities = (value) => Array.isArray(value) && value.length <= MAX_QUALITIES && value.every((q) => typeof q === "string" && QUALITY_PATTERN.test(q));
 
 function validOrders(orders) {
   return Array.isArray(orders) && orders.length === TASK_COUNT && orders.every((o) => Array.isArray(o) && o.length === RANKERS.length && RANKERS.every((r) => o.includes(r)));
@@ -144,9 +151,9 @@ function validResult(result, ids) {
 
 /** Whether `task` is well formed for this catalog, with lists in the order `order`. */
 function validTask(task, order, ids) {
-  if (!task || !ids.includes(task.seedTrackId) || !Array.isArray(task.likes) || !Array.isArray(task.dislikes)) return false;
+  if (!task || !ids.includes(task.seedTrackId) || !isQualities(task.likes) || !isQualities(task.dislikes)) return false;
   if (!isTime(task.startedAt) || !PREFERRED.has(task.preferred) || !Array.isArray(task.lists) || task.lists.length !== LABELS.length) return false;
-  return task.lists.every((list, i) => list?.label === LABELS[i] && list.ranker === order[i] && Array.isArray(list.results) && list.results.length <= LIST_SIZE && list.results.every((r) => validResult(r, ids)));
+  return task.lists.every((list, i) => list?.label === LABELS[i] && list.ranker === order[i] && Array.isArray(list.results) && list.results.length >= 1 && list.results.length <= LIST_SIZE && list.results.every((r) => validResult(r, ids)));
 }
 
 /**
