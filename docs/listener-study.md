@@ -87,8 +87,9 @@ A tab opened from the study tab (a link opened in a new tab, or the browser's
 "Duplicate tab") can start with a copy of the kept session and offers to resume it
 under the same session id. If the participant finishes both tabs and sends both
 files, `musicdiscovery analyze-study` stops with "repeats the session id": the
-two files are one session that split, so keep one of them (normally the one
-with more finished tasks) and drop the other.
+two files are one session that split. Both files hold all five tasks, and the
+tasks finished before the split are the same in both, so keep the one with the
+earlier `exported_at` and drop the other.
 
 ## Data handling
 
