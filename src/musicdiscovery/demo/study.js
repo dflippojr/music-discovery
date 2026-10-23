@@ -43,7 +43,7 @@ class Study {
     this.exported = false;
   }
 
-  /** Keep the session so far in this tab, once there is a task on screen to come back to. */
+  /** Keep the session so far in this tab, once a task has a change worth coming back to. */
   save() {
     if (this.session.tasks.length || this.current?.task) this.store.save(sessionState(this.session, this.orders, this.current));
   }
@@ -134,8 +134,8 @@ class Study {
 
   showLists(task, seedRow) {
     const index = this.session.tasks.length;
+    // Saved on the first change: until then, the same seed and qualities give the same lists.
     this.current = { startedAt: task.startedAt, seedRow, task };
-    this.save();
     const last = index === TASK_COUNT - 1;
     const next = h("button", { type: "button", class: "md-button", text: last ? "Finish" : "Next task", disabled: true });
     const status = h("p", { class: "md-status", role: "status" });

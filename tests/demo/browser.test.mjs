@@ -1003,6 +1003,7 @@ describe("study page", () => {
     await doTask(page);
     await page.getByRole("button", { name: "Pick a random track" }).click();
     await page.getByRole("button", { name: "Show the two lists" }).click();
+    await page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ }).click();
     const key = "music-discovery-study-session";
     const good = JSON.parse(await page.evaluate((key) => sessionStorage.getItem(key), key));
     const damaged = {
