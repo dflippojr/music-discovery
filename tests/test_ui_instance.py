@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -15,6 +17,7 @@ from urllib.request import Request, urlopen
 
 import psutil
 import pytest
+from playwright_config import load_playwright_config
 
 
 @pytest.fixture
@@ -621,3 +624,133 @@ def test_recover_cli_reports_failure_without_cleanup(
     assert launcher.main() == 1
     assert "preserve handle for investigation" in capsys.readouterr().err
     assert_preserved(launcher, bundle)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+# Values UI_PORT must refuse: not a plain number, out of range, or privileged.
+BAD_PORTS = [
+    "abc",
+    "4180.0",
+    " 4180",
+    "4180 ",
+    "+4180",
+    "-1",
+    "1e4",
+    "0x1054",
+    "٤١٨٠",  # Arabic-Indic digits that int() would accept
+    "0",
+    "80",
+    "1023",
+    "65536",
+    "9" * 400,
+]
+GOOD_PORTS = [("1024", 1024), ("4180", 4180), ("04180", 4180), ("65535", 65535)]
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="needs Node")
+
+
+@pytest.mark.parametrize("environ", [{}, {"UI_PORT": ""}], ids=["unset", "empty"])
+def test_ui_port_defaults_to_4173(launcher, environ):
+    assert launcher.ui_port(environ) == 4173
+
+
+@pytest.mark.parametrize(("raw", "port"), GOOD_PORTS)
+def test_ui_port_reads_the_variable(launcher, raw, port):
+    assert launcher.ui_port({"UI_PORT": raw}) == port
+
+
+@pytest.mark.parametrize("raw", BAD_PORTS, ids=lambda raw: ascii(raw)[1:13])
+def test_ui_port_refuses_unusable_values(launcher, raw):
+    with pytest.raises(ValueError, match="^UI_PORT must be a whole number"):
+        launcher.ui_port({"UI_PORT": raw})
+
+
+@pytest.mark.parametrize(
+    ("ui_port", "argv", "port"),
+    [(None, [], 4173), ("4180", [], 4180), ("4180", ["--port", "4190"], 4190)],
+    ids=["default", "variable", "explicit-port-wins"],
+)
+def test_start_cli_binds_the_ui_port(launcher, monkeypatch, ui_port, argv, port):
+    if ui_port is None:
+        monkeypatch.delenv("UI_PORT", raising=False)
+    else:
+        monkeypatch.setenv("UI_PORT", ui_port)
+    started = []
+    monkeypatch.setattr(launcher, "start", started.append)
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", *argv])
+    assert launcher.main() == 0
+    assert started == [port]
+
+
+@pytest.mark.parametrize("raw", ["abc", "80", "65536"])
+def test_start_cli_refuses_bad_ui_port_before_anything_starts(
+    launcher, monkeypatch, capsys, raw
+):
+    monkeypatch.setenv("UI_PORT", raw)
+
+    def spawned(*args, **kwargs):
+        raise AssertionError("a process was spawned")
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", spawned)
+    monkeypatch.setattr(launcher, "ExclusiveHTTPServer", spawned)
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start"])
+    assert launcher.main() == 1
+    assert "UI_PORT must be a whole number" in capsys.readouterr().err
+    assert not launcher.DATA.exists()
+
+
+def test_stop_ignores_ui_port(launcher, monkeypatch, capsys):
+    # Stop targets the port this checkout's handle records, never UI_PORT.
+    monkeypatch.setenv("UI_PORT", "not-a-port")
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "stop"])
+    assert launcher.main() == 0
+    assert "No owned UI instance remains" in capsys.readouterr().out
+
+
+@needs_node
+def test_javascript_ui_port_matches_python(launcher):
+    cases = ["", *[raw for raw, _ in GOOD_PORTS], *BAD_PORTS]
+    script = (
+        'import { uiPort } from "./scripts/ui-port.mjs";'
+        "const cases = JSON.parse(process.env.CASES);"
+        "console.log(JSON.stringify(cases.map((raw) => {"
+        "  try { return uiPort({ UI_PORT: raw }); } catch (e) { return e.message; }"
+        "})));"
+    )
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        cwd=ROOT,
+        env={**os.environ, "CASES": json.dumps(cases)},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    def python(raw):
+        try:
+            return launcher.ui_port({"UI_PORT": raw})
+        except ValueError as error:
+            return str(error)
+
+    assert json.loads(result.stdout) == [python(raw) for raw in cases]
+
+
+@needs_node
+@pytest.mark.parametrize(("env", "port"), [({}, 4173), ({"UI_PORT": "4180"}, 4180)])
+def test_playwright_config_uses_ui_port_on_loopback(env, port):
+    result = load_playwright_config("playwright.config.mjs", **env)
+    assert result.returncode == 0, result.stderr
+    config = json.loads(result.stdout)
+    assert config["use"]["baseURL"] == f"http://127.0.0.1:{port}"
+    assert config["webServer"]["url"] == f"http://127.0.0.1:{port}/__ui_health"
+    # The launcher reads UI_PORT itself, so the command stays as CI runs it.
+    assert config["webServer"]["command"] == "npm run ui:start"
+    assert config["webServer"]["reuseExistingServer"] is False
+
+
+@needs_node
+@pytest.mark.parametrize("raw", ["abc", "80", "65536"])
+def test_playwright_config_refuses_bad_ui_port(raw):
+    result = load_playwright_config("playwright.config.mjs", UI_PORT=raw)
+    assert result.returncode != 0
+    assert "UI_PORT must be a whole number" in result.stderr
