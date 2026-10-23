@@ -37,14 +37,15 @@ Shown on the page before the first task and sent with the invitation:
 > does not lose your work, your choices and ratings so far are kept in this
 > browser tab's own storage (sessionStorage) and nowhere else; they are
 > deleted when you download the file at the end, when you choose to start over
-> instead of resuming, or when you close the tab. The file holds a random
-> session id, your choices and ratings and the times you made them. It does
-> not hold your name, email address, IP address or anything you type. You then
-> send the file to the person who invited you. The results will be reported
-> only in aggregate, with no way to tell who rated what. By sending the file
-> you agree to it being used this way. If you change your mind afterwards,
-> tell the person who invited you and your file will be deleted, as long as
-> the report has not yet been written.
+> instead of resuming, or when you close the tab for good (a browser that
+> reopens a closed tab, or restores its tabs after a restart, can bring them
+> back with it). The file holds a random session id, your choices and ratings
+> and the times you made them. It does not hold your name, email address, IP
+> address or anything you type. You then send the file to the person who
+> invited you. The results will be reported only in aggregate, with no way to
+> tell who rated what. By sending the file you agree to it being used this
+> way. If you change your mind afterwards, tell the person who invited you and
+> your file will be deleted, as long as the report has not yet been written.
 
 ## What is recorded
 
@@ -75,9 +76,19 @@ after every rating, "New to me" tick, preference and finished task. If the page
 reloads, or a phone browser discards the tab while the participant listens on
 a source page, the page offers to resume the session where it stopped, with
 the same session id and list order, or to start over, which deletes the kept
-copy. Exporting deletes it too, and closing the tab removes it. From the first
-rating until the export, leaving the page asks for confirmation first. If the
-browser blocks storage, the session lives in the page only, as before.
+copy. Exporting deletes it too, and so does closing the tab, unless the
+browser later reopens that tab (reopening a closed tab or restoring tabs after
+a restart can bring the copy back). A kept copy the page cannot resume, such as
+one from an older page version or a damaged one, is deleted on load. From the
+first rating until the export, leaving the page asks for confirmation first. If
+the browser blocks storage, the session lives in the page only, as before.
+
+A tab opened from the study tab (a link opened in a new tab, or the browser's
+"Duplicate tab") can start with a copy of the kept session and offers to resume it
+under the same session id. If the participant finishes both tabs and sends both
+files, `musicdiscovery analyze-study` stops with "repeats the session id": the
+two files are one session that split, so keep one of them (normally the one
+with more finished tasks) and drop the other.
 
 ## Data handling
 
