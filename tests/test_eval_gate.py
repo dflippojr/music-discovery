@@ -178,10 +178,10 @@ def test_a_baseline_without_a_gated_ranker_is_an_error(baseline):
         compare(baseline, make_report(SCORES))
 
 
-def test_main_exits_one_when_the_cutoffs_differ(tmp_path, baseline, capsys):
+def test_main_exits_one_when_the_cutoffs_differ(checkout, baseline, capsys):
     run = copy.deepcopy(baseline)
     run["k"] = 1
-    assert main(setup_files(tmp_path, baseline, run)) == 1
+    assert main(setup_files(checkout, baseline, run)) == 1
     assert "cutoff" in capsys.readouterr().err
 
 
@@ -207,39 +207,94 @@ def setup_files(tmp_path, baseline, run):
     return [str(pointer), str(write(tmp_path / "run.json", run))]
 
 
-def test_main_exits_zero_on_a_pass_and_prints_the_table(tmp_path, baseline, capsys):
-    assert main(setup_files(tmp_path, baseline, baseline)) == 0
+@pytest.fixture
+def checkout(tmp_path, monkeypatch):
+    """A working directory to run the gate from, with a sibling outside it."""
+    inside = tmp_path / "checkout"
+    inside.mkdir()
+    monkeypatch.chdir(inside)
+    return inside
+
+
+@pytest.mark.parametrize("how", ["dotdot", "absolute"])
+@pytest.mark.parametrize("which", [0, 1])
+def test_main_refuses_an_argument_outside_the_working_directory(
+    checkout, baseline, capsys, how, which
+):
+    args = setup_files(checkout, baseline, baseline)
+    outside = checkout.parent / Path(args[which]).name
+    outside.write_bytes(Path(args[which]).read_bytes())
+    args[which] = str(Path("..") / outside.name if how == "dotdot" else outside)
+
+    assert main(args) == 1
+
+    captured = capsys.readouterr()
+    assert "outside the working directory" in captured.err
+    assert "**FAIL**" in captured.out
+    assert "Verdict" not in captured.out
+
+
+@pytest.mark.parametrize("how", ["dotdot", "absolute"])
+def test_the_baseline_report_must_sit_next_to_its_pointer(checkout, baseline, how):
+    reports = checkout / "reports"
+    reports.mkdir()
+    outside = write(checkout / "offline-base.json", baseline)
+    target = "../offline-base.json" if how == "dotdot" else str(outside)
+    pointer = write(reports / "baseline.json", {"report": target})
+
+    with pytest.raises(GateError, match="outside"):
+        eval_gate.load_baseline(pointer)
+    assert main([str(pointer), str(write(checkout / "run.json", baseline))]) == 1
+
+
+def test_main_accepts_relative_paths_inside_the_working_directory(
+    checkout, baseline, capsys
+):
+    (checkout / "reports").mkdir()
+    (checkout / ".eval-run").mkdir()
+    write(checkout / "reports" / "offline-base.json", baseline)
+    write(checkout / "reports" / "baseline.json", {"report": "offline-base.json"})
+    write(checkout / ".eval-run" / "offline-run.json", baseline)
+
+    assert (
+        main(["reports/baseline.json", ".eval-run/../.eval-run/offline-run.json"]) == 0
+    )
     assert "Verdict: all pass." in capsys.readouterr().out
 
 
-def test_main_exits_one_on_a_regression(tmp_path, baseline, capsys):
+def test_main_exits_zero_on_a_pass_and_prints_the_table(checkout, baseline, capsys):
+    assert main(setup_files(checkout, baseline, baseline)) == 0
+    assert "Verdict: all pass." in capsys.readouterr().out
+
+
+def test_main_exits_one_on_a_regression(checkout, baseline, capsys):
     run = run_with(baseline, profile__genre_ndcg=0.5)
-    assert main(setup_files(tmp_path, baseline, run)) == 1
+    assert main(setup_files(checkout, baseline, run)) == 1
     assert "**FAIL**" in capsys.readouterr().out
 
 
-def test_main_exits_one_when_runs_are_not_comparable(tmp_path, baseline, capsys):
+def test_main_exits_one_when_runs_are_not_comparable(checkout, baseline, capsys):
     run = copy.deepcopy(baseline)
     run["queries_sha256"] = "q2"
-    assert main(setup_files(tmp_path, baseline, run)) == 1
+    assert main(setup_files(checkout, baseline, run)) == 1
     captured = capsys.readouterr()
     assert "not comparable" in captured.err
     assert "**FAIL**: the run and the baseline differ" in captured.out
 
 
-def test_main_reports_unreadable_inputs(tmp_path, baseline, capsys):
-    args = setup_files(tmp_path, baseline, baseline)
-    (tmp_path / "run.json").write_text("{", encoding="utf-8")
+def test_main_reports_unreadable_inputs(checkout, baseline, capsys):
+    args = setup_files(checkout, baseline, baseline)
+    (checkout / "run.json").write_text("{", encoding="utf-8")
     assert main(args) == 1
     assert "cannot read" in capsys.readouterr().err
-    write(tmp_path / "baseline.json", {"nope": 1})
+    write(checkout / "baseline.json", {"nope": 1})
     assert main(args) == 1
     assert "no 'report' file name" in capsys.readouterr().err
 
 
-def test_the_module_runs_as_a_script(tmp_path, baseline, monkeypatch):
+def test_the_module_runs_as_a_script(checkout, baseline, monkeypatch):
     monkeypatch.setattr(
-        "sys.argv", ["eval_gate", *setup_files(tmp_path, baseline, baseline)]
+        "sys.argv", ["eval_gate", *setup_files(checkout, baseline, baseline)]
     )
     monkeypatch.delitem(sys.modules, "musicdiscovery.eval_gate")
     with pytest.raises(SystemExit) as exit_info:

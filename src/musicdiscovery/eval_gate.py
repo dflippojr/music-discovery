@@ -129,6 +129,14 @@ def render(checks: Sequence[Check]) -> str:
     return "\n".join([*lines, "", f"Verdict: {verdict}.", ""])
 
 
+def _inside(path: Path, root: Path, where: str) -> Path:
+    """``path`` resolved, or a GateError when it resolves outside ``root``."""
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise GateError(f"refusing to read {path}: it is outside {where}")
+    return resolved
+
+
 def _load(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -137,11 +145,17 @@ def _load(path: Path) -> dict:
 
 
 def load_baseline(pointer: Path) -> dict:
-    """The committed report that ``reports/baseline.json`` points at."""
+    """The committed report that ``reports/baseline.json`` points at.
+
+    The report must be in the pointer's own directory.
+    """
     target = _load(pointer).get("report")
     if not isinstance(target, str):
         raise GateError(f"{pointer} has no 'report' file name")
-    return _load(pointer.parent / target)
+    report = _inside(
+        pointer.parent / target, pointer.parent, f"the directory of {pointer}"
+    )
+    return _load(report)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -150,7 +164,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("run", type=Path, help="the offline-<date>.json to judge")
     args = parser.parse_args(argv)
     try:
-        checks = compare(load_baseline(args.baseline), _load(args.run))
+        # Both files are read from inside the checkout the gate runs in.
+        cwd = Path.cwd()
+        baseline = load_baseline(_inside(args.baseline, cwd, "the working directory"))
+        checks = compare(
+            baseline, _load(_inside(args.run, cwd, "the working directory"))
+        )
     except GateError as error:
         print(f"eval-gate: {error}", file=sys.stderr)
         print(f"### Evaluation gate\n\n**FAIL**: {error}\n")

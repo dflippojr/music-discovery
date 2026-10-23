@@ -146,6 +146,24 @@ def test_cached_download_is_reused(tmp_path, archive):
     assert result.kept == 2
 
 
+def test_checksum_works_where_sha1_is_blocked_for_security(
+    tmp_path, archive, monkeypatch
+):
+    # SHA1 only matches the checksum the FMA publishes; it protects nothing. A
+    # FIPS-mode Python refuses hashlib.sha1() unless told it is not for security.
+    path, sha1 = archive
+    real_sha1 = hashlib.sha1
+
+    def fips_sha1(*args, usedforsecurity=True):
+        if usedforsecurity:
+            raise ValueError("[digital envelope routines] unsupported")
+        return real_sha1(*args, usedforsecurity=False)
+
+    monkeypatch.setattr(ingest_module.hashlib, "sha1", fips_sha1)
+
+    assert ingest_module.sha1_of(path) == sha1
+
+
 def test_checksum_mismatch_fails_and_removes_download(tmp_path, archive):
     path, _ = archive
     data_dir = tmp_path / "data"

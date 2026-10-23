@@ -102,6 +102,11 @@ must not do. Its logic is unit-tested on synthetic numbers in
 - **The baseline.** `reports/baseline.json` holds `{"report": "<file>"}`, the
   committed report in `reports/` that the gate uses. Report hashes of stored
   files ignore line endings, so a Windows and a Linux run agree.
+- **What it reads.** Run `eval_gate` from the checkout. Both arguments must
+  resolve, symlinks followed, inside the working directory, and the baseline's
+  `report` must resolve inside the pointer's own directory. The gate fails on
+  anything else, such as a `..` or an absolute path that leads out, instead of
+  reading it.
 
 ### Raising the baseline
 
