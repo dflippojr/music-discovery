@@ -34,12 +34,16 @@ anything starts.
 
 ## Steps
 
-1. **Launch.** Runs the command behind `npm run ui:start`, as the contract's
-   "Start" section describes, as an owned background process. Its output goes
-   to `launcher.log`. Before waiting for readiness, `launch.json` records the
+1. **Launch.** If `data/ui-testing/instance.json` already exists, another
+   instance owns the checkout: the step fails at once, names that instance and
+   leaves it running. Otherwise it runs the command behind `npm run ui:start`,
+   as the contract's "Start" section describes, as an owned background
+   process. Its output goes to `launcher.log`. Before waiting for readiness, `launch.json` records the
    wrapper's PID and creation time, the port, the URL and the log path. Once the
    `UI_INSTANCE` line appears, it adds the instance, its run directory and the
-   launcher's child PIDs. It never stores the handle's token.
+   launcher's child PIDs; it records them while waiting too, so a launcher that
+   crashes before readiness still counts as this run's. It never stores the
+   handle's token.
 2. **Doctor.** `scripts/doctor.py` checks four things and prints PASS or FAIL for
    each. **ready**: `/__ui_health` returns the launched instance. **loopback**:
    the URL is 127.0.0.1 and the port listens only on loopback. **seed**: the
@@ -57,13 +61,16 @@ anything starts.
    `drive-results/`, `cleanup.txt` and `summary.md`.
 5. **Cleanup.** This step always runs, even when an earlier step fails. It
    stops the recorded drive process and its browsers, then runs the contract's
-   "Teardown" (`npm run ui:stop`). If a recorded launcher PID is still alive
-   after that, it stops that PID. It never picks a process by name or port. If
-   the handle is still there, it runs the contract's "Recovery after a launcher
-   crash" (`npm run ui:recover`). Then it checks that no recorded process is
-   running, that the port has no listener, and that the handle and run directory
-   are gone. If anything is left over, it fails and lists it. In that case,
-   follow the contract's recovery section. Do not delete files by hand.
+   "Teardown" (`npm run ui:stop`), but only when the handle is this run's: it
+   names the launched instance, or a recorded launcher process wrote it. If a
+   recorded launcher PID is still alive after that, it stops that PID. It never
+   picks a process by name or port. If this run's handle is still there, it runs
+   the contract's "Recovery after a launcher crash" (`npm run ui:recover`). A
+   handle another instance owns is left alone and noted in `cleanup.txt`. Then
+   it checks that no recorded process is running, that the port has no listener
+   (when this run launched anything), and that this run's handle and run
+   directory are gone. If anything is left over, it fails and lists it. In
+   that case, follow the contract's recovery section. Do not delete files by hand.
 
 ## Feature map
 

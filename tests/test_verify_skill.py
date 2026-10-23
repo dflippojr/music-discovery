@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -10,7 +11,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
+from urllib.request import urlopen
 
+import psutil
 import pytest
 from playwright_config import load_playwright_config
 
@@ -270,3 +273,196 @@ def test_drive_config_refuses_bad_ui_port():
     )
     assert result.returncode != 0
     assert "UI_PORT must be a whole number" in result.stderr
+
+
+@pytest.fixture
+def foreign_instance():
+    """A real launcher in this checkout that verify did not start (#148)."""
+    handle = verify.ROOT / "data/ui-testing/instance.json"
+    if handle.exists():
+        pytest.skip("another UI instance owns this checkout's handle")
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(("MUSICDISCOVERY_", "FMA_"))
+        and name not in {"DEMO_BUNDLE", "DATABASE_URL", "API_KEY", "OPENAI_API_KEY"}
+    }
+    launcher = subprocess.Popen(
+        [sys.executable, "scripts/ui_instance.py", "start", "--port", "0"],
+        cwd=verify.ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+    )
+    url = None
+    for line in launcher.stdout:
+        if line.startswith("UI_URL="):
+            url = line.strip().removeprefix("UI_URL=")
+            break
+    assert url, "the foreign launcher did not become ready"
+    instance = json.loads(handle.read_text(encoding="utf-8"))["instance"]
+    yield url, instance
+    if launcher.poll() is None:
+        # The authenticated stop removes the handle and bundle on every OS.
+        subprocess.run(
+            [sys.executable, "scripts/ui_instance.py", "stop"],
+            cwd=verify.ROOT,
+            env=env,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    if launcher.poll() is None:
+        launcher.kill()
+    launcher.wait(timeout=15)
+    launcher.stdout.close()
+
+
+def health(url):
+    with urlopen(url + "__ui_health", timeout=5) as response:
+        return json.load(response)
+
+
+# Needs node on PATH, which every CI job has; without it verify cannot launch.
+@pytest.mark.parametrize("same_port", [False, True], ids=["other-port", "same-port"])
+def test_verify_leaves_an_instance_it_did_not_start_running(
+    foreign_instance, tmp_path, capsys, same_port
+):
+    url, instance = foreign_instance
+    port = int(url.rsplit(":", 1)[1].strip("/")) if same_port else free_port()
+
+    def must_not_drive(run):
+        raise AssertionError("verify drove an instance it did not launch")
+
+    argv = ["--port", str(port), "--out", str(tmp_path)]
+    assert verify.main(argv, drive=must_not_drive) == 1
+    printed = capsys.readouterr().out
+    # Verify neither stopped the other instance nor removed its handle or bundle.
+    assert health(url) == {"instance": instance}
+    handle = verify.ROOT / "data/ui-testing/instance.json"
+    assert json.loads(handle.read_text(encoding="utf-8"))["instance"] == instance
+    assert (verify.ROOT / "data/ui-testing" / instance).is_dir()
+    assert f"| launch | FAIL | another instance ({instance}) owns" in printed
+    assert "| cleanup | pass |" in printed
+    (evidence,) = tmp_path.iterdir()
+    cleanup = (evidence / "cleanup.txt").read_text(encoding="utf-8")
+    assert "ui:stop" not in cleanup and "ui:recover" not in cleanup
+    assert f"belongs to {instance}" in cleanup
+
+
+@pytest.mark.parametrize(
+    ("saved", "owner"),
+    [
+        (None, None),
+        ({"instance": "run-ffffffffffffffff", "pid": 1, "created": 1.0}, False),
+        ({"instance": "run-0123456789abcdef", "pid": 1, "created": 1.0}, True),
+        # A launcher that crashed before its readiness line wrote this handle.
+        ({"instance": "run-ffffffffffffffff", "pid": "launcher"}, True),
+        ("{not json", False),
+    ],
+    ids=["none", "other-instance", "launched", "crashed-before-ready", "unreadable"],
+)
+def test_handle_owner_counts_only_this_runs_launcher(tmp_path, saved, owner):
+    run = verify.Run(tmp_path, free_port(), None)
+    run.handle = tmp_path / "instance.json"
+    run.state["instance"] = "run-0123456789abcdef"
+    launcher = verify.identity(os.getpid())
+    run.state["launcher"].append(launcher)
+    if isinstance(saved, dict) and saved["pid"] == "launcher":
+        saved = {**saved, **launcher}
+    if saved is not None:
+        text = saved if isinstance(saved, str) else json.dumps(saved)
+        run.handle.write_text(text, encoding="utf-8")
+    found = run.handle_owner()
+    assert (found if found is None else found[1]) is owner
+    handle = by_name(run.leftovers())["handle"]
+    assert handle.ok is (owner is not True)
+
+
+STAND_IN_WRAPPER = """
+import json, subprocess, sys, time
+from pathlib import Path
+
+import psutil
+
+HANDLE = Path("data/ui-testing/instance.json")
+command = sys.argv[1]
+if command == "start":
+    # Like node's wrapper: the Python launcher runs as a child.
+    sys.exit(subprocess.Popen([sys.executable, __file__, "launcher"]).wait())
+if command == "launcher":
+    # The launcher writes its handle before it prints the readiness line, then
+    # crashes or hangs once verify has recorded it (or 5 seconds have passed).
+    me = psutil.Process()
+    identity = {"pid": me.pid, "created": me.create_time()}
+    Path("launcher.json").write_text(json.dumps(identity), encoding="utf-8")
+    HANDLE.parent.mkdir(parents=True)
+    HANDLE.write_text(json.dumps({"instance": INSTANCE, **identity}), "utf-8")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            state = json.loads(Path(LAUNCH).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {"launcher": []}
+        if identity in state["launcher"]:
+            break
+        time.sleep(0.05)
+    if MODE == "timed-out":
+        time.sleep(120)
+    sys.exit(3)
+if command == "stop":
+    sys.exit("stop could not reach the instance")
+if command == "recover":
+    HANDLE.unlink()
+    print("Recovered " + INSTANCE)
+"""
+
+
+@pytest.mark.parametrize("mode", ["crashed", "timed-out"])
+def test_launch_owns_a_handle_its_launcher_wrote_before_readiness(
+    tmp_path, monkeypatch, mode
+):
+    """Launch records the wrapper's descendants while it waits for readiness."""
+    checkout = tmp_path / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    instance = "run-0123456789abcdef"
+    # verify.py runs `<node> scripts/ui-command.mjs ...` in the checkout; this
+    # stand-in for node runs the file as Python.
+    (checkout / "scripts/ui-command.mjs").write_text(
+        f"MODE = {mode!r}\nINSTANCE = {instance!r}\n"
+        f"LAUNCH = {str(evidence / 'launch.json')!r}\n{STAND_IN_WRAPPER}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(verify, "ROOT", checkout)
+    monkeypatch.setattr(verify, "LAUNCH_TIMEOUT", 10)
+    monkeypatch.setattr(verify, "EXIT_TIMEOUT", 1)
+    run = verify.Run(evidence, free_port(), None)
+    run.node = sys.executable
+
+    def must_not_drive(run):
+        raise AssertionError("verify drove an instance that never became ready")
+
+    try:
+        assert not run.execute(drive=must_not_drive)
+    finally:
+        launcher = json.loads((checkout / "launcher.json").read_text("utf-8"))
+        if verify.alive(launcher):
+            psutil.Process(launcher["pid"]).kill()
+    steps = {name: (ok, detail) for name, ok, detail in run.steps}
+    failed = "launcher exited with" if mode == "crashed" else "no readiness line"
+    assert steps["launch"][0] is False and steps["launch"][1].startswith(failed)
+    assert "another instance" not in steps["launch"][1]
+    assert steps["cleanup"] == (
+        True,
+        "no recorded process, listener, handle or instance directory remains",
+    )
+    # The launcher that wrote the handle was recorded, stopped and recovered.
+    assert launcher in run.state["launcher"]
+    cleanup = (evidence / "cleanup.txt").read_text(encoding="utf-8")
+    assert f"$ npm run ui:recover\nRecovered {instance}" in cleanup
+    assert "did not launch" not in cleanup
+    assert not run.handle.exists()

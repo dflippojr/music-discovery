@@ -61,6 +61,15 @@ job_demo() {
 }
 
 job_ui() {
+  # ui:stop stops whatever instance the shared handle names. Refuse to start
+  # beside another instance, so the trap below only ever stops the suite's own.
+  local handle=data/ui-testing/instance.json owner
+  if [ -e "$handle" ] || [ -L "$handle" ]; then
+    owner=$(sed -n 's/.*"instance": *"\(run-[0-9a-f]*\)".*/\1/p' "$handle")
+    echo "UI instance ${owner:-of unknown name} owns $handle." >&2
+    echo "Stop it with npm run ui:stop first; this job never stops an instance it did not start." >&2
+    exit 1
+  fi
   # Stop the owned disposable instance even when the journeys fail.
   trap 'npm run ui:stop' EXIT
   run npm run test:ui -- --workers=1

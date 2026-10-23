@@ -61,6 +61,13 @@ def wait_gone(owned, timeout):
     return [o for o in owned if alive(o)]
 
 
+def owned_by(instance):
+    return (
+        f"another instance ({instance}) owns data/ui-testing/instance.json; "
+        "verify neither attaches to it nor stops it"
+    )
+
+
 def stop_recorded(owned, notes):
     """Terminate, then kill, only recorded processes that are still alive."""
     for signal_name in ("terminate", "kill"):
@@ -109,9 +116,46 @@ class Run:
         output = (result.stdout + result.stderr).strip()
         return result.returncode, f"$ npm run ui:{name}\n{output}"
 
+    def handle_owner(self):
+        """None without a handle, else (its instance, whether this run wrote it).
+
+        The handle is shared by every instance in the checkout, so it is this
+        run's only when it names the instance this run launched, or the process
+        that wrote it is one this run recorded under its launcher wrapper.
+        """
+        if not (self.handle.exists() or self.handle.is_symlink()):
+            return None
+        try:
+            saved = json.loads(self.handle.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = None
+        if not isinstance(saved, dict):
+            return "an unreadable handle", False
+        instance = self.state.get("instance")
+        ours = (instance is not None and saved.get("instance") == instance) or any(
+            saved.get("pid") == o["pid"] and saved.get("created") == o["created"]
+            for o in self.state["launcher"]
+        )
+        return str(saved.get("instance")), ours
+
+    def record_launcher(self, process):
+        """Record processes under the owned wrapper while it runs."""
+        recorded = {o["pid"] for o in self.state["launcher"]}
+        try:
+            for child in psutil.Process(process.pid).children(recursive=True):
+                if child.pid not in recorded:
+                    self.state["launcher"].append(identity(child.pid))
+        except psutil.NoSuchProcess:
+            return
+        self.save()
+
     def launch(self):
         if self.node is None:
             raise StepFailed("node is not on PATH")
+        # Never attach to, or later tear down, an instance this run did not start.
+        owner = self.handle_owner()
+        if owner is not None:
+            raise StepFailed(owned_by(owner[0]))
         with open(self.evidence / "launcher.log", "wb") as log:
             process = subprocess.Popen(
                 [self.node, "scripts/ui-command.mjs", "start"]
@@ -132,7 +176,14 @@ class Run:
             if match:
                 break
             if process.poll() is not None:
-                raise StepFailed(f"launcher exited with {process.returncode}")
+                failed = f"launcher exited with {process.returncode}"
+                owner = self.handle_owner()
+                if owner is not None and not owner[1]:
+                    failed += "; " + owned_by(owner[0])
+                raise StepFailed(failed)
+            # The Python launcher writes the handle before readiness, so record
+            # it now: a launcher that crashes before then still owns its handle.
+            self.record_launcher(process)
             time.sleep(0.2)
         else:
             raise StepFailed(f"no readiness line within {LAUNCH_TIMEOUT} seconds")
@@ -140,11 +191,7 @@ class Run:
         self.state["instance"] = instance
         self.state["instance_dir"] = f"data/ui-testing/{instance}"
         # Record the Python launcher and anything else under the owned wrapper.
-        recorded = {o["pid"] for o in self.state["launcher"]}
-        for child in psutil.Process(process.pid).children(recursive=True):
-            if child.pid not in recorded:
-                self.state["launcher"].append(identity(child.pid))
-        self.save()
+        self.record_launcher(process)
         return f"{instance} at {self.url}/ (launcher PID {match.group(2)})"
 
     def doctor(self):
@@ -192,16 +239,26 @@ class Run:
                     self.state["drive"].append(identity(child.pid))
         self.save()
         stop_recorded(self.state["drive"], notes)
-        if self.handle.exists() and self.node:
+        # Teardown and recovery act on whatever the shared handle names, so run
+        # them only for the handle this run's launcher wrote.
+        owner = self.handle_owner()
+        if owner is not None and owner[1] and self.node:
             _, output = self.command("stop", name="stop")
             notes.append(output)
         survivors = wait_gone(self.state["launcher"], EXIT_TIMEOUT)
         if survivors:
             # Stop could not reach the instance (for example, still seeding).
             stop_recorded(list(reversed(self.state["launcher"])), notes)
-        if self.handle.exists() and self.node:
+        owner = self.handle_owner()
+        if owner is not None and owner[1] and self.node:
             _, output = self.command("recover", name="recover")
             notes.append(output)
+        owner = self.handle_owner()
+        if owner is not None and not owner[1]:
+            notes.append(
+                f"data/ui-testing/instance.json belongs to {owner[0]}, "
+                "which this run did not launch; left it alone"
+            )
         checks = self.leftovers()
         text = "\n".join(notes + [str(check) for check in checks])
         (self.evidence / "cleanup.txt").write_text(text + "\n", encoding="utf-8")
@@ -213,7 +270,11 @@ class Run:
     def leftovers(self):
         owned = self.state["launcher"] + self.state["drive"]
         running = [o["pid"] for o in owned if alive(o)]
-        listeners = doctor.listening_addresses(self.port)
+        # Without a launcher, whatever listens on the port is not this run's.
+        launched = bool(self.state["launcher"])
+        listeners = doctor.listening_addresses(self.port) if launched else []
+        owner = self.handle_owner()
+        ours = owner is not None and owner[1]
         instance_dir = self.state.get("instance_dir")
         return [
             doctor.Check(
@@ -228,21 +289,27 @@ class Run:
                 not listeners,
                 f"port {self.port} still listens on {listeners}"
                 if listeners
-                else f"port {self.port} is free",
+                else f"port {self.port} is free"
+                if launched
+                else f"nothing was launched on port {self.port}",
             ),
             doctor.Check(
                 "handle",
-                not self.handle.exists(),
+                not ours,
                 "data/ui-testing/instance.json remains"
-                if self.handle.exists()
-                else "instance handle removed",
+                if ours
+                else "instance handle removed"
+                if owner is None
+                else f"the handle belongs to {owner[0]}, not this run",
             ),
             doctor.Check(
                 "instance directory",
                 not (instance_dir and (ROOT / instance_dir).exists()),
                 f"{instance_dir} remains"
                 if instance_dir and (ROOT / instance_dir).exists()
-                else "instance directory removed",
+                else "instance directory removed"
+                if instance_dir
+                else "this run created no instance directory",
             ),
         ]
 

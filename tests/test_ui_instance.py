@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -756,3 +757,53 @@ def test_playwright_config_refuses_bad_ui_port(raw):
     result = load_playwright_config("playwright.config.mjs", UI_PORT=raw)
     assert result.returncode != 0
     assert "UI_PORT must be a whole number" in result.stderr
+
+
+# ui:stop and ui:recover act on whichever instance the checkout's shared handle
+# names, so every code path that runs them must show it only ever stops an
+# instance it started (#148). A new path fails here until it says how.
+TEARDOWN_CALLERS = {
+    "package.json": "defines ui:stop and ui:recover",
+    ".claude/skills/verify/scripts/verify.py": (
+        "test_verify_leaves_an_instance_it_did_not_start_running"
+    ),
+    "scripts/ci-local.sh": (
+        "test_ci_local_ui_leaves_an_instance_it_did_not_start_running"
+    ),
+    "tests/ui/teardown.mjs": (
+        "Playwright's globalTeardown, which runs only after its webServer, "
+        "npm run ui:start, started the instance and became ready"
+    ),
+    ".github/workflows/ci.yml": "the ui job's fresh checkout holds no other instance",
+}
+TEARDOWN_CALL = re.compile(
+    r"ui:(stop|recover)|ui-command\.mjs|ui_instance\.py\W{0,4}(stop|recover)"
+)
+
+
+def test_every_teardown_caller_shows_it_stops_only_its_own_instance():
+    root = Path(__file__).resolve().parents[1]
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True
+    ).stdout.decode("utf-8")
+    callers = {
+        path
+        for path in tracked.split("\0")
+        if path
+        and not path.endswith(".md")
+        and not path.startswith("tests/test_")
+        and (root / path).is_file()
+        and TEARDOWN_CALL.search(
+            (root / path).read_text(encoding="utf-8", errors="replace")
+        )
+    }
+    assert callers == set(TEARDOWN_CALLERS), (
+        "Add each new caller of ui:stop or ui:recover to TEARDOWN_CALLERS with "
+        "the test that shows it leaves another instance running; drop stale ones"
+    )
+    tests = "".join(
+        path.read_text(encoding="utf-8") for path in (root / "tests").glob("test_*.py")
+    )
+    for proof in TEARDOWN_CALLERS.values():
+        if proof.startswith("test_"):
+            assert f"def {proof}(" in tests, f"{proof} no longer exists"
