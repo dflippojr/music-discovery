@@ -2,13 +2,18 @@
 
 import json
 import re
+from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from musicdiscovery import feedback
 from musicdiscovery.cli import main
 
 SHOWN = [100, 101, 102, 103]
+# Where str.splitlines() also breaks lines; JSON leaves the last three raw.
+LINE_BREAKS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 
 
 def event(track_id, rating, ranker="hybrid", terms=("audio",), shown=SHOWN, **extra):
@@ -97,6 +102,73 @@ def test_a_bom_prefixed_log_is_read(tmp_path, capsys):
     path.write_text("\ufeff" + json.dumps(event(100, 1)) + "\n", encoding="utf-8")
     assert main(["feedback-report", "feedback.jsonl"]) == 0
     assert "1 valid events." in capsys.readouterr().out
+
+
+def test_crlf_and_bom_logs_are_read(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    text = "".join(json.dumps(event(i, 1)) + "\r\n" for i in (100, 101))
+    path.write_bytes(("\ufeff" + text).encode("utf-8"))
+    result = feedback.read_log(path)
+    assert len(result.events) == 2
+    assert result.problems == []
+
+
+def test_a_line_separator_inside_a_term_does_not_split_the_event(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    tags = ["tag:Live\u2028Session", "tag:caf\x85", "tag:Pop\u2029Rock"]
+    lines = [
+        json.dumps(event(100, 1, terms=(tag,)), ensure_ascii=False) for tag in tags
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = feedback.read_log(path)
+    assert result.problems == []
+    assert [e["explanation_terms"] for e in result.events] == [[tag] for tag in tags]
+
+
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    tag=st.text(
+        alphabet=st.one_of(
+            st.characters(exclude_characters="\n", exclude_categories=("Cs",)),
+            st.sampled_from(LINE_BREAKS),
+        ),
+        min_size=1,
+        max_size=60,
+    )
+)
+def test_no_character_inside_a_term_splits_the_event(tag):
+    # A term may hold any character but \n, so no reader may split on the others.
+    Path("feedback.jsonl").write_text(
+        json.dumps(event(100, 1, terms=(f"tag:{tag}",)), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    result = feedback.read_log(Path("feedback.jsonl"))
+    assert result.problems == []
+    assert [e["explanation_terms"] for e in result.events] == [[f"tag:{tag}"]]
+
+
+def test_skipped_line_numbers_count_newline_separated_lines(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    first = json.dumps(
+        event(100, 1, terms=("tag:Live\u2028Session",)), ensure_ascii=False
+    )
+    path.write_text(
+        first + "\n{not json\n" + json.dumps(event(101, -1)) + "\n", encoding="utf-8"
+    )
+    result = feedback.read_log(path)
+    assert len(result.events) == 2
+    assert [p.split(":")[0] for p in result.problems] == ["line 2"]
+
+
+def test_a_lone_cr_does_not_end_a_line(tmp_path):
+    # JSON Lines end a line at \n only; a bare \r is not a separator.
+    path = tmp_path / "feedback.jsonl"
+    path.write_bytes(
+        (json.dumps(event(100, 1)) + "\r" + json.dumps(event(101, 1)) + "\n").encode()
+    )
+    result = feedback.read_log(path)
+    assert result.events == []
+    assert [p.split(":")[0] for p in result.problems] == ["line 1"]
 
 
 def test_summaries(log):
