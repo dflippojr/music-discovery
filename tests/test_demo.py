@@ -93,6 +93,63 @@ def test_stamp_needs_a_git_checkout(monkeypatch):
         demo.build_source()
 
 
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def checkout(tmp_path, monkeypatch, package="src/musicdiscovery", track=True):
+    """A real repository holding the package at `package`, imported from there."""
+    repo = tmp_path / "repo"
+    pkg = repo / package
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (repo / "README.md").write_text("other\n")
+    git(repo, "init", "-q")
+    git(repo, "add", "README.md", *([package] if track else []))
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+    monkeypatch.setattr(demo, "__file__", str(pkg / "demo.py"))
+    return repo, git(repo, "rev-parse", "HEAD")
+
+
+def test_stamp_refuses_a_package_the_repository_does_not_track(tmp_path, monkeypatch):
+    checkout(tmp_path, monkeypatch, track=False)
+    with pytest.raises(demo.DemoError, match="editable install"):
+        demo.build_source()
+
+
+def test_stamp_refuses_a_package_outside_src(tmp_path, monkeypatch):
+    checkout(tmp_path, monkeypatch, package="lib/site-packages/musicdiscovery")
+    with pytest.raises(demo.DemoError, match="editable install"):
+        demo.build_source()
+
+
+def test_stamp_reads_the_checkout_the_package_is_imported_from(tmp_path, monkeypatch):
+    _, head = checkout(tmp_path, monkeypatch)
+    assert demo.build_source(release=True)["sha"] == head
+
+
+def test_untracked_source_file_marks_the_sha_and_blocks_a_release(
+    tmp_path, monkeypatch
+):
+    repo, head = checkout(tmp_path, monkeypatch)
+    (repo / "src" / "musicdiscovery" / "new.py").write_text("")
+    assert demo.build_source()["sha"] == head + "-dirty"
+    with pytest.raises(demo.DemoError, match="uncommitted changes"):
+        demo.build_source(release=True)
+
+
+def test_untracked_files_outside_the_source_paths_keep_the_sha_clean(
+    tmp_path, monkeypatch
+):
+    repo, head = checkout(tmp_path, monkeypatch)
+    for path in ("data/catalog.parquet", ".demo-fixture/catalog.json", "notes.txt"):
+        (repo / path).parent.mkdir(exist_ok=True)
+        (repo / path).write_text("")
+    assert demo.build_source(release=True)["sha"] == head
+
+
 def test_catalog_arrays_line_up(bundle, catalog):
     data = json.loads((bundle[0] / demo.CATALOG_FILE).read_text())
     n = len(catalog)
