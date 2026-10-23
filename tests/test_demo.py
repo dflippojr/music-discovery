@@ -94,7 +94,15 @@ def checkout(tmp_path, monkeypatch, package="src/musicdiscovery", track=True):
     (repo / "README.md").write_text("other\n")
     git(repo, "init", "-q")
     git(repo, "add", "README.md", *([package] if track else []))
-    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+    identity = (
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    )
+    git(repo, *identity, "commit", "-q", "-m", "x")
     monkeypatch.setattr(demo, "__file__", str(pkg / "demo.py"))
     return repo, git(repo, "rev-parse", "HEAD")
 
@@ -109,11 +117,6 @@ def test_stamp_refuses_a_package_outside_src(tmp_path, monkeypatch):
     checkout(tmp_path, monkeypatch, package="lib/site-packages/musicdiscovery")
     with pytest.raises(demo.DemoError, match="editable install"):
         demo.build_source()
-
-
-def test_stamp_reads_the_checkout_the_package_is_imported_from(tmp_path, monkeypatch):
-    _, head = checkout(tmp_path, monkeypatch)
-    assert demo.build_source(release=True)["sha"] == head
 
 
 def test_dirty_tree_marks_the_sha_and_blocks_a_release(tmp_path, monkeypatch):

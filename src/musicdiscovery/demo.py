@@ -31,8 +31,9 @@ SOURCES_FILE = "sources.json"  # fetched after the page is ready
 PARITY_FILE = "parity.json"
 SOURCE_FILE = "SOURCE.json"  # which commit the bundle was built from
 SOURCE_REPO = "dflippojr/music-discovery"
+PACKAGE_PATH = "src/musicdiscovery"  # where a checkout tracks the package
 # Repository paths the bundle is built from; a site compares these with main.
-SOURCE_PATHS = ("src/musicdiscovery", "scripts/vendor-into-site")
+SOURCE_PATHS = (PACKAGE_PATH, "scripts/vendor-into-site")
 DIRTY_SUFFIX = "-dirty"
 DEFERRED_FILES = (SOURCES_FILE,)
 STATIC_FILES = (
@@ -255,7 +256,7 @@ def _git(*args: str, cwd: Path | None = None) -> str:
 
 
 def _checkout_root() -> Path:
-    """The work tree whose tracked `src/musicdiscovery` is the imported package.
+    """The work tree whose tracked `PACKAGE_PATH` is the imported package.
 
     Any other enclosing repository (a site, or a venv inside some work tree)
     would stamp a commit the exported code did not come from.
@@ -264,12 +265,13 @@ def _checkout_root() -> Path:
     root = Path(_git("rev-parse", "--show-toplevel"))
     try:
         _git("ls-files", "--error-unmatch", "__init__.py")
-        tracked = (root / SOURCE_PATHS[0]).resolve() == package
     except DemoError:
         tracked = False
+    else:
+        tracked = (root / PACKAGE_PATH).resolve() == package
     if not tracked:
         raise DemoError(
-            f"{package} is not the tracked {SOURCE_PATHS[0]} of the git checkout "
+            f"{package} is not the tracked {PACKAGE_PATH} of the git checkout "
             f"around it; export from an editable install in a checkout of {SOURCE_REPO}"
         )
     return root
@@ -282,10 +284,11 @@ def build_source(release: bool = False) -> dict:
     """
     root = _checkout_root()
     sha = _git("rev-parse", "HEAD")
-    untracked = ("ls-files", "--others", "--exclude-standard", "--", *SOURCE_PATHS)
-    if _git("status", "--porcelain", "--untracked-files=no") or _git(
-        *untracked, cwd=root
-    ):
+    changed = _git("status", "--porcelain", "--untracked-files=no", cwd=root)
+    untracked = _git(
+        "ls-files", "--others", "--exclude-standard", "--", *SOURCE_PATHS, cwd=root
+    )
+    if changed or untracked:
         if release:
             raise DemoError("the work tree has uncommitted changes; commit them first")
         sha += DIRTY_SUFFIX
