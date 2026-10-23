@@ -122,6 +122,9 @@ test("S1/S2/S3: consent, validation, five blind tasks, export and reload reset",
   await up.click(); await down.click(); await expect(up).toHaveAttribute("aria-pressed", "false"); await expect(down).toHaveAttribute("aria-pressed", "true");
   await down.click(); await expect(down).toHaveAttribute("aria-pressed", "false");
   await page.getByRole("checkbox", { name: /^New to me/ }).first().check();
+  await ready(page, "/study.html"); await page.getByRole("button", { name: "Resume my session" }).click();
+  await expect(page.getByRole("heading", { name: "Task 1 of 5", exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /^New to me/ }).first()).toBeChecked();
   for (let number = 1; number <= 5; number += 1) {
     if (number > 1) {
       await expect(page.getByRole("heading", { name: "Task " + number + " of 5", exact: true })).toBeVisible();

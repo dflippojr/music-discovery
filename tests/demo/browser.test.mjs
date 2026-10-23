@@ -957,6 +957,8 @@ describe("study page", () => {
     const old = await id();
     await page.reload();
     await page.waitForSelector("#music-discovery-study button");
+    assert.match(await page.locator(".md-lead").textContent(), /0 of 5 tasks done/);
+    assert.deepEqual(await axeViolations(page), []);
     await page.getByRole("button", { name: "Start over" }).click();
     assert.equal(await page.getByRole("button", { name: "I agree, start" }).count(), 1);
     assert.notEqual(await id(), old);
