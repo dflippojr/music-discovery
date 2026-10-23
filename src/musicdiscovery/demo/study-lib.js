@@ -134,7 +134,7 @@ function validOrders(orders) {
 }
 
 function validResult(result, ids) {
-  return ids[result?.row] === result.trackId && [null, 1, -1].includes(result.rating) && typeof result.newToMe === "boolean";
+  return typeof result === "object" && result !== null && ids[result.row] === result.trackId && [null, 1, -1].includes(result.rating) && typeof result.newToMe === "boolean";
 }
 
 /** Whether `task` is well formed for this catalog, with lists in the order `order`. */

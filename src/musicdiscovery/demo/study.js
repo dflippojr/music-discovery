@@ -69,12 +69,15 @@ class Study {
   }
 
   offerResume(saved) {
+    // Closing the tab now would lose the kept ratings with it, so the warning holds from here.
+    this.rated = hasRatings(saved);
     const done = saved.session.tasks.length;
     const resume = h("button", { type: "button", class: "md-button", text: "Resume my session" });
     const restart = h("button", { type: "button", class: "md-button", text: "Start over" });
     resume.addEventListener("click", () => this.resume(saved));
     restart.addEventListener("click", () => {
       this.store.clear();
+      this.rated = false;
       this.showIntro();
     });
     this.show(
@@ -88,7 +91,6 @@ class Study {
   resume({ session, orders, current }) {
     this.session = session;
     this.orders = orders;
-    this.rated = hasRatings({ session, current });
     if (current?.task) this.showLists(current.task, current.seedRow);
     else if (session.tasks.length === TASK_COUNT) this.showDone();
     else this.showTask(current?.startedAt);
