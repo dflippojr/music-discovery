@@ -870,6 +870,25 @@ describe("study page", () => {
     }
   });
 
+  test("the resume offer warns before leaving with rated tracks, and starting over stops it", async () => {
+    for (const restart of [false, true]) {
+      const { context, page, problems } = await study();
+      await page.getByRole("button", { name: "I agree, start" }).click();
+      await page.getByRole("button", { name: "Pick a random track" }).click();
+      await page.getByRole("button", { name: "Show the two lists" }).click();
+      await page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ }).click();
+      page.once("dialog", (d) => d.accept());
+      await page.reload();
+      await page.waitForSelector("#music-discovery-study button");
+      // A click gives the reloaded page the user activation browsers need before they prompt.
+      if (restart) await page.getByRole("button", { name: "Start over" }).click();
+      else await page.locator(".md-lead").click();
+      assert.deepEqual(problems, []);
+      assert.equal(await leave(page), restart ? null : "beforeunload");
+      await context.close();
+    }
+  });
+
   test("a reloaded session resumes where it was and exports as if it never reloaded", async () => {
     const { context, page, problems } = await study();
     page.on("dialog", (d) => d.accept());
@@ -1013,6 +1032,7 @@ describe("study page", () => {
       "a bad session id": { ...good, session: { ...good.session, id: "x" } },
       "an unfinished earlier task": { ...good, session: { ...good.session, tasks: [{ ...good.session.tasks[0], preferred: null }] } },
       "a swapped list order": { ...good, orders: good.orders.map((o) => [...o].reverse()) },
+      "a missing result": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: [null, ...l.results.slice(1)] })) } } },
       "a track from another catalog": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: l.results.map((r) => ({ ...r, trackId: -1 })) })) } } },
       "a different seed row": { ...good, current: { ...good.current, seedRow: -1 } },
       "no task start time": { ...good, current: { ...good.current, startedAt: undefined } },
