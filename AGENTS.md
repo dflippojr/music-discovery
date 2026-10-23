@@ -43,8 +43,9 @@ so local runs and CI use the same floor.
   # demo
   python scripts/build_demo_fixture.py .demo-fixture
   # demo: the bundle is stamped with the commit under test. CI wants $GITHUB_SHA;
-  # locally it is `git rev-parse HEAD`, plus -dirty when
-  # `git status --porcelain --untracked-files=no` lists a change.
+  # locally it is `git rev-parse HEAD`, plus -dirty when `git status
+  # --porcelain --untracked-files=no` lists a change or `git ls-files --others
+  # --exclude-standard -- src/musicdiscovery scripts/vendor-into-site` lists a file.
   python -c 'import json; print(json.load(open(".demo-fixture/SOURCE.json"))["sha"])'
   npm run test:parity
   npm run test:study

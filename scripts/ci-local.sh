@@ -37,15 +37,16 @@ job_test() {
 job_demo() {
   run python scripts/build_demo_fixture.py .demo-fixture
   # CI compares the stamp with $GITHUB_SHA. Here the commit under test is HEAD,
-  # with -dirty while tracked files have uncommitted changes, as build_source()
-  # in src/musicdiscovery/demo.py stamps it.
+  # with -dirty while tracked files have uncommitted changes or the source paths
+  # hold untracked files, as build_source() in src/musicdiscovery/demo.py stamps it.
   echo
   echo "==> Check the bundle is stamped with the commit under test"
-  local sha expected
+  local sha expected untracked
   sha=$(python -c 'import json; print(json.load(open(".demo-fixture/SOURCE.json"))["sha"])')
   echo "SOURCE.json sha: $sha"
   expected=$(git rev-parse HEAD)
-  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  untracked=$(git ls-files --others --exclude-standard -- src/musicdiscovery scripts/vendor-into-site)
+  if [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -n "$untracked" ]; then
     expected="$expected-dirty"
   fi
   if [ "$sha" != "$expected" ]; then
