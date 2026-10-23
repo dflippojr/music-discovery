@@ -144,6 +144,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         CatalogError,
         EvaluationError,
         HybridConfigError,
+        OSError,
         PreferenceError,
         ProfileRankerError,
         ValueError,
