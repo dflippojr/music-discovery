@@ -192,6 +192,11 @@ test("a stored session is restored only when it fits this catalog and protocol",
     "too many likes": { ...between, session: { ...between.session, tasks: [{ ...between.session.tasks[0], likes: Array.from({ length: 61 }, (_, i) => `tag:t${i}`) }] } },
     "a free-text like on the task shown": { ...shown, current: { ...shown.current, task: { ...shownTask(), likes: ["genre:\nFolk"] } } },
     "a current start that is not a time": { ...picking, current: { ...picking.current, startedAt: "now" } },
+    // A pattern test turns a list into text, so these got through too (#144 re-review).
+    "an id in a list": { ...between, session: { ...between.session, id: ["a".repeat(32)] } },
+    "an id in a nested list": { ...between, session: { ...between.session, id: [["a".repeat(32)]] } },
+    "a seed row as text": { ...shown, current: { ...shown.current, seedRow: "0" } },
+    "a seed row in a list": { ...shown, current: { ...shown.current, seedRow: [0] } },
   };
   const offered = Object.entries(bad).filter(([, state]) => restoreSession(state, IDS) !== null);
   assert.deepEqual(offered.map(([name]) => name), []);
