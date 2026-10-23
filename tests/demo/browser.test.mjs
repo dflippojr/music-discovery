@@ -870,21 +870,24 @@ describe("study page", () => {
     }
   });
 
-  test("the resume offer warns before leaving with rated tracks, and starting over stops it", async () => {
-    for (const restart of [false, true]) {
+  // A withdrawn rating still counts: the warning runs from the first rating until export.
+  test("a resumed or offered session warns before leaving once rated, and starting over stops it", async () => {
+    for (const then of ["wait", "resume after withdrawing", "start over"]) {
       const { context, page, problems } = await study();
       await page.getByRole("button", { name: "I agree, start" }).click();
       await page.getByRole("button", { name: "Pick a random track" }).click();
       await page.getByRole("button", { name: "Show the two lists" }).click();
-      await page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ }).click();
+      const up = page.locator(".md-result").first().getByRole("button", { name: /Thumbs up/ });
+      await up.click();
+      if (then === "resume after withdrawing") await up.click();
       page.once("dialog", (d) => d.accept());
       await page.reload();
       await page.waitForSelector("#music-discovery-study button");
       // A click gives the reloaded page the user activation browsers need before they prompt.
-      if (restart) await page.getByRole("button", { name: "Start over" }).click();
-      else await page.locator(".md-lead").click();
+      if (then === "wait") await page.locator(".md-lead").click();
+      else await page.getByRole("button", { name: then === "start over" ? "Start over" : "Resume my session" }).click();
       assert.deepEqual(problems, []);
-      assert.equal(await leave(page), restart ? null : "beforeunload");
+      assert.equal(await leave(page), then === "start over" ? null : "beforeunload", then);
       await context.close();
     }
   });
@@ -1033,6 +1036,8 @@ describe("study page", () => {
       "an unfinished earlier task": { ...good, session: { ...good.session, tasks: [{ ...good.session.tasks[0], preferred: null }] } },
       "a swapped list order": { ...good, orders: good.orders.map((o) => [...o].reverse()) },
       "a missing result": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: [null, ...l.results.slice(1)] })) } } },
+      "a result without ids": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: [{ rating: 1, newToMe: false }, ...l.results.slice(1)] })) } } },
+      "a rated flag that is not a flag": { ...good, rated: "yes" },
       "a track from another catalog": { ...good, current: { ...good.current, task: { ...good.current.task, lists: good.current.task.lists.map((l) => ({ ...l, results: l.results.map((r) => ({ ...r, trackId: -1 })) })) } } },
       "a different seed row": { ...good, current: { ...good.current, seedRow: -1 } },
       "no task start time": { ...good, current: { ...good.current, startedAt: undefined } },
