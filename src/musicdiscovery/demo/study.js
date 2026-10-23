@@ -6,7 +6,7 @@
 // the listener downloads one JSON file and sends it to the owner.
 
 import { Rankers } from "./ranker.js";
-import { balancedOrders, buildExport, CONSENT, hasRatings, LABELS, LIST_SIZE, newSessionId, restoreSession, SessionStore, sessionState, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
+import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, newSessionId, restoreSession, SessionStore, sessionState, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
 import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, resultPresentation, SeedPicker, thumbButton, trackLabel } from "./ui.js";
 
 const PREFERENCES = [
@@ -45,7 +45,7 @@ class Study {
 
   /** Keep the session so far in this tab, once a task has a change worth coming back to. */
   save() {
-    if (this.session.tasks.length || this.current?.task) this.store.save(sessionState(this.session, this.orders, this.current));
+    if (this.session.tasks.length || this.current?.task) this.store.save(sessionState(this.session, this.orders, this.current, this.rated));
   }
 
   show(...children) {
@@ -70,7 +70,7 @@ class Study {
 
   offerResume(saved) {
     // Closing the tab now would lose the kept ratings with it, so the warning holds from here.
-    this.rated = hasRatings(saved);
+    this.rated = saved.rated;
     const done = saved.session.tasks.length;
     const resume = h("button", { type: "button", class: "md-button", text: "Resume my session" });
     const restart = h("button", { type: "button", class: "md-button", text: "Start over" });

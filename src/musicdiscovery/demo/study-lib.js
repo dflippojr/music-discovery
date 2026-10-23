@@ -122,9 +122,13 @@ export class SessionStore {
   }
 }
 
-/** What the store keeps: the session so far, the list order of every task and the task on screen. */
-export function sessionState(session, orders, current) {
-  return { version: SESSION_VERSION, session, orders, current };
+/**
+ * What the store keeps: the session so far, the list order of every task, the task on
+ * screen, and whether any track was ever rated (the leave-page warning holds from the
+ * first rating until export, even if that rating is withdrawn).
+ */
+export function sessionState(session, orders, current, rated) {
+  return { version: SESSION_VERSION, session, orders, current, rated };
 }
 
 const isTime = (value) => typeof value === "string";
@@ -134,7 +138,8 @@ function validOrders(orders) {
 }
 
 function validResult(result, ids) {
-  return typeof result === "object" && result !== null && ids[result.row] === result.trackId && [null, 1, -1].includes(result.rating) && typeof result.newToMe === "boolean";
+  if (typeof result !== "object" || result === null || !Number.isInteger(result.row) || result.row < 0 || result.row >= ids.length) return false;
+  return ids[result.row] === result.trackId && [null, 1, -1].includes(result.rating) && typeof result.newToMe === "boolean";
 }
 
 /** Whether `task` is well formed for this catalog, with lists in the order `order`. */
@@ -151,7 +156,7 @@ function validTask(task, order, ids) {
  * holds the task and its seed row once the lists are shown.
  */
 export function restoreSession(state, ids) {
-  if (state?.version !== SESSION_VERSION) return null;
+  if (state?.version !== SESSION_VERSION || typeof state.rated !== "boolean") return null;
   const { session, orders, current } = state;
   if (!validOrders(orders) || !/^[0-9a-f]{32}$/.test(session?.id) || !isTime(session.startedAt) || !Array.isArray(session.tasks)) return null;
   const { tasks } = session;
@@ -161,10 +166,4 @@ export function restoreSession(state, ids) {
   if (current.task === null) return state;
   const task = current.task;
   return validTask(task, orders[tasks.length], ids) && task.completedAt === null && ids[current.seedRow] === task.seedTrackId ? state : null;
-}
-
-/** Whether any track in the state has been rated, so leaving now would lose work. */
-export function hasRatings(state) {
-  const tasks = state.current?.task ? [...state.session.tasks, state.current.task] : state.session.tasks;
-  return tasks.some((task) => task.lists.some((list) => list.results.some((r) => r.rating !== null)));
 }

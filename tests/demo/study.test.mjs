@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { balancedOrders, buildExport, hasRatings, newSessionId, restoreSession, SessionStore, sessionState, taskComplete, timestamp } from "../../src/musicdiscovery/demo/study-lib.js";
+import { balancedOrders, buildExport, newSessionId, restoreSession, SessionStore, sessionState, taskComplete, timestamp } from "../../src/musicdiscovery/demo/study-lib.js";
 
 const schema = JSON.parse(readFileSync(resolve("src/musicdiscovery/study-ratings.schema.json"), "utf8"));
 
@@ -113,7 +113,7 @@ const ORDERS = Array.from({ length: 5 }, () => ["baseline", "hybrid"]);
 function sampleState({ tasks = 1, current = null } = {}) {
   const session = { id: "a".repeat(32), startedAt: "2026-10-06T13:59:00Z", tasks: Array.from({ length: tasks }, () => sampleTask()) };
   for (const task of session.tasks) task.lists.forEach((list, i) => (list.results = [{ trackId: IDS[1 + i], row: 1 + i, rating: 1, newToMe: false }]));
-  return sessionState(session, ORDERS, current);
+  return sessionState(session, ORDERS, current, tasks > 0);
 }
 
 function shownTask() {
@@ -183,13 +183,4 @@ test("a stored session is restored only when it fits this catalog and protocol",
     "another seed row": { ...shown, current: { ...shown.current, seedRow: 1 } },
   };
   for (const [name, state] of Object.entries(bad)) assert.equal(restoreSession(state, IDS), null, name);
-});
-
-test("a state has ratings once any track, finished or on screen, is rated", () => {
-  assert.equal(hasRatings(sampleState({ tasks: 0 })), false);
-  assert.equal(hasRatings(sampleState({ tasks: 0, current: { startedAt: "t", seedRow: 0, task: shownTask() } })), false);
-  const rated = shownTask();
-  rated.lists[1].results[0].rating = -1;
-  assert.equal(hasRatings(sampleState({ tasks: 0, current: { startedAt: "t", seedRow: 0, task: rated } })), true);
-  assert.equal(hasRatings(sampleState()), true);
 });
