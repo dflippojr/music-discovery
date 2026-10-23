@@ -389,7 +389,9 @@ def _stamp_check(tmp_path: Path, stamp: str, tracked_change: bool, untracked: bo
     script = CI_LOCAL.read_text(encoding="utf-8")
     body = re.search(r"^job_demo\(\) \{\n(.*?)^\}\n", script, re.M | re.S).group(1)
     lines = body.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip().startswith("sha="))
+    starts = [i for i, line in enumerate(lines) if line.strip().startswith("sha=")]
+    assert starts, "scripts/ci-local.sh job_demo has no stamp check"
+    start = starts[0]
     end = next(i for i, line in enumerate(lines) if "test:parity" in line)
     check = textwrap.dedent("\n".join(lines[start:end])) + "\n"
     repo = tmp_path / "repo"
