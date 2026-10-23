@@ -27,6 +27,9 @@ so local runs and CI use the same floor.
   first run, install the Node tools with `npm ci` and
   `npx playwright install chromium webkit`. `tests/test_workflows.py` fails
   when the script misses a command of those jobs or runs one out of order.
+  The UI suite and the verify skill serve the demo on `127.0.0.1:$UI_PORT`
+  (default 4173, as in CI). On a shared host where 4173 is taken, pick another
+  unprivileged port, for example `UI_PORT=4180 scripts/ci-local.sh ui`.
   The commands, in CI order:
 
   ```sh

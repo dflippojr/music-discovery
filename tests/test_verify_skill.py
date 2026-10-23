@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.error import URLError
 
 import pytest
+from playwright_config import load_playwright_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / ".claude/skills/verify/scripts"
 
@@ -178,3 +179,94 @@ def test_cleanup_after_failed_drive_leaves_nothing_running(tmp_path, capsys):
     assert not doctor.listening_addresses(port)
     assert not handle.exists()
     assert not (verify.ROOT / state["instance_dir"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("ui_port", "argv", "url"),
+    [
+        (None, [], "http://127.0.0.1:4173"),
+        ("4180", [], "http://127.0.0.1:4180"),
+        ("not-a-port", ["--url", "http://127.0.0.1:4190"], "http://127.0.0.1:4190"),
+    ],
+    ids=["default", "variable", "explicit-url-wins"],
+)
+def test_doctor_default_url_follows_ui_port(monkeypatch, ui_port, argv, url):
+    if ui_port is None:
+        monkeypatch.delenv("UI_PORT", raising=False)
+    else:
+        monkeypatch.setenv("UI_PORT", ui_port)
+    checked = []
+    monkeypatch.setattr(
+        doctor, "run_checks", lambda base, _: checked.append(base) or []
+    )
+    assert doctor.main([*argv, "--instance", "run-0123456789abcdef"]) == 0
+    assert checked == [url]
+
+
+@pytest.mark.parametrize("module", [doctor, verify], ids=["doctor", "verify"])
+@pytest.mark.parametrize("raw", ["abc", "80", "65536"])
+def test_verify_skill_refuses_bad_ui_port(monkeypatch, capsys, tmp_path, module, raw):
+    monkeypatch.setenv("UI_PORT", raw)
+    argv = ["--out", str(tmp_path)] if module is verify else []
+    with pytest.raises(SystemExit) as exit_info:
+        module.main(argv)
+    assert exit_info.value.code == 2
+    assert "UI_PORT must be a whole number" in capsys.readouterr().err
+    assert not list(tmp_path.iterdir())  # no evidence folder, nothing launched
+
+
+@pytest.mark.parametrize(
+    ("ui_port", "argv", "port"),
+    [(None, [], 4173), ("4180", [], 4180), ("not-a-port", ["--port", "4190"], 4190)],
+    ids=["default", "variable", "explicit-port-wins"],
+)
+def test_verify_default_port_follows_ui_port(
+    monkeypatch, capsys, tmp_path, ui_port, argv, port
+):
+    if ui_port is None:
+        monkeypatch.delenv("UI_PORT", raising=False)
+    else:
+        monkeypatch.setenv("UI_PORT", ui_port)
+    ports = []
+
+    class Recorded:
+        def __init__(self, evidence, port, feature):
+            self.evidence = evidence
+            ports.append(port)
+
+        def execute(self, drive):
+            (self.evidence / "summary.md").write_text("ok", encoding="utf-8")
+            return True
+
+    monkeypatch.setattr(verify, "Run", Recorded)
+    assert verify.main([*argv, "--out", str(tmp_path)]) == 0
+    capsys.readouterr()
+    assert ports == [port]
+
+
+@pytest.mark.parametrize(
+    ("env", "url"),
+    [
+        ({}, "http://127.0.0.1:4173"),
+        ({"UI_PORT": "4180"}, "http://127.0.0.1:4180"),
+        (
+            {"UI_PORT": "not-a-port", "VERIFY_BASE_URL": "http://127.0.0.1:4190"},
+            "http://127.0.0.1:4190",
+        ),
+    ],
+    ids=["default", "variable", "verify-base-url-wins"],
+)
+def test_drive_config_base_url_follows_ui_port(env, url):
+    result = load_playwright_config(
+        ".claude/skills/verify/scripts/drive.config.mjs", **env
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["use"]["baseURL"] == url
+
+
+def test_drive_config_refuses_bad_ui_port():
+    result = load_playwright_config(
+        ".claude/skills/verify/scripts/drive.config.mjs", UI_PORT="80"
+    )
+    assert result.returncode != 0
+    assert "UI_PORT must be a whole number" in result.stderr

@@ -5,7 +5,13 @@ Contract version: 1
 ## Scope and isolation
 
 Target: music-discovery's static recommendation demo and blind listener study.
-Only http://127.0.0.1:4173 is allowed. Never attach to an existing instance.
+Only http://127.0.0.1:$UI_PORT (default 4173) is allowed, loopback only.
+Never attach to an existing instance. UI_PORT is the one setting for the port:
+npm run ui:start, npm run test:ui and the verify skill all read it, and an
+explicit --port, --url or VERIFY_BASE_URL wins. It must be a whole number from
+1024 to 65535; anything else is refused before a fixture is built or a process
+starts. Set it when 4173 is taken on a shared host, for example
+UI_PORT=4180 npm run test:ui -- --workers=1. There is no setting for the host.
 The launcher binds loopback exclusively before generating a fresh synthetic
 catalog with scripts/build_demo_fixture.py --no-shape (450 made-up tracks, IDs 100–549).
 Data stays in ignored data/ui-testing/run-<random>/; its owned process handle
@@ -32,7 +38,7 @@ npm run ui:start
 ~~~
 
 Keep this foreground process in an owned terminal. It prints
-UI_URL=http://127.0.0.1:4173/ after seeding and binding, followed by UI_INSTANCE,
+UI_URL=http://127.0.0.1:$UI_PORT/ (4173 by default) after seeding and binding, followed by UI_INSTANCE,
 PID and HANDLE. Readiness: GET /__ui_health returns that instance ID. Startup
 logs go to that terminal; redirect them to the evidence directory if desired.
 Occupied ports or an existing handle fail; no existing server is reused.
@@ -141,8 +147,9 @@ request. The server finally closes its socket and removes only its flat owned
 bundle and handle. Unexpected directories/symlinks or a mismatched health ID
 are refused; investigate rather than deleting another process's resources.
 If interrupted before a handle exists, stop reports no owned instance.
-Verify the ledger PID has exited, port 4173 no longer listens, and handle and
-run directory are absent. Preserve screenshots/reports. Close owned named
+Verify the ledger PID has exited, the instance's port (UI_PORT, default 4173)
+no longer listens, and handle and run directory are absent. Stop reads the port
+from the handle, so it never touches a listener this checkout did not start. Preserve screenshots/reports. Close owned named
 playwright-cli sessions promptly; run playwright-cli close-all at completion
 in this dedicated worktree namespace. Never close another worker's sessions.
 

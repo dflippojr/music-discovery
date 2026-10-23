@@ -23,6 +23,7 @@ import psutil
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "ui-testing"
 HANDLE = DATA / "instance.json"
+DEFAULT_PORT = 4173
 FIXTURE_TIMEOUT = 30
 CHILD_EXIT_TIMEOUT = 2
 CSP = (
@@ -42,6 +43,29 @@ def validate_environment():
         raise ValueError(
             "Remove external configuration before starting: " + ", ".join(names)
         )
+
+
+def ui_port(environ=os.environ):
+    """The port in UI_PORT, or 4173 when it is unset or empty.
+
+    scripts/ui-port.mjs applies the same rule for the Playwright configs.
+    """
+    raw = environ.get("UI_PORT", "")
+    if raw == "":
+        return DEFAULT_PORT
+    # Drop leading zeros and cap the length first: int() refuses very long strings
+    # with its own error, which would not name UI_PORT.
+    digits = raw.lstrip("0")
+    if (
+        re.fullmatch(r"[0-9]+", raw) is None
+        or len(digits) > 5
+        or not 1024 <= int(digits or "0") <= 65535
+    ):
+        raise ValueError(
+            "UI_PORT must be a whole number from 1024 to 65535, "
+            f"got {json.dumps(raw, ensure_ascii=False)}"
+        )
+    return int(digits)
 
 
 def remove_bundle(bundle):
@@ -351,11 +375,11 @@ def stop():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("start", "stop", "recover"))
-    parser.add_argument("--port", type=int, default=4173)
+    parser.add_argument("--port", type=int, help="default: UI_PORT, else 4173")
     args = parser.parse_args()
     try:
         if args.action == "start":
-            start(args.port)
+            start(ui_port() if args.port is None else args.port)
         elif args.action == "stop":
             stop()
         else:

@@ -2,6 +2,8 @@
 
 Usage: python .claude/skills/verify/scripts/doctor.py [--url URL] [--instance ID]
 
+The default URL is http://127.0.0.1:$UI_PORT, with UI_PORT defaulting to 4173.
+
 Prints PASS or FAIL per check and exits non-zero when any check fails.
 """
 
@@ -125,9 +127,14 @@ def handle_instance():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--url", default="http://127.0.0.1:4173")
+    parser.add_argument("--url", help="default: http://127.0.0.1:$UI_PORT")
     parser.add_argument("--instance", help="expected UI_INSTANCE (default: handle)")
     args = parser.parse_args(argv)
+    if args.url is None:
+        try:
+            args.url = f"http://127.0.0.1:{load_launcher().ui_port()}"
+        except ValueError as error:
+            parser.error(str(error))
     checks = run_checks(args.url, args.instance or handle_instance())
     for check in checks:
         print(check)
