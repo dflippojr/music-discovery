@@ -11,13 +11,51 @@ from pytest_socket import SocketConnectBlockedError
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 1024 * 1024
-DATA_SUFFIXES = (".mp3", ".wav", ".flac", ".ogg", ".npy", ".npz", ".parquet", ".h5")
+DATA_SUFFIXES = (
+    ".mp3",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".aif",
+    ".aiff",
+    ".wma",
+    ".alac",
+    ".mp4",
+    ".webm",
+    ".mka",
+    ".npy",
+    ".npz",
+    ".parquet",
+    ".h5",
+    ".hdf5",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
+    ".7z",
+    ".csv",
+    ".tsv",
+    ".pkl",
+    ".pickle",
+    ".feather",
+    ".arrow",
+)
 # Tracked files allowed over MAX_BYTES, one reviewed path per line.
 ALLOWED_LARGE: frozenset[str] = frozenset()
+# Tracked binary files that are not data, one reviewed path per line.
+ALLOWED_BINARY: frozenset[str] = frozenset()
 
 
-def _offences(files: dict[str, int], allowed: frozenset[str] = ALLOWED_LARGE):
-    """Why each tracked path breaks the data rules, given {path: size in bytes}."""
+def _offences(
+    files: dict[str, int],
+    allowed: frozenset[str] = ALLOWED_LARGE,
+    binary: frozenset[str] = frozenset(),
+):
+    """Why each tracked path breaks the data rules, given {path: size in bytes}
+    and the binary paths from _binary()."""
     found = []
     for path, size in sorted(files.items()):
         lower = path.lower()
@@ -25,6 +63,8 @@ def _offences(files: dict[str, int], allowed: frozenset[str] = ALLOWED_LARGE):
             found.append(f"{path}: tracked under data/")
         if lower.endswith(DATA_SUFFIXES):
             found.append(f"{path}: audio, array or dataset file")
+        elif path in binary and path not in ALLOWED_BINARY:
+            found.append(f"{path}: binary file, whatever its suffix")
         if size > MAX_BYTES and path not in allowed:
             found.append(f"{path}: {size} bytes, over 1 MiB and not in ALLOWED_LARGE")
     return found
@@ -45,9 +85,40 @@ def _tracked() -> dict[str, int]:
     return files
 
 
+def _binary(root: Path = ROOT) -> frozenset[str]:
+    """Tracked paths whose staged blob git reads as binary, whatever the suffix.
+    Fails if git can't run."""
+    done = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--eol"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    entries = (entry.split("\t", 1) for entry in done.stdout.split("\0") if entry)
+    return frozenset(path for eol, path in entries if eol.split()[0] == "i/-text")
+
+
 def test_no_dataset_audio_or_large_file_is_tracked():
-    offences = _offences(_tracked())
+    offences = _offences(_tracked(), binary=_binary())
     assert not offences, "\n".join(offences)
+
+
+def test_binary_content_is_refused_whatever_its_suffix(tmp_path):
+    # The suffix list can never name every format, so git's NUL-byte test has to
+    # catch a binary blob whose suffix the list has never heard of (#150).
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "clip.dat").write_bytes(b"\x00\x01\x02 not really audio")
+    (tmp_path / "notes.txt").write_text("plain text\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "--", "clip.dat", "notes.txt"], check=True
+    )
+
+    binary = _binary(tmp_path)
+    assert binary == {"clip.dat"}
+    assert _offences({"clip.dat": 20, "notes.txt": 11}, binary=binary) == [
+        "clip.dat: binary file, whatever its suffix"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -55,6 +126,12 @@ def test_no_dataset_audio_or_large_file_is_tracked():
     [
         ("x.MP3", 10),
         ("foo.npz", 10),
+        ("clip.m4a", 10),
+        ("clip.aac", 10),
+        ("clip.opus", 10),
+        ("clip.aiff", 10),
+        ("fma_small_sample.zip", 10),
+        ("tracks.csv", 10),
         ("reports/big.json", 2 * MAX_BYTES),
         ("data/anything", 10),
     ],
@@ -63,6 +140,41 @@ def test_data_guard_names_each_offending_path(path, size):
     offences = _offences({path: size, "src/ok.py": 100})
     assert len(offences) == 1, offences
     assert offences[0].startswith(f"{path}: ")
+
+
+# Audio, archive and tabular or serialised formats that the project's data
+# arrives in or could be cached as (#150). Each is refused at any size.
+REQUIRED_SUFFIXES = (
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".aif",
+    ".aiff",
+    ".wma",
+    ".alac",
+    ".mp4",
+    ".webm",
+    ".mka",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
+    ".7z",
+    ".csv",
+    ".tsv",
+    ".pkl",
+    ".pickle",
+    ".feather",
+    ".arrow",
+    ".hdf5",
+)
+
+
+@pytest.mark.parametrize("suffix", REQUIRED_SUFFIXES)
+@pytest.mark.parametrize("size", [10, 2 * MAX_BYTES])
+def test_data_guard_refuses_each_required_suffix_at_any_size(suffix, size):
+    path = f"tests/fixtures/sample{suffix}"
+    assert f"{path}: audio, array or dataset file" in _offences({path: size})
 
 
 @pytest.mark.parametrize(
@@ -80,6 +192,8 @@ def test_data_guard_fails_closed_when_git_cannot_run(monkeypatch):
     monkeypatch.setattr(subprocess, "run", missing)
     with pytest.raises(FileNotFoundError):
         _tracked()
+    with pytest.raises(FileNotFoundError):
+        _binary()
 
 
 def test_tests_cannot_connect_to_a_non_loopback_address():
