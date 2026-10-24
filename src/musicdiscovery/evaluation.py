@@ -188,6 +188,16 @@ def write_queries(path: Path, queries: Sequence[Query], catalog: Catalog) -> Non
     path.write_text(json.dumps(payload, indent=1) + "\n")
 
 
+def _likes(query: dict, path: Path) -> tuple[str, ...]:
+    likes = query["likes"]
+    if not isinstance(likes, list) or not all(isinstance(text, str) for text in likes):
+        raise EvaluationError(
+            f"cannot read queries at {path}: query {query['id']} "
+            "likes must be a list of strings"
+        )
+    return tuple(likes)
+
+
 def load_queries(path: Path, catalog: Catalog) -> list[Query]:
     path = confined(path)
     if not path.exists():
@@ -198,7 +208,7 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
     try:
         payload = json.loads(path.read_text())
         queries = [
-            Query(int(q["id"]), str(q["split"]), int(q["seed"]), tuple(q["likes"]))
+            Query(int(q["id"]), str(q["split"]), int(q["seed"]), _likes(q, path))
             for q in payload["queries"]
         ]
         expected = payload.get("catalog_tracks")
