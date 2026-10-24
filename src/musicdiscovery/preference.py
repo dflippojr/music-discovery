@@ -40,6 +40,8 @@ class Quality:
     @classmethod
     def parse(cls, text: str) -> "Quality":
         """Parse ``genre:Folk``, ``tag:punk``, ``more:energy`` or ``less:energy``."""
+        if not isinstance(text, str):
+            raise PreferenceError(f"quality must be text, not {type(text).__name__}")
         head, sep, name = text.partition(":")
         head, name = head.strip().lower(), name.strip()
         if not sep or not name:

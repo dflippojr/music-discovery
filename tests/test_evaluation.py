@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.cli import main
@@ -33,7 +35,7 @@ from musicdiscovery.evaluation import (
     write_profiles,
     write_queries,
 )
-from musicdiscovery.preference import Preference
+from musicdiscovery.preference import Preference, PreferenceError
 from musicdiscovery.profiles import (
     INTERACTIONS_PER_PROFILE,
     PROFILE_SEED,
@@ -128,6 +130,32 @@ def test_query_file_errors(tmp_path, catalog, queries):
         load_queries(path, catalog)
     with pytest.raises(EvaluationError, match="too small"):
         generate_queries(catalog, per_split=500)
+
+
+JSON_VALUES = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
+    lambda inner: (
+        st.lists(inner, max_size=3)
+        | st.dictionaries(st.text(max_size=5), inner, max_size=3)
+    ),
+    max_leaves=8,
+)
+
+
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(like=JSON_VALUES)
+def test_any_json_like_fails_only_as_an_evaluation_error(catalog, queries, like):
+    # Whatever JSON sits in a like, loading and preparing the query raises
+    # EvaluationError or PreferenceError and nothing else, so no traceback.
+    write_queries(Path("q.json"), queries, catalog)
+    payload = json.loads(Path("q.json").read_text())
+    payload["queries"][0]["likes"] = [like]
+    Path("q.json").write_text(json.dumps(payload))
+    try:
+        for query in load_queries(Path("q.json"), catalog):
+            query.preference()
+    except (EvaluationError, PreferenceError):
+        return
 
 
 def test_reference_rankers(catalog):
@@ -361,6 +389,26 @@ def test_cli_reports_unwritable_paths(tmp_path, data_dir, capsys, extra):
     assert main([*base, *extra]) == 1
     err = capsys.readouterr().err
     assert err.startswith("evaluate: ")
+    assert err.count("\n") == 1
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize(
+    "likes",
+    [[5], [None], [["x"]], [{}], "more:energy"],
+    ids=["number", "null", "nested-list", "object", "text"],
+)
+def test_cli_refuses_likes_that_are_not_a_list_of_strings(data_dir, capsys, likes):
+    base = ["evaluate", "--data-dir", str(data_dir)]
+    assert main([*base, "--queries", "q.json", "--generate-queries"]) == 0
+    payload = json.loads(Path("q.json").read_text())
+    payload["queries"][0]["likes"] = likes
+    Path("bad.json").write_text(json.dumps(payload))
+    capsys.readouterr()
+    argv = [*base, "--queries", "bad.json", "--out-dir", "out", "--ranker", "random"]
+    assert main(argv) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("evaluate: cannot read queries at ")
     assert err.count("\n") == 1
     assert "Traceback" not in err
 

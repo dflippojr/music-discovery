@@ -85,6 +85,12 @@ def test_bad_quality_rejected(text):
         Quality.parse(text)
 
 
+@pytest.mark.parametrize("value", [5, None, ["genre:Folk"], {"genre": "Folk"}])
+def test_non_string_quality_rejected(value):
+    with pytest.raises(PreferenceError, match="quality must be text"):
+        Quality.parse(value)
+
+
 def test_bad_preference_rejected():
     with pytest.raises(PreferenceError, match="seed"):
         Preference(())
