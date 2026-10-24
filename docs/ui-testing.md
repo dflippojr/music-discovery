@@ -8,9 +8,9 @@ Target: music-discovery's static recommendation demo and blind listener study.
 Only http://127.0.0.1:$UI_PORT (default 4173) is allowed, loopback only.
 Never attach to an existing instance. UI_PORT is the one setting for the port:
 npm run ui:start, npm run test:ui and the verify skill all read it, and an
-explicit --port, --url or VERIFY_BASE_URL wins. It must be a whole number from
-1024 to 65535; anything else is refused before a fixture is built or a process
-starts. Set it when 4173 is taken on a shared host, for example
+explicit --port, --url or VERIFY_BASE_URL wins. UI_PORT and --port must each be
+a whole number from 1024 to 65535; anything else is refused before a fixture is
+built or a process starts. Set it when 4173 is taken on a shared host, for example
 UI_PORT=4180 npm run test:ui -- --workers=1. There is no setting for the host.
 The launcher binds loopback exclusively before generating a fresh synthetic
 catalog with scripts/build_demo_fixture.py --no-shape (450 made-up tracks, IDs 100–549).

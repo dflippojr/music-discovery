@@ -1,5 +1,6 @@
 """Guard the disposable launcher's isolation and cleanup boundaries."""
 
+import ast
 import importlib.util
 import json
 import os
@@ -29,6 +30,12 @@ def launcher(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "DATA", tmp_path / "ui-testing")
     monkeypatch.setattr(module, "HANDLE", module.DATA / "instance.json")
     return module
+
+
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 @pytest.mark.parametrize(
@@ -254,7 +261,8 @@ def test_seed_timeout_is_nonzero_and_allows_restart(
     assert launcher.FIXTURE_TIMEOUT == 30
     monkeypatch.setattr(launcher, "FIXTURE_TIMEOUT", 0.1)
     monkeypatch.setattr(launcher, "CHILD_EXIT_TIMEOUT", 0.05)
-    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", "0"])
+    port = str(free_port())
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", port])
     seed(block=True, escalate=escalate)
     started = time.monotonic()
     assert launcher.main() == 1
@@ -672,8 +680,13 @@ def test_ui_port_refuses_unusable_values(launcher, raw):
 
 @pytest.mark.parametrize(
     ("ui_port", "argv", "port"),
-    [(None, [], 4173), ("4180", [], 4180), ("4180", ["--port", "4190"], 4190)],
-    ids=["default", "variable", "explicit-port-wins"],
+    [
+        (None, [], 4173),
+        ("4180", [], 4180),
+        ("4180", ["--port", "4190"], 4190),
+        (None, ["--port", "4180"], 4180),
+    ],
+    ids=["default", "variable", "explicit-port-wins", "flag"],
 )
 def test_start_cli_binds_the_ui_port(launcher, monkeypatch, ui_port, argv, port):
     if ui_port is None:
@@ -702,6 +715,54 @@ def test_start_cli_refuses_bad_ui_port_before_anything_starts(
     assert launcher.main() == 1
     assert "UI_PORT must be a whole number" in capsys.readouterr().err
     assert not launcher.DATA.exists()
+
+
+@pytest.mark.parametrize("raw", BAD_PORTS, ids=lambda raw: ascii(raw)[1:13])
+def test_port_flag_refuses_what_ui_port_refuses_before_binding(
+    launcher, monkeypatch, capsys, raw
+):
+    # --port 0 used to bind a random port and --port 70000 crashed in bind (#154).
+    def spawned(*args, **kwargs):
+        raise AssertionError("a process was spawned or a socket was bound")
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", spawned)
+    monkeypatch.setattr(launcher, "ExclusiveHTTPServer", spawned)
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", raw])
+    with pytest.raises(SystemExit) as exit_info:
+        launcher.main()
+    assert exit_info.value.code == 2
+    assert (
+        "argument --port: must be a whole number from 1024 to 65535"
+        in capsys.readouterr().err
+    )
+    assert not launcher.DATA.exists()
+
+
+def test_every_port_flag_takes_the_ui_port_rule():
+    # A --port flag typed as a plain int skips the range rule (#154), so every
+    # such flag in the repo must name port_argument as its type.
+    flags = {}
+    for folder in ("scripts", ".claude/skills", "src"):
+        for path in sorted((ROOT / folder).rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "--port"
+                ):
+                    kinds = {kw.arg: ast.unparse(kw.value) for kw in node.keywords}
+                    flags[f"{path.relative_to(ROOT)}:{node.lineno}"] = kinds.get("type")
+    # The launcher and the verify skill both take --port, so the scan found them.
+    assert len(flags) >= 2, flags
+    offenders = {
+        where: kind
+        for where, kind in flags.items()
+        if not str(kind).endswith("port_argument")
+    }
+    assert offenders == {}
 
 
 def test_stop_ignores_ui_port(launcher, monkeypatch, capsys):
