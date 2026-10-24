@@ -247,6 +247,22 @@ def test_verify_default_port_follows_ui_port(
     assert ports == [port]
 
 
+@pytest.mark.parametrize("raw", ["0", "80", "70000", "abc"])
+def test_verify_refuses_a_bad_port_flag_before_any_run(
+    monkeypatch, capsys, tmp_path, raw
+):
+    # --port 0 used to start a real run; the flag takes the UI_PORT rule (#154).
+    monkeypatch.setattr(verify, "Run", lambda *args: pytest.fail("a run started"))
+    with pytest.raises(SystemExit) as exit_info:
+        verify.main(["--port", raw, "--out", str(tmp_path)])
+    assert exit_info.value.code == 2
+    assert (
+        "argument --port: must be a whole number from 1024 to 65535"
+        in capsys.readouterr().err
+    )
+    assert not list(tmp_path.iterdir())  # no evidence folder was made
+
+
 @pytest.mark.parametrize(
     ("env", "url"),
     [
@@ -288,7 +304,13 @@ def foreign_instance():
         and name not in {"DEMO_BUNDLE", "DATABASE_URL", "API_KEY", "OPENAI_API_KEY"}
     }
     launcher = subprocess.Popen(
-        [sys.executable, "scripts/ui_instance.py", "start", "--port", "0"],
+        [
+            sys.executable,
+            "scripts/ui_instance.py",
+            "start",
+            "--port",
+            str(free_port()),
+        ],
         cwd=verify.ROOT,
         env=env,
         stdout=subprocess.PIPE,

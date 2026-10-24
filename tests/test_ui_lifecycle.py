@@ -131,13 +131,19 @@ def launchers(tmp_path):
         launcher.close()
 
 
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
 def test_second_launcher_refuses_a_served_port_and_stop_frees_it(launchers):
-    first = launchers("first", 0)
+    port = free_port()  # --port must name a port from 1024 to 65535 (#154)
+    first = launchers("first", port)
     url = first.wait_ready()
-    assert url is not None, first.stderr()
+    assert url == f"http://127.0.0.1:{port}/", first.stderr()
     instance = json.loads(first.handle.read_text(encoding="utf-8"))["instance"]
     assert first.health(url) == {"instance": instance}
-    port = int(url.rsplit(":", 1)[1].strip("/"))
 
     # Before #87's fix, Windows let this bind the same port and report ready.
     second = launchers("second", port)
