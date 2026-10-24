@@ -45,6 +45,8 @@ DATA_SUFFIXES = (
 )
 # Tracked files allowed over MAX_BYTES, one reviewed path per line.
 ALLOWED_LARGE: frozenset[str] = frozenset()
+# Tracked binary files that are not data, one reviewed path per line.
+ALLOWED_BINARY: frozenset[str] = frozenset()
 
 
 def _offences(
@@ -52,7 +54,8 @@ def _offences(
     allowed: frozenset[str] = ALLOWED_LARGE,
     binary: frozenset[str] = frozenset(),
 ):
-    """Why each tracked path breaks the data rules, given {path: size in bytes}."""
+    """Why each tracked path breaks the data rules, given {path: size in bytes}
+    and the binary paths from _binary()."""
     found = []
     for path, size in sorted(files.items()):
         lower = path.lower()
@@ -60,6 +63,8 @@ def _offences(
             found.append(f"{path}: tracked under data/")
         if lower.endswith(DATA_SUFFIXES):
             found.append(f"{path}: audio, array or dataset file")
+        elif path in binary and path not in ALLOWED_BINARY:
+            found.append(f"{path}: binary file, whatever its suffix")
         if size > MAX_BYTES and path not in allowed:
             found.append(f"{path}: {size} bytes, over 1 MiB and not in ALLOWED_LARGE")
     return found
