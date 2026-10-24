@@ -53,8 +53,16 @@ def ui_port(environ=os.environ):
     raw = environ.get("UI_PORT", "")
     if raw == "":
         return DEFAULT_PORT
+    try:
+        return port_number(raw)
+    except ValueError as error:
+        raise ValueError(f"UI_PORT {error}") from error
+
+
+def port_number(raw):
+    """The whole number in raw from 1024 to 65535; the ValueError states the rule."""
     # Drop leading zeros and cap the length first: int() refuses very long strings
-    # with its own error, which would not name UI_PORT.
+    # with its own error, which would not state the rule.
     digits = raw.lstrip("0")
     if (
         re.fullmatch(r"[0-9]+", raw) is None
@@ -62,10 +70,18 @@ def ui_port(environ=os.environ):
         or not 1024 <= int(digits or "0") <= 65535
     ):
         raise ValueError(
-            "UI_PORT must be a whole number from 1024 to 65535, "
+            "must be a whole number from 1024 to 65535, "
             f"got {json.dumps(raw, ensure_ascii=False)}"
         )
     return int(digits)
+
+
+def port_argument(text):
+    """argparse type for --port: the rule UI_PORT follows, so --port 0 is refused."""
+    try:
+        return port_number(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def remove_bundle(bundle):
@@ -375,7 +391,9 @@ def stop():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("start", "stop", "recover"))
-    parser.add_argument("--port", type=int, help="default: UI_PORT, else 4173")
+    parser.add_argument(
+        "--port", type=port_argument, help="default: UI_PORT, else 4173"
+    )
     args = parser.parse_args()
     try:
         if args.action == "start":

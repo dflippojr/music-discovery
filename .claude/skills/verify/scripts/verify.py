@@ -374,14 +374,17 @@ class Run:
 
 
 def main(argv=None, drive=None):
+    launcher = doctor.load_launcher()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--feature", choices=FEATURES, help="drive only this area")
-    parser.add_argument("--port", type=int, help="default: UI_PORT, else 4173")
+    parser.add_argument(
+        "--port", type=launcher.port_argument, help="default: UI_PORT, else 4173"
+    )
     parser.add_argument("--out", type=Path, default=ROOT / ".verify")
     args = parser.parse_args(argv)
     if args.port is None:
         try:
-            args.port = doctor.load_launcher().ui_port()
+            args.port = launcher.ui_port()
         except ValueError as error:
             parser.error(str(error))
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
