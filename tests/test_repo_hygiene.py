@@ -11,7 +11,38 @@ from pytest_socket import SocketConnectBlockedError
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 1024 * 1024
-DATA_SUFFIXES = (".mp3", ".wav", ".flac", ".ogg", ".npy", ".npz", ".parquet", ".h5")
+DATA_SUFFIXES = (
+    ".mp3",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".aif",
+    ".aiff",
+    ".wma",
+    ".alac",
+    ".mp4",
+    ".webm",
+    ".mka",
+    ".npy",
+    ".npz",
+    ".parquet",
+    ".h5",
+    ".hdf5",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
+    ".7z",
+    ".csv",
+    ".tsv",
+    ".pkl",
+    ".pickle",
+    ".feather",
+    ".arrow",
+)
 # Tracked files allowed over MAX_BYTES, one reviewed path per line.
 ALLOWED_LARGE: frozenset[str] = frozenset()
 
