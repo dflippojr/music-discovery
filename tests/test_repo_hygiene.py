@@ -55,6 +55,12 @@ def test_no_dataset_audio_or_large_file_is_tracked():
     [
         ("x.MP3", 10),
         ("foo.npz", 10),
+        ("clip.m4a", 10),
+        ("clip.aac", 10),
+        ("clip.opus", 10),
+        ("clip.aiff", 10),
+        ("fma_small_sample.zip", 10),
+        ("tracks.csv", 10),
         ("reports/big.json", 2 * MAX_BYTES),
         ("data/anything", 10),
     ],
@@ -63,6 +69,41 @@ def test_data_guard_names_each_offending_path(path, size):
     offences = _offences({path: size, "src/ok.py": 100})
     assert len(offences) == 1, offences
     assert offences[0].startswith(f"{path}: ")
+
+
+# Audio, archive and tabular or serialised formats that the project's data
+# arrives in or could be cached as (#150). Each is refused at any size.
+REQUIRED_SUFFIXES = (
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".aif",
+    ".aiff",
+    ".wma",
+    ".alac",
+    ".mp4",
+    ".webm",
+    ".mka",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
+    ".7z",
+    ".csv",
+    ".tsv",
+    ".pkl",
+    ".pickle",
+    ".feather",
+    ".arrow",
+    ".hdf5",
+)
+
+
+@pytest.mark.parametrize("suffix", REQUIRED_SUFFIXES)
+@pytest.mark.parametrize("size", [10, 2 * MAX_BYTES])
+def test_data_guard_refuses_each_required_suffix_at_any_size(suffix, size):
+    path = f"tests/fixtures/sample{suffix}"
+    assert f"{path}: audio, array or dataset file" in _offences({path: size})
 
 
 @pytest.mark.parametrize(
