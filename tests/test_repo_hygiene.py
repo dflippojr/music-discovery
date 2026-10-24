@@ -47,7 +47,11 @@ DATA_SUFFIXES = (
 ALLOWED_LARGE: frozenset[str] = frozenset()
 
 
-def _offences(files: dict[str, int], allowed: frozenset[str] = ALLOWED_LARGE):
+def _offences(
+    files: dict[str, int],
+    allowed: frozenset[str] = ALLOWED_LARGE,
+    binary: frozenset[str] = frozenset(),
+):
     """Why each tracked path breaks the data rules, given {path: size in bytes}."""
     found = []
     for path, size in sorted(files.items()):
@@ -76,9 +80,40 @@ def _tracked() -> dict[str, int]:
     return files
 
 
+def _binary(root: Path = ROOT) -> frozenset[str]:
+    """Tracked paths whose staged blob git reads as binary, whatever the suffix.
+    Fails if git can't run."""
+    done = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--eol"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    entries = (entry.split("\t", 1) for entry in done.stdout.split("\0") if entry)
+    return frozenset(path for eol, path in entries if eol.split()[0] == "i/-text")
+
+
 def test_no_dataset_audio_or_large_file_is_tracked():
-    offences = _offences(_tracked())
+    offences = _offences(_tracked(), binary=_binary())
     assert not offences, "\n".join(offences)
+
+
+def test_binary_content_is_refused_whatever_its_suffix(tmp_path):
+    # The suffix list can never name every format, so git's NUL-byte test has to
+    # catch a binary blob whose suffix the list has never heard of (#150).
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "clip.dat").write_bytes(b"\x00\x01\x02 not really audio")
+    (tmp_path / "notes.txt").write_text("plain text\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "--", "clip.dat", "notes.txt"], check=True
+    )
+
+    binary = _binary(tmp_path)
+    assert binary == {"clip.dat"}
+    assert _offences({"clip.dat": 20, "notes.txt": 11}, binary=binary) == [
+        "clip.dat: binary file, whatever its suffix"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -152,6 +187,8 @@ def test_data_guard_fails_closed_when_git_cannot_run(monkeypatch):
     monkeypatch.setattr(subprocess, "run", missing)
     with pytest.raises(FileNotFoundError):
         _tracked()
+    with pytest.raises(FileNotFoundError):
+        _binary()
 
 
 def test_tests_cannot_connect_to_a_non_loopback_address():
