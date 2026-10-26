@@ -82,7 +82,7 @@ jobs:
       - name: Restore the FMA metadata archive
         if: steps.scope.outputs.run == 'true'
         id: fma
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: data/raw/fma_metadata.zip
           key: fma-metadata-${{ env.FMA_SHA1 }}
@@ -97,7 +97,7 @@ jobs:
 
       - name: Save the verified archive
         if: steps.scope.outputs.run == 'true' && steps.fma.outputs.cache-hit != 'true' && steps.ingest.outcome == 'success'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: data/raw/fma_metadata.zip
           key: fma-metadata-${{ env.FMA_SHA1 }}
