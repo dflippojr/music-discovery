@@ -22,9 +22,9 @@ GUARD_WORKFLOWS = "dflippojr/.github/.github/workflows"
 READ_PERMISSIONS = (
     r"^permissions:\n  contents: read\n  issues: read\n  pull-requests: read\n"
 )
-REVIEW_WORKFLOW = "dflippojr/agent-harness/.github/workflows/review.yml@review-v3"
+REVIEW_WORKFLOW = "dflippojr/agent-harness/.github/workflows/review.yml@review-v4"
 # The label the owner's review runner registers under (#126).
-REVIEW_RUNS_ON = '["self-hosted","Windows","X64","music-discovery-review"]'
+REVIEW_RUNS_ON = '["self-hosted","Linux","X64","music-discovery-review"]'
 
 
 def _code(path: Path) -> str:
@@ -166,7 +166,7 @@ def test_review_caller_runs_review_v3_only_from_main_on_trusted_triggers():
     assert "dependabot[bot]" in job
     assert f"    uses: {REVIEW_WORKFLOW}\n" in job
     assert f"      runs_on: '{REVIEW_RUNS_ON}'\n" in job
-    assert "      tooling_ref: review-v3\n" in job
+    assert "      tooling_ref: review-v4\n" in job
     assert "secrets" not in job
 
 
