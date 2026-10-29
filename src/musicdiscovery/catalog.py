@@ -78,6 +78,10 @@ class Catalog:
     def features(self) -> np.ndarray:
         return self.frame[self.feature_columns].to_numpy(dtype=np.float64)
 
+    @cached_property
+    def popularity(self) -> np.ndarray:
+        return self.frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
+
     def has_tag(self, tag: str) -> np.ndarray:
         return np.fromiter(
             (tag in row for row in self.frame["tags"]), dtype=bool, count=len(self)
