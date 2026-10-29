@@ -559,6 +559,48 @@ describe("demo page", () => {
     });
   }
 
+  test("on a full storage quota the page keeps every event, says what a reload keeps and downloads them all (#152)", async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    const page = await context.newPage();
+    const problems = [];
+    page.on("pageerror", (e) => problems.push(String(e)));
+    // A quota that fits three feedback events, whatever their size.
+    await page.addInitScript(() => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "music-discovery-feedback-log" && JSON.parse(value).length > 3) {
+          throw new DOMException("Synthetic full quota", "QuotaExceededError");
+        }
+        return setItem.call(this, key, value);
+      };
+    });
+    await page.coverage.startJSCoverage();
+    await page.goto(base);
+    await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+    await pickSeed(page);
+    const items = page.locator(".md-result");
+    for (let i = 0; i < 5; i += 1) await items.nth(i).getByRole("button", { name: /^Thumbs up/ }).click();
+    const status = page.locator(".md-log-status");
+    assert.equal(
+      await status.textContent(),
+      "5 entries in the feedback log. This browser's storage is full, so only the newest 3 entries will survive a reload; download the log to keep them all.",
+    );
+    assert.equal(await page.getByRole("button", { name: /^Thumbs up/ }).nth(4).getAttribute("aria-pressed"), "true");
+    const [file] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download feedback log" }).click()]);
+    const events = readFileSync(await file.path(), "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(events.map((e) => e.rank), [1, 2, 3, 4, 5]);
+    await page.reload();
+    await page.waitForSelector("#music-discovery-demo input[role=combobox]");
+    assert.equal(await status.textContent(), "3 entries in this browser's feedback log.");
+    await page.getByRole("button", { name: "Clear feedback log" }).click();
+    await page.getByRole("button", { name: "Yes, clear the log" }).click();
+    await pickSeed(page);
+    await page.getByRole("button", { name: /^Thumbs up/ }).first().click();
+    assert.equal(await status.textContent(), "1 entry in this browser's feedback log.");
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   test("reduced motion is respected", async () => {
     const { context, page } = await open({ reducedMotion: "reduce" });
     await pickSeed(page);

@@ -347,9 +347,13 @@ class Demo {
 
   paintLog() {
     const count = this.log.size;
-    this.logStatus.textContent = this.log.persistent
-      ? `${entries(count)} in this browser's feedback log.`
-      : `${entries(count)} in the feedback log. This browser is not letting the page save it, so it lasts only until you leave the page; download it first.`;
+    if (!this.log.persistent) {
+      this.logStatus.textContent = `${entries(count)} in the feedback log. This browser is not letting the page save it, so it lasts only until you leave the page; download it first.`;
+    } else if (this.log.storageFull) {
+      this.logStatus.textContent = `${entries(count)} in the feedback log. This browser's storage is full, so only the newest ${entries(this.log.stored)} will survive a reload; download the log to keep them all.`;
+    } else {
+      this.logStatus.textContent = `${entries(count)} in this browser's feedback log.`;
+    }
     this.downloadLogButton.disabled = count === 0;
     this.clearLogButton.disabled = count === 0;
   }
