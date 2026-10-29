@@ -158,12 +158,12 @@ in memory for that visit and says so; it never fails the rating.
 Every page of a site shares one `localStorage` quota, so other pages can fill it.
 When the whole log no longer fits, the page still keeps every event in memory for
 that visit, and "Download feedback log" still has all of them. It stores the newer
-half of the log instead, halving again until it fits, and says that the browser's
-storage is full, that only the newest N entries will survive a reload, and that you
-should download the log to keep them all. While storage holds only part of the log,
-the page stops merging in events that another open tab of the demo stored. Once
-the whole log fits again, or after "Clear feedback log", it goes back to storing
-everything. If not even one event fits, the page treats storage as refused, as above.
+half of the log instead, and says that the browser's storage is full, that only the
+newest N entries will survive a reload, and that you should download the log to keep
+them all. While storage holds only part of the log, the page stops merging in events
+that another open tab of the demo stored. Once the whole log fits again, or after
+"Clear feedback log", it goes back to storing everything. If even the newer half
+does not fit, the page treats storage as refused, as above.
 Each event holds:
 
 - `version` (1) and `time` (UTC, to the second);

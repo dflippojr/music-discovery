@@ -36,7 +36,8 @@ export function buildEvent({ ranker, preference, picks, pick, rating, time = tim
  * since merely reading `localStorage` throws when site data is blocked). Every
  * storage call is guarded: if storage fails, events are kept in memory for this
  * page only and `persistent` turns false. On a full quota the page keeps every
- * event and stores only the newest `stored` of them; `storageFull` says so.
+ * event and stores only the newer half; `stored` counts the events in storage and
+ * `storageFull` is true while that is fewer than the page's log.
  */
 export class FeedbackLog {
   constructor(storage, { key = LOG_KEY, max = MAX_EVENTS } = {}) {
@@ -46,7 +47,6 @@ export class FeedbackLog {
     this.persistent = true;
     this.memory = this.load();
     this.stored = this.memory.length;
-    this.storageFull = false;
   }
 
   store() {
@@ -79,6 +79,10 @@ export class FeedbackLog {
     return this.memory.length;
   }
 
+  get storageFull() {
+    return this.stored < this.memory.length;
+  }
+
   /** Add one event, dropping the oldest beyond the cap; returns whether it was saved to storage. */
   append(event) {
     // Re-read first so two open tabs do not overwrite each other's events. While
@@ -93,17 +97,15 @@ export class FeedbackLog {
 
   save(events) {
     if (!this.persistent) return false;
-    // Usually a full quota: store the newer half, then the newer half of that, so a
-    // reload keeps the newest events. The page's copy keeps them all. If not even
-    // one event fits, stop saving.
-    for (let keep = events; keep.length > 0; keep = keep.length > 1 ? keep.slice(Math.floor(keep.length / 2)) : []) {
+    // Usually a full quota: store the newer half so a reload keeps the newest events,
+    // while the page's copy keeps them all. If even that fails, stop saving.
+    for (const keep of [events, events.slice(Math.floor(events.length / 2))]) {
       try {
         this.store().setItem(this.key, JSON.stringify(keep));
         this.stored = keep.length;
-        this.storageFull = keep.length < events.length;
         return true;
       } catch {
-        // Try fewer events.
+        // Try the newer half.
       }
     }
     this.persistent = false;
@@ -113,7 +115,6 @@ export class FeedbackLog {
   clear() {
     this.memory = [];
     this.stored = 0;
-    this.storageFull = false;
     if (!this.persistent) return;
     try {
       this.store().removeItem(this.key);

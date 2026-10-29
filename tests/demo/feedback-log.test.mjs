@@ -202,15 +202,33 @@ test("after a trimmed save the next append does not shrink memory to the stored 
   assert.deepEqual(new FeedbackLog(storage).events(), [sample(3), sample(4), sample(5)]);
 });
 
-test("a stored copy that keeps halving still saves the newest events while memory grows", () => {
+test("once even the newer half no longer fits, the log stops saving and keeps every event", () => {
   const storage = quotaStorage(30);
   const log = new FeedbackLog(storage);
-  for (let n = 1; n <= 40; n += 1) assert.equal(log.append(sample(n)), true);
-  assert.equal(log.size, 40);
-  assert.equal(log.persistent, true);
-  // 40 events, then 20, 10 and 5 do not fit in 30 characters; the newest 3 do.
-  assert.deepEqual(stored(storage), [sample(38), sample(39), sample(40)]);
+  for (let n = 1; n <= 6; n += 1) assert.equal(log.append(sample(n)), true);
+  assert.deepEqual(stored(storage), [sample(4), sample(5), sample(6)]);
+  // Seven events do not fit in 30 characters, and neither does their newer half.
+  assert.equal(log.append(sample(7)), false);
+  assert.equal(log.persistent, false);
+  assert.deepEqual(log.events(), [1, 2, 3, 4, 5, 6, 7].map(sample));
+  assert.equal(log.storageFull, true);
   assert.equal(log.stored, 3);
+});
+
+test("when every write fails the flag still says storage holds less than the page", () => {
+  const storage = memoryStorage();
+  const log = new FeedbackLog(storage);
+  log.append(sample(1));
+  log.append(sample(2));
+  storage.setItem = () => {
+    throw new Error("QuotaExceededError");
+  };
+  assert.equal(log.append(sample(3)), false);
+  assert.equal(log.persistent, false);
+  assert.equal(log.storageFull, true);
+  assert.deepEqual(log.events(), [1, 2, 3].map(sample));
+  log.clear();
+  assert.equal(log.storageFull, false);
 });
 
 test("once the quota has room again the whole log is stored and the flag clears", () => {
@@ -278,9 +296,9 @@ test("property: storage failures never take events out of the page's log", () =>
       const context = `seed ${seed} step ${step}`;
       assert.deepEqual(log.events(), expected, context);
       assert.equal(log.toJsonl(), expected.map((e) => `${JSON.stringify(e)}\n`).join(""), context);
+      assert.equal(log.storageFull, log.stored < log.size, context);
       if (log.persistent && log.size > 0) {
         assert.deepEqual(stored(storage), expected.slice(expected.length - log.stored), context);
-        assert.equal(log.storageFull, log.stored < log.size, context);
       }
     }
   }
