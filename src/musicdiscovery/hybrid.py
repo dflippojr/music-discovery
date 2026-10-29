@@ -4,12 +4,12 @@ prior, then maximal marginal relevance (MMR) for artist and genre variety."""
 import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from importlib import resources
 from pathlib import Path
 
 import numpy as np
 
 from musicdiscovery.catalog import Catalog
+from musicdiscovery.jsonfiles import load_packaged_json
 from musicdiscovery.preference import Preference
 from musicdiscovery.ranking import BaselineRanker, Recommendation
 
@@ -52,12 +52,7 @@ class HybridConfig:
     def load(cls, path: Path | None = None) -> "HybridConfig":
         """Read a config file; with no path, the one shipped in the package."""
         try:
-            if path is None:
-                source = resources.files("musicdiscovery").joinpath(CONFIG_NAME)
-                text = source.read_text(encoding="utf-8")
-            else:
-                text = path.read_text(encoding="utf-8")
-            return cls(**json.loads(text))
+            return cls(**load_packaged_json(CONFIG_NAME, path))
         except (OSError, ValueError, TypeError) as error:
             raise HybridConfigError(f"cannot read hybrid config: {error}") from error
 

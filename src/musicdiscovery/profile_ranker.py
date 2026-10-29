@@ -5,7 +5,6 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +18,7 @@ from musicdiscovery.hybrid import (
     mmr_keys,
     with_variety,
 )
+from musicdiscovery.jsonfiles import load_packaged_json
 from musicdiscovery.preference import Preference
 from musicdiscovery.ranking import (
     BaselineRanker,
@@ -74,12 +74,7 @@ class ProfileModel:
     def load(cls, path: Path | None = None) -> "ProfileModel":
         """Read a model file; with no path, the one shipped in the package."""
         try:
-            if path is None:
-                source = resources.files("musicdiscovery").joinpath(MODEL_NAME)
-                text = source.read_text(encoding="utf-8")
-            else:
-                text = path.read_text(encoding="utf-8")
-            payload = json.loads(text)
+            payload = load_packaged_json(MODEL_NAME, path)
             return cls(
                 weights={k: float(v) for k, v in payload["weights"].items()},
                 bias=float(payload.get("bias", 0.0)),
