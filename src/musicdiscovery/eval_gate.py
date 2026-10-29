@@ -93,7 +93,9 @@ def compare(baseline: dict, run: dict) -> list[Check]:
     Both reports must have been cut off at ``CUTOFF`` (10). A check fails when
     the run's point estimate is undefined, is below the lower bound of the
     baseline's 95% interval, or is below the upper bound of ``random``'s
-    interval in the same run. A missing or undefined bound is a GateError.
+    interval in the same run. A run cell with no ``mean``, or one that is not a
+    mapping, has an undefined point estimate, so its check fails. A missing or
+    undefined bound is a GateError.
     """
     _cutoff(baseline, run)
     _same(baseline, run)
@@ -103,9 +105,10 @@ def compare(baseline: dict, run: dict) -> list[Check]:
             lower = _bound(baseline, "baseline", ranker, metric, "lo")
             random_upper = _bound(run, "run", REFERENCE_RANKER, metric, "hi")
             try:
-                value = _cell(run, ranker, metric)["mean"]
+                cell = _cell(run, ranker, metric)
             except GateError:
-                value = None
+                cell = None
+            value = cell.get("mean") if isinstance(cell, dict) else None
             problem = ""
             if not _defined(value):
                 problem = "no defined score in the run"

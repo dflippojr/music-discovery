@@ -179,7 +179,7 @@ def test_a_baseline_without_a_gated_ranker_is_an_error(baseline):
 
 
 def _damage(split, metric, key, how):
-    """Break the ``key`` bound of ``split[metric]`` the way a bad report might."""
+    """Break the ``key`` entry of ``split[metric]`` the way a bad report might."""
     if how == "not a mapping":
         split[metric] = [0.0]
     elif how == "missing":
