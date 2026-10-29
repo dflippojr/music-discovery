@@ -250,3 +250,48 @@ def test_render_without_a_thumbs_down_still_reads():
     text = feedback.render(summary)
     assert "1/1 (100%)" in text
     assert "0/0 (n/a)" in text
+
+
+def rated_by_track(events):
+    (ratings,) = feedback.latest_ratings(events).values()
+    return {track: e["rating"] for track, e in ratings.items()}
+
+
+def test_the_latest_time_wins_whatever_the_file_order():
+    old = event(100, 1, time="2026-10-12T10:00:00Z")
+    new = event(100, -1, time="2026-10-12T11:00:00Z")
+    for events in ([old, new], [new, old]):
+        assert rated_by_track(events) == {100: -1}
+
+
+def test_an_older_take_back_does_not_erase_a_newer_rating():
+    rating = event(100, 1, time="2026-10-12T11:00:00Z")
+    take_back = event(100, 0, time="2026-10-12T10:00:00Z")
+    for events in ([rating, take_back], [take_back, rating]):
+        assert rated_by_track(events) == {100: 1}
+
+
+def test_a_newer_take_back_erases_an_older_rating_in_either_file_order():
+    rating = event(100, 1, time="2026-10-12T10:00:00Z")
+    take_back = event(100, 0, time="2026-10-12T11:00:00Z")
+    for events in ([rating, take_back], [take_back, rating]):
+        assert feedback.latest_ratings(events) == {}
+
+
+def test_equal_times_resolve_to_the_later_input_position():
+    up = event(100, 1)
+    down = event(100, -1)
+    assert up["time"] == down["time"]
+    assert rated_by_track([up, down]) == {100: -1}
+    assert rated_by_track([down, up]) == {100: 1}
+    assert feedback.latest_ratings([up, event(100, 0)]) == {}
+
+
+def test_summaries_use_the_time_order_not_the_file_order():
+    old = event(100, 1, time="2026-10-12T10:00:00Z")
+    new = event(100, -1, time="2026-10-12T11:00:00Z")
+    forward = feedback.summarise([old, new])
+    backward = feedback.summarise([new, old])
+    assert backward == forward
+    assert (forward.liked, forward.disliked) == (0, 1)
+    assert forward.rankers["hybrid"].mrr == 0.0
