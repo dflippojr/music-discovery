@@ -587,24 +587,31 @@ def test_recover_refuses_a_starting_handle_when_a_process_holds_the_bundle(
     assert_preserved(launcher, bundle)
 
 
-@pytest.mark.parametrize("cmdline", [None, []])
-def test_recover_refuses_a_starting_handle_with_an_unreadable_process(
-    launcher, monkeypatch, stale, cmdline
+def test_recover_refuses_a_starting_handle_with_an_unreadable_command_line(
+    launcher, monkeypatch, stale
 ):
     metadata, bundle = stale
     starting_handle(launcher, metadata)
-    unreadable = SimpleNamespace(pid=555, info={"cmdline": cmdline})
+    unreadable = SimpleNamespace(pid=555, info={"cmdline": None})
     monkeypatch.setattr(
         launcher.psutil, "process_iter", lambda attrs=None: iter([unreadable])
     )
-    if cmdline == []:
-        # A process with an empty command line (a kernel thread) is not a writer.
-        launcher.recover()
-        assert not launcher.HANDLE.exists()
-        return
     with pytest.raises(ValueError, match="555"):
         launcher.recover()
     assert_preserved(launcher, bundle)
+
+
+def test_recover_ignores_a_process_with_an_empty_command_line(
+    launcher, monkeypatch, stale
+):
+    metadata, _ = stale
+    starting_handle(launcher, metadata)
+    kernel_thread = SimpleNamespace(pid=555, info={"cmdline": []})
+    monkeypatch.setattr(
+        launcher.psutil, "process_iter", lambda attrs=None: iter([kernel_thread])
+    )
+    launcher.recover()
+    assert not launcher.HANDLE.exists()
 
 
 def test_recover_refuses_a_starting_handle_when_the_scan_is_denied(
@@ -614,10 +621,10 @@ def test_recover_refuses_a_starting_handle_when_the_scan_is_denied(
     starting_handle(launcher, metadata)
 
     def denied(attrs=None):
-        raise launcher.psutil.AccessDenied(1)
+        raise launcher.psutil.AccessDenied(77)
 
     monkeypatch.setattr(launcher.psutil, "process_iter", denied)
-    with pytest.raises(ValueError, match="process scan"):
+    with pytest.raises(ValueError, match="process scan at PID 77"):
         launcher.recover()
     assert_preserved(launcher, bundle)
 

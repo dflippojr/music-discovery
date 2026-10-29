@@ -180,8 +180,11 @@ def require_no_bundle_writer(bundle):
                     "preserve handle and bundle"
                 )
     except psutil.Error as error:
+        pid = getattr(error, "pid", None)
+        where = f" at PID {pid}" if pid is not None else ""
         raise ValueError(
-            "Cannot complete the process scan; preserve handle for investigation"
+            f"Cannot complete the process scan{where}; "
+            "preserve handle for investigation"
         ) from error
 
 
