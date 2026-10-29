@@ -158,6 +158,36 @@ def require_exited(identity):
     raise ValueError("Recorded process is still live; preserve handle and bundle")
 
 
+def require_no_bundle_writer(bundle):
+    """Refuse while any process has the bundle path in its command line.
+
+    A launcher killed in phase "starting" never recorded its fixture child, so
+    only the child's argv (which holds the bundle path) can show it is gone.
+    The scan is read-only; a process that cannot be inspected also refuses.
+    """
+    needle = str(bundle)
+    try:
+        for process in psutil.process_iter(["cmdline"]):
+            cmdline = process.info.get("cmdline")
+            if cmdline is None:
+                raise ValueError(
+                    f"Cannot read the command line of PID {process.pid}; "
+                    "preserve handle for investigation"
+                )
+            if any(needle in arg for arg in cmdline):
+                raise ValueError(
+                    f"PID {process.pid} still holds the bundle; "
+                    "preserve handle and bundle"
+                )
+    except psutil.Error as error:
+        pid = getattr(error, "pid", None)
+        where = f" at PID {pid}" if pid is not None else ""
+        raise ValueError(
+            f"Cannot complete the process scan{where}; "
+            "preserve handle for investigation"
+        ) from error
+
+
 def recover():
     """Remove stale files only with proof of exit and an exclusively free port."""
     if not HANDLE.exists() and not HANDLE.is_symlink():
@@ -167,6 +197,8 @@ def recover():
     require_exited(metadata)
     if metadata.get("phase") == "seeding":
         require_exited(metadata.get("fixture"))
+    elif metadata.get("phase") == "starting":
+        require_no_bundle_writer(DATA / metadata["instance"])
     elif metadata.get("phase") != "ready":
         raise ValueError("Fixture ownership unknown; preserve handle for investigation")
     with socket.socket() as probe:
