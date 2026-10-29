@@ -188,9 +188,10 @@ def _damage(split, metric, key, how):
         split[metric][key] = how
 
 
-# A bound that is null, absent, NaN, or whose cell is not a mapping (#163).
-BAD_BOUNDS = [None, "missing", float("nan"), "not a mapping"]
-BAD_BOUND_IDS = ["null", "missing", "nan", "not-a-mapping"]
+# A bound that is null, absent, NaN, a string, or whose cell is not a mapping
+# (#163, #175).
+BAD_BOUNDS = [None, "missing", float("nan"), "not a mapping", "0.5"]
+BAD_BOUND_IDS = ["null", "missing", "nan", "not-a-mapping", "string"]
 
 
 @pytest.mark.parametrize("how", BAD_BOUNDS, ids=BAD_BOUND_IDS)
@@ -231,6 +232,24 @@ def test_a_run_cell_without_a_mean_fails_its_check(checkout, baseline, capsys, h
     assert main(setup_files(checkout, baseline, run)) == 1
     captured = capsys.readouterr()
     assert "Traceback" not in captured.err
+    assert "**FAIL**: no defined score in the run" in captured.out
+
+
+@pytest.mark.parametrize("how", ["0.5", [0.5]], ids=["string", "list"])
+def test_a_run_cell_with_a_non_numeric_mean_fails_its_check(
+    checkout, baseline, capsys, how
+):
+    # #175: a mean that is not a number is an undefined score. Formatting the raw
+    # value in render() raised ValueError, so the gate printed no table at all.
+    run = make_report(SCORES)
+    _damage(run["rankers"]["hybrid"]["validation"], "genre_ndcg", "mean", how)
+    checks = compare(baseline, run)
+    bad = [c for c in checks if not c.passed]
+    assert [(c.ranker, c.metric) for c in bad] == [("hybrid", "genre_ndcg")]
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "| hybrid | same-genre nDCG@10 | undefined |" in captured.out
     assert "**FAIL**: no defined score in the run" in captured.out
 
 
