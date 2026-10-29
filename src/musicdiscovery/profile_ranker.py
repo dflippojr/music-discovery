@@ -132,9 +132,7 @@ class Prepared:
         self.fit = fit
         self.metadata = _Metadata(catalog)
         self.text = TfIdf(text_documents(catalog))
-        self.popularity = (
-            catalog.frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
-        )
+        self.popularity = catalog.popularity
 
     def features(self, seed_rows: list[int], weights: Sequence[float]) -> np.ndarray:
         """One row per catalog track, one column per name in `FEATURES`."""

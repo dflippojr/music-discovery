@@ -136,9 +136,7 @@ class HybridRanker:
     def _prepare(self, catalog: Catalog) -> tuple[_Metadata, np.ndarray]:
         if self._catalog is not catalog or self._metadata is None:
             self._metadata = _Metadata(catalog)
-            self._popularity = (
-                catalog.frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
-            )
+            self._popularity = catalog.popularity
             self._artists, self._genres = mmr_keys(catalog)
             self._catalog = catalog
         return self._metadata, self._popularity

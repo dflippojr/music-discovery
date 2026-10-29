@@ -131,7 +131,7 @@ def build_catalog(catalog: Catalog) -> dict:
     )
     axis_data, axis_scale = _quantise(z, clip)
 
-    popularity = frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
+    popularity = catalog.popularity
     artists, artist_index = _table(_text(frame, "artist"))
     genres = sorted(catalog.genres)
     genre_names = frame["genre_top"].astype("string").fillna("").tolist()

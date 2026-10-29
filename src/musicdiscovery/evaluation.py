@@ -437,7 +437,7 @@ class Context:
         )
         self.tags = [frozenset(t) for t in frame["tags"]]
         self.artists = frame["artist"].astype(str).to_numpy()
-        self.percentile = frame["listens"].rank(pct=True).to_numpy(dtype=np.float64)
+        self.percentile = catalog.popularity
         self.relevant_total = {
             g: int(np.sum(self.genres == g)) for g in set(self.genres) if g
         }
@@ -493,8 +493,10 @@ def query_metrics(
     return out, rows
 
 
-def _mean(values: np.ndarray) -> float:
-    valid = values[~np.isnan(values)]
+def nanmean(values: Sequence[float] | np.ndarray) -> float:
+    """Mean of the values that are not nan; nan if none are left."""
+    array = np.asarray(values, dtype=np.float64)
+    valid = array[~np.isnan(array)]
     return float(valid.mean()) if len(valid) else float("nan")
 
 
@@ -509,7 +511,7 @@ def _interval(values: np.ndarray, resamples: np.ndarray) -> tuple[float, float, 
         nan = float("nan")
         return nan, nan, nan
     lo, hi = np.percentile(means, [2.5, 97.5])
-    return _mean(values), float(lo), float(hi)
+    return nanmean(values), float(lo), float(hi)
 
 
 def _round(value: float) -> float | None:

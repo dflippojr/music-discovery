@@ -7,8 +7,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-import numpy as np
-
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.evaluation import (
     BOOTSTRAP_RESAMPLES,
@@ -19,6 +17,7 @@ from musicdiscovery.evaluation import (
     confined,
     evaluate,
     load_queries,
+    nanmean,
     query_metrics,
 )
 from musicdiscovery.hybrid import (
@@ -38,11 +37,6 @@ GRID: dict[str, tuple[float, ...]] = {
 CONFIG_PATH = Path("src") / "musicdiscovery" / CONFIG_NAME
 
 
-def _mean(values: Sequence[float]) -> float:
-    valid = [v for v in values if not np.isnan(v)]
-    return float(np.mean(valid)) if valid else float("nan")
-
-
 def validation_means(ranker, catalog: Catalog, queries, ctx: Context) -> dict:
     """Mean of each metric over the validation queries."""
     per_metric: dict[str, list[float]] = {}
@@ -52,7 +46,7 @@ def validation_means(ranker, catalog: Catalog, queries, ctx: Context) -> dict:
         )
         for name, value in values.items():
             per_metric.setdefault(name, []).append(value)
-    return {name: _mean(values) for name, values in per_metric.items()}
+    return {name: nanmean(values) for name, values in per_metric.items()}
 
 
 def tune(

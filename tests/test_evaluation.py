@@ -21,7 +21,6 @@ from musicdiscovery.evaluation import (
     Query,
     RandomRanker,
     _bare,
-    _mean,
     catalog_version,
     evaluate,
     evaluate_profiles,
@@ -29,6 +28,7 @@ from musicdiscovery.evaluation import (
     load_profiles,
     load_queries,
     make_ranker,
+    nanmean,
     query_metrics,
     render_profiles_section,
     render_report,
@@ -49,7 +49,6 @@ from musicdiscovery.profiles import (
     ndcg,
     reciprocal_rank,
 )
-from musicdiscovery.tuning import _mean as tuning_mean
 
 GENRES = ["Folk", "Rock", "Jazz"]
 
@@ -905,14 +904,14 @@ def test_stored_file_hashes_ignore_the_checkout_line_endings(tmp_path):
     assert _sha256(lf) == _sha256(crlf)
 
 
-@pytest.mark.parametrize("mean", [_mean, tuning_mean])
 @pytest.mark.parametrize(
     "values, expected",
     [
         (np.array([np.nan, np.nan]), np.nan),
         (np.array([1.0, np.nan, 3.0]), 2.0),
+        ([1.0, np.nan, 3.0], 2.0),
         (np.array([]), np.nan),
     ],
 )
-def test_mean_skips_nan_and_is_nan_when_nothing_is_left(mean, values, expected):
-    np.testing.assert_allclose(mean(values), expected)
+def test_nanmean_skips_nan_and_is_nan_when_nothing_is_left(values, expected):
+    np.testing.assert_allclose(nanmean(values), expected)
