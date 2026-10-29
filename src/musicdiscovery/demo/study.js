@@ -6,8 +6,12 @@
 // the listener downloads one JSON file and sends it to the owner.
 
 import { Rankers } from "./ranker.js";
-import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, newSessionId, restoreSession, SessionStore, sessionState, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
+import { balancedOrders, buildExport, CONSENT, LABELS, LIST_SIZE, listsFilled, newSessionId, restoreSession, SessionStore, sessionState, TASK_COUNT, taskComplete, timestamp } from "./study-lib.js";
 import { buildPreference, DeferredSources, downloadJson, h, makeIds, mountCatalog, QualityPicker, randomRow, resultPresentation, SeedPicker, thumbButton, trackLabel } from "./ui.js";
+
+// Shown when a ranker has nothing for the seed and qualities picked (a seed whose sound sits at
+// the catalog mean, with no quality). It names no ranker, so the lists stay blind.
+const EMPTY_LIST = "This seed track gives one of the two lists nothing to show. Pick a quality or another seed track.";
 
 const PREFERENCES = [
   { value: "A", text: "List A" },
@@ -106,23 +110,30 @@ class Study {
     this.current = { startedAt, seedRow: null, task: null };
     this.save();
     const next = h("button", { type: "button", class: "md-button", text: "Show the two lists", disabled: true });
+    const status = h("p", { class: "md-status", role: "status" });
+    // The lists are ranked as the picks change, so a task with an empty list is never shown.
+    let task = null;
     const sync = () => {
-      next.disabled = this.seed.row < 0;
+      task = this.seed.row < 0 ? null : this.newTask(index, startedAt);
+      next.disabled = task === null;
+      status.textContent = this.seed.row >= 0 && task === null ? EMPTY_LIST : "";
     };
     this.seed = new SeedPicker(this.data, { heading: "1. Pick a seed track", onChange: sync });
-    this.picker = new QualityPicker(this.data, { heading: "2. Qualities (optional)", onChange: () => {} });
-    next.addEventListener("click", () => this.showLists(this.newTask(index, startedAt), this.seed.row));
+    this.picker = new QualityPicker(this.data, { heading: "2. Qualities (optional)", onChange: sync });
+    next.addEventListener("click", () => this.showLists(task, this.seed.row));
     this.show(
       this.heading(`Task ${index + 1} of ${TASK_COUNT}`),
       this.seed.element,
       this.picker.element,
       h("div", { class: "md-row" }, next),
+      status,
     );
   }
 
+  /** The task for the picked seed and qualities, or null when a ranker leaves its list empty. */
   newTask(index, startedAt) {
     const preference = buildPreference(this.data, this.seed.row, this.picker.qualities);
-    return {
+    const task = {
       seedTrackId: preference.seeds[0],
       likes: preference.likes,
       dislikes: preference.dislikes,
@@ -135,6 +146,7 @@ class Study {
         results: this.rankers.rank(ranker, preference, LIST_SIZE).map((pick) => ({ trackId: pick.id, row: pick.row, rating: null, newToMe: false })),
       })),
     };
+    return listsFilled(task) ? task : null;
   }
 
   showLists(task, seedRow) {

@@ -899,6 +899,58 @@ describe("study page", () => {
     await close(page, context);
   });
 
+  // A seed whose sound sits at the catalog mean, with no quality picked, gives the baseline
+  // nothing to rank, so one list would be empty and the export would break the schema (#147).
+  test("a seed that leaves a list empty blocks the task until a quality or another seed fills it", async () => {
+    const catalog = JSON.parse(readFileSync(join(bundle, "catalog.json"), "utf8"));
+    const projected = Buffer.from(catalog.baseline.projected, "base64");
+    projected.fill(0, 0, catalog.baseline.dims * 2); // row 0, Synthetic track 100, at the mean
+    catalog.baseline.projected = projected.toString("base64");
+    const { context, page, problems } = await study();
+    await page.route("**/catalog.json", (route) => route.fulfill({ json: catalog }));
+    await page.reload();
+    await page.waitForSelector("#music-discovery-study button");
+    await page.getByRole("button", { name: "I agree, start" }).click();
+    const show = page.getByRole("button", { name: "Show the two lists" });
+    const status = page.locator(".md-status");
+    const seed = async (text) => {
+      const input = page.getByRole("combobox");
+      await input.fill(text);
+      await page.getByRole("option").first().waitFor();
+      await input.press("Enter");
+    };
+    const newTask = () => page.evaluate(() => document.querySelector("#music-discovery-study").study.newTask(0, "2026-10-29T10:00:00Z"));
+
+    await seed("Synthetic track 100");
+    assert.equal(await show.isDisabled(), true);
+    assert.match(await status.textContent(), /nothing to show.*Pick a quality or another seed/);
+    assert.equal(await newTask(), null);
+    assert.deepEqual(await axeViolations(page), []);
+    assert.doesNotMatch((await page.content()).toLowerCase(), /hybrid|baseline/);
+
+    const folk = page.getByRole("button", { name: /^Folk ,/ });
+    await folk.click(); // liked
+    assert.equal(await show.isDisabled(), false);
+    assert.equal(await status.textContent(), "");
+    await folk.click(); // disliked
+    assert.equal(await show.isDisabled(), false);
+    await folk.click(); // cleared
+    assert.equal(await show.isDisabled(), true);
+    await seed("Synthetic track 101");
+    assert.equal(await show.isDisabled(), false);
+    assert.equal(await status.textContent(), "");
+    for (const list of (await newTask()).lists) assert.ok(list.results.length >= 1, list.label);
+
+    await seed("Synthetic track 100");
+    assert.equal(await show.isDisabled(), true);
+    await folk.click();
+    await show.click();
+    await page.locator(".md-result").first().waitFor();
+    for (const list of await page.locator("ol.md-results").all()) assert.ok((await list.locator(".md-result").count()) >= 1);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   test("warns before leaving once a track is rated, and not before", async () => {
     for (const rate of [false, true]) {
       const { context, page, problems } = await study();

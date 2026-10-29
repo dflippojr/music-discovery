@@ -74,6 +74,14 @@ test("a task is complete only with every rating and a preference", () => {
   assert.equal(taskComplete(sampleTask(-1)), true);
 });
 
+test("a task with an empty list is never complete, so it cannot reach the end of the study (#147)", () => {
+  for (const empty of [0, 1]) {
+    const task = sampleTask();
+    task.lists[empty].results = [];
+    assert.equal(taskComplete(task), false, `list ${task.lists[empty].label} empty`);
+  }
+});
+
 test("the export holds only the schema's fields", () => {
   const body = buildExport({ id: "0".repeat(32), startedAt: "2026-10-06T14:00:00Z", tasks: [sampleTask()] }, "2026-10-06T14:05:00Z");
   const resolveRef = (node) => (node.$ref ? schema.$defs[node.$ref.split("/").pop()] : node);
