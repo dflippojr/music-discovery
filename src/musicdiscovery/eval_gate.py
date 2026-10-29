@@ -54,6 +54,15 @@ def _cell(report: dict, ranker: str, metric: str) -> dict:
     return cell
 
 
+def _bound(report: dict, who: str, ranker: str, metric: str, key: str) -> float:
+    """The interval bound ``key`` of a cell; a GateError unless it is a number."""
+    cell = _cell(report, ranker, metric)
+    value = cell.get(key) if isinstance(cell, dict) else None
+    if not _defined(value):
+        raise GateError(f"{who} has no interval for {ranker}/{metric}")
+    return value
+
+
 def _same(baseline: dict, run: dict) -> None:
     for keys in SAME_KEYS:
         found = []
@@ -84,15 +93,15 @@ def compare(baseline: dict, run: dict) -> list[Check]:
     Both reports must have been cut off at ``CUTOFF`` (10). A check fails when
     the run's point estimate is undefined, is below the lower bound of the
     baseline's 95% interval, or is below the upper bound of ``random``'s
-    interval in the same run.
+    interval in the same run. A missing or undefined bound is a GateError.
     """
     _cutoff(baseline, run)
     _same(baseline, run)
     checks = []
     for ranker in GATED_RANKERS:
         for metric in METRICS:
-            lower = _cell(baseline, ranker, metric)["lo"]
-            random_upper = _cell(run, REFERENCE_RANKER, metric)["hi"]
+            lower = _bound(baseline, "baseline", ranker, metric, "lo")
+            random_upper = _bound(run, "run", REFERENCE_RANKER, metric, "hi")
             try:
                 value = _cell(run, ranker, metric)["mean"]
             except GateError:
