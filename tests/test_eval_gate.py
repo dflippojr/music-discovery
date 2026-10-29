@@ -178,6 +178,46 @@ def test_a_baseline_without_a_gated_ranker_is_an_error(baseline):
         compare(baseline, make_report(SCORES))
 
 
+def _damage(split, metric, key, how):
+    """Break the ``key`` bound of ``split[metric]`` the way a bad report might."""
+    if how == "not a mapping":
+        split[metric] = [0.0]
+    elif how == "missing":
+        del split[metric][key]
+    else:
+        split[metric][key] = how
+
+
+# A bound that is null, absent, NaN, or whose cell is not a mapping (#163).
+BAD_BOUNDS = [None, "missing", float("nan"), "not a mapping"]
+BAD_BOUND_IDS = ["null", "missing", "nan", "not-a-mapping"]
+
+
+@pytest.mark.parametrize("how", BAD_BOUNDS, ids=BAD_BOUND_IDS)
+def test_a_baseline_without_an_interval_is_an_error(checkout, baseline, capsys, how):
+    _damage(baseline["rankers"]["hybrid"]["validation"], "genre_ndcg", "lo", how)
+    message = "baseline has no interval for hybrid/genre_ndcg"
+    with pytest.raises(GateError, match=message):
+        compare(baseline, make_report(SCORES))
+    assert main(setup_files(checkout, baseline, make_report(SCORES))) == 1
+    captured = capsys.readouterr()
+    assert f"eval-gate: {message}" in captured.err
+    assert f"**FAIL**: {message}" in captured.out
+
+
+@pytest.mark.parametrize("how", BAD_BOUNDS, ids=BAD_BOUND_IDS)
+def test_a_run_without_a_random_interval_is_an_error(checkout, baseline, capsys, how):
+    run = make_report(SCORES)
+    _damage(run["rankers"]["random"]["validation"], "tag_overlap", "hi", how)
+    message = "run has no interval for random/tag_overlap"
+    with pytest.raises(GateError, match=message):
+        compare(baseline, run)
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert f"eval-gate: {message}" in captured.err
+    assert f"**FAIL**: {message}" in captured.out
+
+
 def test_main_exits_one_when_the_cutoffs_differ(checkout, baseline, capsys):
     run = copy.deepcopy(baseline)
     run["k"] = 1
