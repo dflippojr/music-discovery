@@ -218,6 +218,22 @@ def test_a_run_without_a_random_interval_is_an_error(checkout, baseline, capsys,
     assert f"**FAIL**: {message}" in captured.out
 
 
+@pytest.mark.parametrize("how", ["missing", "not a mapping"])
+def test_a_run_cell_without_a_mean_fails_its_check(checkout, baseline, capsys, how):
+    # #170: the mean is read from the cell, so a cell without one is a failing
+    # check, not a KeyError or TypeError that the gate would print as a traceback.
+    run = make_report(SCORES)
+    _damage(run["rankers"]["hybrid"]["validation"], "genre_ndcg", "mean", how)
+    checks = compare(baseline, run)
+    bad = [c for c in checks if not c.passed]
+    assert [(c.ranker, c.metric) for c in bad] == [("hybrid", "genre_ndcg")]
+    assert "no defined score" in bad[0].problem
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "**FAIL**: no defined score in the run" in captured.out
+
+
 def test_main_exits_one_when_the_cutoffs_differ(checkout, baseline, capsys):
     run = copy.deepcopy(baseline)
     run["k"] = 1
