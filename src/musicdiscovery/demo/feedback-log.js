@@ -89,7 +89,10 @@ export class FeedbackLog {
     // storage holds only the newest events, the re-read would drop the older ones.
     if (this.persistent && !this.storageFull) {
       const stored = this.load();
-      if (this.persistent) this.memory = stored;
+      if (this.persistent) {
+        this.memory = stored;
+        this.stored = stored.length;
+      }
     }
     this.memory = [...this.memory, event].slice(-this.max);
     return this.save(this.memory);

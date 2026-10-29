@@ -257,6 +257,23 @@ test("clearing the log resets the full-storage flag and re-reads storage again",
   assert.equal(log.storageFull, false);
 });
 
+test("the stored count follows another tab's copy, so the flag holds after a re-read", () => {
+  const storage = quotaStorage(30);
+  const first = new FeedbackLog(storage);
+  first.append(sample(1));
+  first.append(sample(2));
+  const second = new FeedbackLog(storage);
+  second.clear();
+  second.append(sample(3));
+  // Neither [3, big] nor its newer half [big] fits.
+  const big = { n: 4, pad: "x".repeat(40) };
+  assert.equal(first.append(big), false);
+  assert.deepEqual(first.events(), [sample(3), big]);
+  assert.equal(first.stored, 1);
+  assert.equal(first.storageFull, true);
+  assert.deepEqual(stored(storage), [sample(3)]);
+});
+
 /** A small seeded generator, so the property below replays the same cases everywhere. */
 function prng(seed) {
   let a = seed >>> 0;
