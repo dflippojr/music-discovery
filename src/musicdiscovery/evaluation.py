@@ -176,8 +176,27 @@ def generate_queries(
     return queries
 
 
+def _recorded_size(path: Path) -> int | None:
+    try:
+        return json.loads(path.read_text()).get("catalog_tracks")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _refuse_other_catalog(path: Path, catalog: Catalog, what: str) -> None:
+    """Refuse to replace a file made for a different catalog size."""
+    recorded = _recorded_size(path) if path.exists() else None
+    if recorded is not None and recorded != len(catalog):
+        raise EvaluationError(
+            f"{path} was made for a catalog of {recorded} tracks, this one has "
+            f"{len(catalog)}; remove it to generate {what} for this catalog"
+        )
+
+
 def write_queries(path: Path, queries: Sequence[Query], catalog: Catalog) -> None:
+    """Write queries; refuse to replace a file made for a different catalog size."""
     path = confined(path)
+    _refuse_other_catalog(path, catalog, "queries")
     payload = {
         "query_seed": QUERY_SEED,
         "k": K,
@@ -230,22 +249,10 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
 # --- listener profiles -------------------------------------------------------
 
 
-def _recorded_size(path: Path) -> int | None:
-    try:
-        return json.loads(path.read_text()).get("catalog_tracks")
-    except (OSError, ValueError, AttributeError):
-        return None
-
-
 def write_profiles(path: Path, profiles: Sequence[Profile], catalog: Catalog) -> None:
     """Write profiles; refuse to replace a file made for a different catalog size."""
     path = confined(path)
-    recorded = _recorded_size(path) if path.exists() else None
-    if recorded is not None and recorded != len(catalog):
-        raise EvaluationError(
-            f"{path} was made for a catalog of {recorded} tracks, this one has "
-            f"{len(catalog)}; remove it to generate profiles for this catalog"
-        )
+    _refuse_other_catalog(path, catalog, "profiles")
     payload = {
         "profile_seed": PROFILE_SEED,
         "k": K,

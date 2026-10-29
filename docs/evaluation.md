@@ -29,8 +29,10 @@ musicdiscovery evaluate --benchmark all
 reports stay comparable over time. It holds 100 validation and 100 test queries.
 Each query is a seed track plus one to three liked qualities sampled from a
 feature axis (`more:`/`less:`), the seed's genre and one of the seed's tags. The file records
-the catalog size; evaluation refuses a catalog of a different size. Use the
-validation split to choose settings and the test split to report.
+the catalog size; evaluation refuses a catalog of a different size, and
+generation refuses to overwrite a queries file made for another size (remove it
+to regenerate). Use the validation split to choose settings and the test split
+to report.
 
 ## Rankers
 

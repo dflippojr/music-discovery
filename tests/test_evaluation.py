@@ -132,6 +132,31 @@ def test_query_file_errors(tmp_path, catalog, queries):
         generate_queries(catalog, per_split=500)
 
 
+def test_write_queries_refuses_a_file_made_for_another_catalog(
+    tmp_path, catalog, queries
+):
+    path = tmp_path / "queries.json"
+    path.write_text(json.dumps({"catalog_tracks": 99_999, "queries": []}))
+    before = path.read_bytes()
+    with pytest.raises(EvaluationError, match=rf"99999.*{len(catalog)}") as error:
+        write_queries(path, queries, catalog)
+    assert str(path) in str(error.value)
+    assert path.read_bytes() == before
+
+
+def test_write_queries_replaces_a_file_for_this_catalog_or_no_size(
+    tmp_path, catalog, queries
+):
+    path = tmp_path / "queries.json"
+    for stored in [{"catalog_tracks": len(catalog), "queries": []}, {"queries": []}]:
+        path.write_text(json.dumps(stored))
+        write_queries(path, queries, catalog)
+        assert load_queries(path, catalog) == queries
+    path.write_text("not json")
+    write_queries(path, queries, catalog)
+    assert load_queries(path, catalog) == queries
+
+
 JSON_VALUES = st.recursive(
     st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
     lambda inner: (
@@ -411,6 +436,20 @@ def test_cli_refuses_likes_that_are_not_a_list_of_strings(data_dir, capsys, like
     assert err.startswith("evaluate: cannot read queries at ")
     assert err.count("\n") == 1
     assert "Traceback" not in err
+
+
+def test_cli_refuses_to_replace_queries_for_another_catalog(data_dir, capsys):
+    Path("q.json").write_text(json.dumps({"catalog_tracks": 99_999, "queries": []}))
+    base = ["evaluate", "--data-dir", str(data_dir)]
+    argv = [*base, "--queries", "q.json", "--generate-queries"]
+    assert main(argv) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("evaluate: ")
+    assert "99999" in err
+    assert "300" in err
+    assert err.count("\n") == 1
+    assert "Traceback" not in err
+    assert json.loads(Path("q.json").read_text())["catalog_tracks"] == 99_999
 
 
 def test_paths_outside_working_directory_are_refused(
