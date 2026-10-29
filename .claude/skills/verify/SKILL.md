@@ -71,6 +71,8 @@ anything starts.
    (when this run launched anything), and that this run's handle and run
    directory are gone. If anything is left over, it fails and lists it. In
    that case, follow the contract's recovery section. Do not delete files by hand.
+   A launcher killed before it saved its fixture child (phase `starting`) is
+   recovered by the same command once no process holds the run directory.
 
 ## Feature map
 

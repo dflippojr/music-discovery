@@ -176,8 +176,11 @@ creation time using psutil (installed with the dev tools). It requires the
 recorded launcher PID to be absent. A live PID, a reused PID with a different
 creation time, or inaccessible process information preserves the handle and
 bundle. During seeding it also requires the recorded fixture child to have
-exited; a live writer or unknown child identity blocks recovery. A crash in the
-small startup window before child identity is saved requires investigation.
+exited; a live writer or unknown child identity blocks recovery. A launcher
+killed in phase `starting`, before the child identity is saved, is recovered
+once a read-only psutil scan finds no process whose command line contains the
+run directory's path. A match, or a process whose command line cannot be read,
+refuses and names the PID.
 Older handles without process creation times cannot be recovered automatically.
 Their ready, owned servers can still be stopped with npm run ui:stop.
 
