@@ -234,6 +234,62 @@ def test_a_run_cell_without_a_mean_fails_its_check(checkout, baseline, capsys, h
     assert "**FAIL**: no defined score in the run" in captured.out
 
 
+@pytest.mark.parametrize("how", ["0.5", [0.5]], ids=["string", "list"])
+def test_a_run_cell_with_a_non_numeric_mean_fails_its_check(
+    checkout, baseline, capsys, how
+):
+    # #175: a mean that is not a number is an undefined score. Formatting the raw
+    # value in render() raised ValueError, so the gate printed no table at all.
+    run = make_report(SCORES)
+    _damage(run["rankers"]["hybrid"]["validation"], "genre_ndcg", "mean", how)
+    checks = compare(baseline, run)
+    bad = [c for c in checks if not c.passed]
+    assert [(c.ranker, c.metric) for c in bad] == [("hybrid", "genre_ndcg")]
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "| hybrid | same-genre nDCG@10 | undefined |" in captured.out
+    assert "**FAIL**: no defined score in the run" in captured.out
+
+
+def test_a_non_numeric_baseline_bound_fails_its_check_in_a_row(
+    checkout, baseline, capsys
+):
+    # #175: a string bound is not missing, so it is not a GateError (#163). Its
+    # check fails, and render() shows the bound as undefined in that check's row.
+    _damage(baseline["rankers"]["hybrid"]["validation"], "genre_ndcg", "lo", "0.5")
+    run = make_report(SCORES)
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "genre_ndcg"): "the baseline's lower bound is not a number"
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert (
+        "| hybrid | same-genre nDCG@10 | 0.990 | undefined | 0.160 "
+        "| **FAIL**: the baseline's lower bound is not a number |"
+    ) in captured.out
+
+
+def test_a_non_numeric_random_bound_fails_its_checks_in_a_row(
+    checkout, baseline, capsys
+):
+    # #175: the same for random's upper bound, which every metric's check uses.
+    run = make_report(SCORES)
+    _damage(run["rankers"]["random"]["validation"], "tag_overlap", "hi", "0.5")
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "tag_overlap"): "random's upper bound is not a number",
+        ("profile", "tag_overlap"): "random's upper bound is not a number",
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert (
+        "| hybrid | tag overlap@10 | 0.250 | 0.210 | undefined "
+        "| **FAIL**: random's upper bound is not a number |"
+    ) in captured.out
+
+
 def test_main_exits_one_when_the_cutoffs_differ(checkout, baseline, capsys):
     run = copy.deepcopy(baseline)
     run["k"] = 1

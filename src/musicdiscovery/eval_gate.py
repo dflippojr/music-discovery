@@ -33,8 +33,8 @@ class Check:
     ranker: str
     metric: str
     value: float | None
-    baseline_lower: float
-    random_upper: float
+    baseline_lower: float | None
+    random_upper: float | None
     problem: str
 
     @property
@@ -54,13 +54,19 @@ def _cell(report: dict, ranker: str, metric: str) -> dict:
     return cell
 
 
-def _bound(report: dict, who: str, ranker: str, metric: str, key: str) -> float:
-    """The interval bound ``key`` of a cell; a GateError unless it is a number."""
+def _bound(report: dict, who: str, ranker: str, metric: str, key: str) -> float | None:
+    """The interval bound ``key`` of a cell, or None when it is not a number.
+
+    A bound that is missing, null or NaN is a GateError (#163). Any other
+    non-number is None, so its check fails (#175).
+    """
     cell = _cell(report, ranker, metric)
     value = cell.get(key) if isinstance(cell, dict) else None
-    if not _defined(value):
+    if _defined(value):
+        return value
+    if value is None or isinstance(value, float):  # a NaN bound
         raise GateError(f"{who} has no interval for {ranker}/{metric}")
-    return value
+    return None
 
 
 def _same(baseline: dict, run: dict) -> None:
@@ -93,9 +99,10 @@ def compare(baseline: dict, run: dict) -> list[Check]:
     Both reports must have been cut off at ``CUTOFF`` (10). A check fails when
     the run's point estimate is undefined, is below the lower bound of the
     baseline's 95% interval, or is below the upper bound of ``random``'s
-    interval in the same run. A run cell with no ``mean``, or one that is not a
-    mapping, has an undefined point estimate, so its check fails. A missing or
-    undefined bound is a GateError.
+    interval in the same run. A run cell with no ``mean``, one that is not a
+    mapping, or one whose ``mean`` is not a number, has an undefined point
+    estimate, so its check fails. A bound that is not a number fails its check
+    too, but a missing, null or NaN bound is a GateError.
     """
     _cutoff(baseline, run)
     _same(baseline, run)
@@ -108,16 +115,26 @@ def compare(baseline: dict, run: dict) -> list[Check]:
                 cell = _cell(run, ranker, metric)
             except GateError:
                 cell = None
-            value = cell.get("mean") if isinstance(cell, dict) else None
+            mean = cell.get("mean") if isinstance(cell, dict) else None
+            # render() formats the value, so a mean that is not a number is undefined.
+            value = mean if isinstance(mean, int | float) else None
             problem = ""
             if not _defined(value):
                 problem = "no defined score in the run"
+            elif lower is None:
+                problem = "the baseline's lower bound is not a number"
             elif value < lower:
                 problem = "below the baseline's lower bound"
+            elif random_upper is None:
+                problem = "random's upper bound is not a number"
             elif value < random_upper:
                 problem = "below random's upper bound"
             checks.append(Check(ranker, metric, value, lower, random_upper, problem))
     return checks
+
+
+def _shown(value: float | None) -> str:
+    return "undefined" if value is None else f"{value:.3f}"
 
 
 def render(checks: Sequence[Check]) -> str:
@@ -130,11 +147,11 @@ def render(checks: Sequence[Check]) -> str:
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for check in checks:
-        value = "undefined" if check.value is None else f"{check.value:.3f}"
         result = "pass" if check.passed else f"**FAIL**: {check.problem}"
         lines.append(
-            f"| {check.ranker} | {METRICS[check.metric]} | {value} | "
-            f"{check.baseline_lower:.3f} | {check.random_upper:.3f} | {result} |"
+            f"| {check.ranker} | {METRICS[check.metric]} | {_shown(check.value)} | "
+            f"{_shown(check.baseline_lower)} | {_shown(check.random_upper)} "
+            f"| {result} |"
         )
     failed = [check for check in checks if not check.passed]
     verdict = f"{len(failed)} of {len(checks)} checks failed" if failed else "all pass"
