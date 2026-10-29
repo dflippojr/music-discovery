@@ -133,8 +133,8 @@ export function sessionState(session, orders, current, rated) {
 
 // The rules of study-ratings.schema.json that a stored session must also keep, so a
 // resumed session cannot export a file the schema rejects (a test checks they match).
-export const TIMESTAMP_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/u;
-export const QUALITY_PATTERN = /^(genre|tag|more|less):[^\n]{1,60}$/u;
+export const TIMESTAMP_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z(?![\s\S])/u;
+export const QUALITY_PATTERN = /^(genre|tag|more|less):[^\n]{1,60}(?![\s\S])/u;
 const MAX_QUALITIES = 60;
 
 const isId = (value) => typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
