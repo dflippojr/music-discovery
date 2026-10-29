@@ -12,8 +12,8 @@ import numpy as np
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import (
     HybridConfig,
+    Metadata,
     TfIdf,
-    _Metadata,
     mmr,
     mmr_keys,
     with_variety,
@@ -22,9 +22,9 @@ from musicdiscovery.jsonfiles import load_packaged_json
 from musicdiscovery.preference import Preference
 from musicdiscovery.ranking import (
     BaselineRanker,
+    Fit,
     Recommendation,
-    _allowed,
-    _Fit,
+    allowed_rows,
     quality_terms,
 )
 
@@ -128,9 +128,9 @@ def weighted_centre(vectors: np.ndarray, weights: Sequence[float]) -> np.ndarray
 class Prepared:
     """Everything the features need that depends only on the catalog."""
 
-    def __init__(self, catalog: Catalog, fit: _Fit):
+    def __init__(self, catalog: Catalog, fit: Fit):
         self.fit = fit
-        self.metadata = _Metadata(catalog)
+        self.metadata = Metadata(catalog)
         self.text = TfIdf(text_documents(catalog))
         self.popularity = catalog.popularity
 
@@ -184,7 +184,7 @@ class ProfileRanker:
         terms += quality_terms(preference, catalog, prepared.fit)
         scores = np.sum([values for _, _, values in terms], axis=0)
 
-        candidates = np.flatnonzero(_allowed(preference, catalog))
+        candidates = np.flatnonzero(allowed_rows(preference, catalog))
         order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
         return terms, scores, candidates[order]
 

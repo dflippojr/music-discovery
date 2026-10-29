@@ -108,7 +108,7 @@ class TfIdf:
         return np.bincount(self.rows, weights=products, minlength=self.count)
 
 
-class _Metadata(TfIdf):
+class Metadata(TfIdf):
     """TF-IDF over genre ids and tags."""
 
     def __init__(self, catalog: Catalog):
@@ -121,6 +121,9 @@ class _Metadata(TfIdf):
         )
 
 
+_Metadata = Metadata  # the old private name, kept for the existing tests
+
+
 class HybridRanker:
     """Baseline score + metadata similarity + popularity, re-ranked with MMR."""
 
@@ -128,14 +131,14 @@ class HybridRanker:
         self.config = config or HybridConfig.load()
         self._baseline = BaselineRanker()
         self._catalog: Catalog | None = None
-        self._metadata: _Metadata | None = None
+        self._metadata: Metadata | None = None
         self._popularity: np.ndarray | None = None
         self._artists: np.ndarray | None = None
         self._genres: np.ndarray | None = None
 
-    def _prepare(self, catalog: Catalog) -> tuple[_Metadata, np.ndarray]:
+    def _prepare(self, catalog: Catalog) -> tuple[Metadata, np.ndarray]:
         if self._catalog is not catalog or self._metadata is None:
-            self._metadata = _Metadata(catalog)
+            self._metadata = Metadata(catalog)
             self._popularity = catalog.popularity
             self._artists, self._genres = mmr_keys(catalog)
             self._catalog = catalog
