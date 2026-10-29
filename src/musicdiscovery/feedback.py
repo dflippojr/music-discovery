@@ -1,8 +1,9 @@
 """Summarise the demo's local feedback log (JSON Lines, one thumbs action a line).
 
 Each line is checked against feedback-log.schema.json; a malformed line is
-reported and skipped. Within each shown list the latest action on a track wins,
-and an action of 0 takes the track's rating back. docs/evaluation.md explains
+reported and skipped. Within each shown list the action with the latest time on
+a track wins (the later line among equal times), and an action of 0 takes the
+track's rating back. docs/evaluation.md explains
 what these numbers can and cannot say.
 """
 
@@ -116,9 +117,14 @@ def _list_key(event: dict) -> tuple:
 
 
 def latest_ratings(events: list[dict]) -> dict[tuple, dict[int, dict]]:
-    """Per shown list, each track's latest rating event, without taken-back ones."""
+    """Per shown list, each track's latest rating event, without taken-back ones.
+
+    Latest means the greatest ``time``, not the last line, so logs merged in any
+    order agree. Events with equal ``time`` (whole seconds) go by input position.
+    The list key has no visitor, so one list shown to several visitors is one list.
+    """
     lists: dict[tuple, dict[int, dict]] = defaultdict(dict)
-    for event in events:
+    for _, event in sorted(enumerate(events), key=lambda p: (p[1]["time"], p[0])):
         rated = lists[_list_key(event)]
         if event["rating"] == 0:
             rated.pop(event["track_id"], None)

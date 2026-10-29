@@ -277,8 +277,14 @@ skipped. The command fails only when the file cannot be read or no line is valid
 A UTF-8 byte-order mark, which Windows PowerShell 5.1 writes when it saves a
 merged log with `-Encoding utf8`, is accepted and ignored.
 Within one shown list (same ranker, seeds, qualities, exclusion and track order)
-the latest action on a track counts, and a `rating` of 0 means that rating was
-taken back. The report then prints:
+the action with the latest `time` on a track counts, whatever the order of the
+lines in the file, so logs merged newest file first give the same report. When
+two actions on a track have the same `time` (it has a resolution of one second),
+the later line wins. A `rating` of 0 means that rating was taken back, but only
+if its `time` is the latest: an older 0 that comes later in the file does not
+erase a newer rating. The list key holds no visitor, because the log carries
+none (see the limits below), so a list that several visitors were shown counts
+as one list, with one rating per track. The report then prints:
 
 - **Thumbs-up rate per ranker**: liked results over rated results, with a 95%
   Wilson interval.
@@ -298,7 +304,8 @@ of the list first, so MRR favours tracks near the top regardless of ranker.
 Visitors know which ranker they picked, unlike the blind listener study, and
 nothing ties events to a person, so one visitor can dominate a log and events
 are not independent. Merging logs from several browsers cannot detect
-duplicates. Term counts show co-occurrence only: a term on liked results did not
+duplicates, and identical lists shown to different browsers (for example from a
+shared link) collapse into one list, so the merged counts understate them. Term counts show co-occurrence only: a term on liked results did not
 necessarily cause the like, and the hybrid shows `metadata` and `popularity`
 terms the baseline never has. Use the logs to find questions for the offline
 metrics and the [listener study](listener-study.md), not to rank the rankers.
