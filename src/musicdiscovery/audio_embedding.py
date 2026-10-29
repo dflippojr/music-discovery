@@ -18,6 +18,7 @@ from typing import Protocol
 
 import numpy as np
 
+from musicdiscovery import paths
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.ingest import sha1_of
 from musicdiscovery.preference import Preference
@@ -119,14 +120,7 @@ def member_name(track_id: int) -> str:
 
 def confined(path: Path) -> Path:
     """Resolve a user-supplied path and keep it inside the working directory."""
-    # Imported here: the evaluator imports this module for its ranker table.
-    from musicdiscovery.evaluation import EvaluationError
-    from musicdiscovery.evaluation import confined as inside
-
-    try:
-        return inside(path)
-    except EvaluationError as error:
-        raise AudioEmbeddingError(str(error)) from error
+    return paths.confined(path, AudioEmbeddingError)
 
 
 def _unit(vectors: np.ndarray) -> np.ndarray:

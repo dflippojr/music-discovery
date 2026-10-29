@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from musicdiscovery import paths
 from musicdiscovery.audio_embedding import AudioEmbeddingRanker
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.hybrid import HybridRanker
@@ -53,10 +54,7 @@ class EvaluationError(Exception):
 
 def confined(path: Path) -> Path:
     """Resolve a user-supplied path and keep it inside the working directory."""
-    resolved = (Path.cwd() / path).resolve()
-    if not resolved.is_relative_to(Path.cwd().resolve()):
-        raise EvaluationError(f"{path} is outside the working directory")
-    return resolved
+    return paths.confined(path, EvaluationError)
 
 
 # --- reference rankers -------------------------------------------------------
