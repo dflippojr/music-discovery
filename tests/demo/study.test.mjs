@@ -205,6 +205,8 @@ test("a stored session is restored only when it fits this catalog and protocol",
 test("a restored session is checked with the schema's own patterns", () => {
   assert.equal(lib.TIMESTAMP_PATTERN?.source, new RegExp(schema.$defs.timestamp.pattern, "u").source);
   assert.equal(lib.QUALITY_PATTERN?.source, new RegExp(schema.$defs.quality.pattern, "u").source);
+  assert.equal(lib.TIMESTAMP_PATTERN.test("2026-10-23T10:00:00Z\n"), false);
+  assert.equal(lib.QUALITY_PATTERN.test("genre:Rock\n"), false);
   for (const kind of ["likes", "dislikes"]) assert.equal(schema.$defs.task.properties[kind].maxItems, 60, kind);
   assert.equal(schema.$defs.list.properties.results.minItems, 1);
 });
