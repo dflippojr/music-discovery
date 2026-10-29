@@ -11,13 +11,13 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from musicdiscovery.evaluation import confined
+from musicdiscovery.jsonfiles import describe_schema_error, load_packaged_json
 
 DEFAULT_RATINGS_DIR = Path("ratings")
 SCHEMA_NAME = "study-ratings.schema.json"
@@ -98,16 +98,14 @@ def sign_test_p(successes: int, trials: int) -> float:
 
 
 def _schema() -> dict:
-    text = resources.files("musicdiscovery").joinpath(SCHEMA_NAME).read_text("utf-8")
-    return json.loads(text)
+    return load_packaged_json(SCHEMA_NAME)
 
 
 def _problems(validator: Draft202012Validator, body: Any) -> list[str]:
     errors = sorted(validator.iter_errors(body), key=lambda e: list(map(str, e.path)))
     lines = []
     for error in errors[:MAX_SCHEMA_PROBLEMS]:
-        where = "/".join(str(part) for part in error.path) or "top level"
-        lines.append(f"{where}: {error.message[:120]}")
+        lines.append(describe_schema_error(error))
     if len(errors) > MAX_SCHEMA_PROBLEMS:
         lines.append(f"and {len(errors) - MAX_SCHEMA_PROBLEMS} more")
     return lines

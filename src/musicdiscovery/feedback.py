@@ -10,13 +10,13 @@ what these numbers can and cannot say.
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from musicdiscovery.evaluation import EvaluationError, confined
+from musicdiscovery.jsonfiles import describe_schema_error, load_packaged_json
 from musicdiscovery.study import Interval, wilson
 
 SCHEMA_NAME = "feedback-log.schema.json"
@@ -51,8 +51,7 @@ class Summary:
 
 
 def _schema() -> dict:
-    text = resources.files("musicdiscovery").joinpath(SCHEMA_NAME).read_text("utf-8")
-    return json.loads(text)
+    return load_packaged_json(SCHEMA_NAME)
 
 
 def _line_problem(validator: Draft202012Validator, body: Any) -> str | None:
@@ -62,8 +61,7 @@ def _line_problem(validator: Draft202012Validator, body: Any) -> str | None:
         default=None,
     )
     if error is not None:
-        where = "/".join(str(part) for part in error.path) or "top level"
-        return f"{where}: {error.message[:120]}"
+        return describe_schema_error(error)
     ranks = [item["rank"] for item in body["shown"]]
     if ranks != list(range(1, len(ranks) + 1)):
         return "shown ranks must run 1, 2, 3, ... in order"
