@@ -93,8 +93,9 @@ must not do. Its logic is unit-tested on synthetic numbers in
 - **The rule.** On the **validation** split only, for `hybrid` and `profile`,
   the job fails when the point estimate of same-genre nDCG@10 or tag
   overlap@10 is below the **lower bound** of the baseline's 95% interval, when
-  it is undefined (`NaN`), or when it is below the upper bound of `random`'s
-  interval in the same run. Test-split numbers are in the report and never
+  it is undefined (`NaN`, infinite, or not a number), or when it is below the
+  upper bound of `random`'s interval in the same run. A baseline bound that is
+  infinite or not a number fails its check too. Test-split numbers are in the report and never
   gated. `audio-embedding` is not gated until its vector cache can be rebuilt
   in CI. The run and the baseline must use the same catalog (archive SHA1 and
   track count) and the same `eval/queries.json`, or the job fails as not

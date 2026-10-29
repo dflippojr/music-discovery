@@ -252,6 +252,29 @@ def test_a_run_cell_with_a_non_numeric_mean_fails_its_check(
     assert "**FAIL**: no defined score in the run" in captured.out
 
 
+@pytest.mark.parametrize("how", [True, float("inf")], ids=["boolean", "infinity"])
+def test_a_boolean_or_infinite_mean_fails_its_check(checkout, baseline, capsys, how):
+    # JSON true is a bool, which Python counts as the int 1, and json.loads reads
+    # Infinity as a float: neither is a defined score, so neither may pass.
+    run = make_report(SCORES)
+    _damage(run["rankers"]["hybrid"]["validation"], "genre_ndcg", "mean", how)
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "genre_ndcg"): "no defined score in the run"
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "| hybrid | same-genre nDCG@10 | undefined |" in captured.out
+
+
+@pytest.mark.parametrize("how", [False, float("-inf")], ids=["boolean", "infinity"])
+def test_a_boolean_or_infinite_baseline_bound_fails_its_check(baseline, how):
+    # A lower bound of false (0) or -Infinity would let any run pass that check.
+    _damage(baseline["rankers"]["hybrid"]["validation"], "genre_ndcg", "lo", how)
+    assert failures(compare(baseline, make_report(SCORES))) == {
+        ("hybrid", "genre_ndcg"): "the baseline's lower bound is not a number"
+    }
+
+
 def test_a_non_numeric_baseline_bound_fails_its_check_in_a_row(
     checkout, baseline, capsys
 ):

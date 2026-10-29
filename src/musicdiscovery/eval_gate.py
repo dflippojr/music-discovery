@@ -43,7 +43,12 @@ class Check:
 
 
 def _defined(value: object) -> bool:
-    return isinstance(value, int | float) and not math.isnan(value)
+    """A finite number; JSON true and false are bools, not numbers."""
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 def _cell(report: dict, ranker: str, metric: str) -> dict:
@@ -64,7 +69,7 @@ def _bound(report: dict, who: str, ranker: str, metric: str, key: str) -> float 
     value = cell.get(key) if isinstance(cell, dict) else None
     if _defined(value):
         return value
-    if value is None or isinstance(value, float):  # a NaN bound
+    if value is None or (isinstance(value, float) and math.isnan(value)):
         raise GateError(f"{who} has no interval for {ranker}/{metric}")
     return None
 
@@ -117,7 +122,7 @@ def compare(baseline: dict, run: dict) -> list[Check]:
                 cell = None
             mean = cell.get("mean") if isinstance(cell, dict) else None
             # render() formats the value, so a mean that is not a number is undefined.
-            value = mean if isinstance(mean, int | float) else None
+            value = mean if _defined(mean) else None
             problem = ""
             if not _defined(value):
                 problem = "no defined score in the run"
