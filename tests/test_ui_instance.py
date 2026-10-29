@@ -398,6 +398,7 @@ def stale(launcher, monkeypatch):
             NoSuchProcess=psutil.NoSuchProcess,
             AccessDenied=psutil.AccessDenied,
             Error=psutil.Error,
+            process_iter=lambda attrs=None: iter(()),
         ),
     )
     return metadata, bundle
@@ -524,12 +525,99 @@ def test_recover_invalid_json_handle(launcher, stale, raw):
     assert_preserved(launcher, bundle)
 
 
-@pytest.mark.parametrize("phase", ["starting", "seeding", None])
+@pytest.mark.parametrize("phase", ["seeding", "bogus", None])
 def test_recover_unknown_fixture_identity(launcher, stale, phase):
     metadata, bundle = stale
     metadata["phase"] = phase
     launcher.HANDLE.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="identity|ownership"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+def starting_handle(launcher, metadata):
+    metadata["phase"] = "starting"
+    metadata.pop("fixture", None)
+    launcher.HANDLE.write_text(json.dumps(metadata))
+
+
+def test_recover_clears_a_starting_handle_after_the_launcher_died(
+    launcher, stale, capsys
+):
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+    launcher.recover()
+    assert not launcher.HANDLE.exists()
+    assert not bundle.exists()
+    assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
+    assert f"Recovered {metadata['instance']}" in capsys.readouterr().out
+    launcher.recover()
+    assert "No owned UI instance remains" in capsys.readouterr().out
+
+
+def test_recover_refuses_a_starting_handle_with_a_live_launcher(
+    launcher, monkeypatch, stale
+):
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+    monkeypatch.setattr(
+        launcher.psutil,
+        "Process",
+        lambda pid: SimpleNamespace(create_time=lambda: metadata["created"]),
+    )
+    with pytest.raises(ValueError, match="still live"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+def test_recover_refuses_a_starting_handle_when_a_process_holds_the_bundle(
+    launcher, monkeypatch, stale
+):
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+    writer = SimpleNamespace(
+        pid=424242, info={"cmdline": ["python", "build_demo_fixture.py", str(bundle)]}
+    )
+    other = SimpleNamespace(pid=7, info={"cmdline": ["python", "other.py"]})
+    monkeypatch.setattr(
+        launcher.psutil, "process_iter", lambda attrs=None: iter([other, writer])
+    )
+    with pytest.raises(ValueError, match="424242"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize("cmdline", [None, []])
+def test_recover_refuses_a_starting_handle_with_an_unreadable_process(
+    launcher, monkeypatch, stale, cmdline
+):
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+    unreadable = SimpleNamespace(pid=555, info={"cmdline": cmdline})
+    monkeypatch.setattr(
+        launcher.psutil, "process_iter", lambda attrs=None: iter([unreadable])
+    )
+    if cmdline == []:
+        # A process with an empty command line (a kernel thread) is not a writer.
+        launcher.recover()
+        assert not launcher.HANDLE.exists()
+        return
+    with pytest.raises(ValueError, match="555"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+def test_recover_refuses_a_starting_handle_when_the_scan_is_denied(
+    launcher, monkeypatch, stale
+):
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+
+    def denied(attrs=None):
+        raise launcher.psutil.AccessDenied(1)
+
+    monkeypatch.setattr(launcher.psutil, "process_iter", denied)
+    with pytest.raises(ValueError, match="process scan"):
         launcher.recover()
     assert_preserved(launcher, bundle)
 
