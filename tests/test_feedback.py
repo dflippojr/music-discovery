@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from jsonschema import Draft202012Validator
 
 from musicdiscovery import feedback
 from musicdiscovery.cli import main
@@ -86,6 +87,38 @@ def test_read_log_keeps_good_events_and_describes_bad_lines(log):
     assert "not JSON" in result.problems[0]
     assert "ranker" in result.problems[1]
     assert "not in the shown list" in result.problems[2]
+
+
+@pytest.mark.parametrize(
+    ("location", "good"),
+    [
+        (("properties", "time"), "2026-10-12T10:00:00Z"),
+        (("properties", "explanation_terms", "items"), "genre:Folk"),
+        (("$defs", "quality"), "genre:Folk"),
+    ],
+)
+def test_a_trailing_newline_is_not_a_valid_value(location, good):
+    # jsonschema matches with re.search, where $ also matches before a final newline.
+    node = feedback._schema()
+    for key in location:
+        node = node[key]
+    validator = Draft202012Validator({"type": "string", "pattern": node["pattern"]})
+    assert validator.is_valid(good)
+    assert not validator.is_valid(good + "\n")
+
+
+def test_a_line_with_a_trailing_newline_in_a_value_is_skipped(tmp_path):
+    path = write_log(
+        tmp_path / "feedback.jsonl",
+        event(100, 1),
+        {**event(101, 1), "time": "2026-10-12T10:00:00Z\n"},
+        event(102, -1, terms=("genre:Folk\n",)),
+    )
+    result = feedback.read_log(path)
+    assert [e["track_id"] for e in result.events] == [100]
+    assert [p.split(":")[0] for p in result.problems] == ["line 2", "line 3"]
+    assert "time" in result.problems[0]
+    assert "explanation_terms" in result.problems[1]
 
 
 def test_a_deeply_nested_line_is_reported_not_a_crash(tmp_path):

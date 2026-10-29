@@ -151,6 +151,9 @@ def test_default_ratings_directory_is_ignored_by_git():
         (lambda b: b["tasks"][0].update(notes="free text"), "notes"),
         (lambda b: b["tasks"][0].update(preferred="hybrid"), "preferred"),
         (lambda b: b["tasks"][0]["likes"].append("my email is a@b.c"), "likes"),
+        (lambda b: b.__setitem__("session_id", b["session_id"] + "\n"), "session_id"),
+        (lambda b: b.update(started_at=b["started_at"] + "\n"), "started_at"),
+        (lambda b: b["tasks"][0]["likes"].append("genre:Rock\n"), "likes"),
     ],
 )
 def test_files_that_fail_the_schema_are_rejected(tmp_path, capsys, change, message):
@@ -165,6 +168,26 @@ def test_files_that_fail_the_schema_are_rejected(tmp_path, capsys, change, messa
     assert main(["analyze-study", str(folder), "--out-dir", str(tmp_path / "o")]) == 1
     assert "analyze-study: bad.json" in capsys.readouterr().err
     assert not (tmp_path / "o").exists()
+
+
+@pytest.mark.parametrize(
+    ("location", "good"),
+    [
+        (("properties", "session_id"), "a" * 32),
+        (("$defs", "timestamp"), TIME),
+        (("$defs", "quality"), "genre:Rock"),
+    ],
+)
+def test_a_trailing_newline_is_not_a_valid_value(location, good):
+    # jsonschema matches with re.search, where $ also matches before a final newline.
+    node = study._schema()
+    for key in location:
+        node = node[key]
+    validator = study.Draft202012Validator(
+        {"type": "string", "pattern": node["pattern"]}
+    )
+    assert validator.is_valid(good)
+    assert not validator.is_valid(good + "\n")
 
 
 def test_inconsistent_or_unreadable_files_are_rejected(tmp_path):
