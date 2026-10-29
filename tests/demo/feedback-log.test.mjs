@@ -196,10 +196,10 @@ test("after a trimmed save the next append does not shrink memory to the stored 
   assert.deepEqual(stored(storage), [sample(3), sample(4)]);
   assert.equal(log.append(sample(5)), true);
   assert.deepEqual(log.events(), [1, 2, 3, 4, 5].map(sample));
-  assert.deepEqual(stored(storage), [sample(4), sample(5)]);
-  assert.equal(log.stored, 2);
+  assert.deepEqual(stored(storage), [sample(3), sample(4), sample(5)]);
+  assert.equal(log.stored, 3);
   // A reload only has the stored copy, which is what the page says.
-  assert.deepEqual(new FeedbackLog(storage).events(), [sample(4), sample(5)]);
+  assert.deepEqual(new FeedbackLog(storage).events(), [sample(3), sample(4), sample(5)]);
 });
 
 test("a stored copy that keeps halving still saves the newest events while memory grows", () => {
@@ -208,7 +208,9 @@ test("a stored copy that keeps halving still saves the newest events while memor
   for (let n = 1; n <= 40; n += 1) assert.equal(log.append(sample(n)), true);
   assert.equal(log.size, 40);
   assert.equal(log.persistent, true);
-  assert.deepEqual(stored(storage), [sample(39), sample(40)]);
+  // 40 events, then 20, 10 and 5 do not fit in 30 characters; the newest 3 do.
+  assert.deepEqual(stored(storage), [sample(38), sample(39), sample(40)]);
+  assert.equal(log.stored, 3);
 });
 
 test("once the quota has room again the whole log is stored and the flag clears", () => {
