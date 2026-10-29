@@ -26,25 +26,27 @@ def work(tmp_path, monkeypatch):
     return work
 
 
-@pytest.mark.parametrize(("check", "error"), CHECKS)
-def test_a_relative_path_inside_resolves_under_the_working_directory(
-    work, check, error
-):
+@pytest.mark.parametrize("check", [evaluation.confined, audio_embedding.confined])
+def test_a_relative_path_inside_resolves_under_the_working_directory(work, check):
     assert check(Path("out") / "run.json") == (work / "out" / "run.json").resolve()
 
 
-@pytest.mark.parametrize(("check", "error"), CHECKS)
-def test_an_absolute_path_inside_resolves_to_itself(work, check, error):
+@pytest.mark.parametrize("check", [evaluation.confined, audio_embedding.confined])
+def test_an_absolute_path_inside_resolves_to_itself(work, check):
     inside = work / "run.json"
     assert check(inside) == inside.resolve()
 
 
 @pytest.mark.parametrize(("check", "error"), CHECKS)
 def test_a_relative_path_outside_is_refused_with_the_callers_error(work, check, error):
+    outside = Path("..") / "run.json"
     with pytest.raises(error) as refused:
-        check(Path("..") / "run.json")
+        check(outside)
+    # type() rather than isinstance: a subclass of the caller's error must not pass.
     assert type(refused.value) is error
-    assert str(refused.value) == "../run.json is outside the working directory"
+    # The message names the path as it renders on this platform (``..\run.json`` on
+    # Windows), so build the expected text from the same Path rather than a literal.
+    assert str(refused.value) == f"{outside} is outside the working directory"
 
 
 @pytest.mark.parametrize(("check", "error"), CHECKS)
