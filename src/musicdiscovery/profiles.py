@@ -24,6 +24,8 @@ GENRE_AFFINITY = 3.0
 TAG_AFFINITY = 3.0
 AXIS_AFFINITY = 1.0
 TAG_POOL = 20  # taste tags come from the genre's most common tags
+# Deliberately not ranking.Z_CLIP: the profiles are the evaluation's ground
+# truth and must not move when a ranker constant is tuned.
 _Z_CLIP = 3.0
 _SPLIT_ATTEMPTS = 50
 

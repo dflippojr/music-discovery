@@ -14,7 +14,7 @@ SIMILARITY_WEIGHT = 1.0
 AXIS_WEIGHT = 0.05  # per standard deviation, z clipped to +/-3
 GENRE_WEIGHT = 0.15
 TAG_WEIGHT = 0.10
-_Z_CLIP = 3.0
+Z_CLIP = 3.0
 _FEATURE_CLIP = 5.0
 _MAX_EXPLANATIONS = 3
 
@@ -54,7 +54,7 @@ class Ranker(Protocol):
     ) -> list[Recommendation]: ...
 
 
-class _Fit:
+class Fit:
     """Standardised features and their PCA projection, fit on one catalog."""
 
     def __init__(self, catalog: Catalog, dimensions: int):
@@ -84,7 +84,8 @@ class _Fit:
         self.unit = self.projected / norms[:, None]
 
 
-def _allowed(preference: Preference, catalog: Catalog) -> np.ndarray:
+def allowed_rows(preference: Preference, catalog: Catalog) -> np.ndarray:
+    """Which rows a ranker may show: not a seed, nor a seed's artist if excluded."""
     seed_rows = [catalog.position[s] for s in preference.seeds]
     allowed = np.ones(len(catalog), dtype=bool)
     allowed[seed_rows] = False
@@ -94,15 +95,18 @@ def _allowed(preference: Preference, catalog: Catalog) -> np.ndarray:
     return allowed
 
 
+_allowed = allowed_rows  # the old private name, kept for the existing tests
+
+
 def quality_terms(
-    preference: Preference, catalog: Catalog, fit: _Fit
+    preference: Preference, catalog: Catalog, fit: Fit
 ) -> list[tuple[str, str, np.ndarray]]:
     """Fixed-weight terms for each liked and disliked axis, genre and tag."""
     terms: list[tuple[str, str, np.ndarray]] = []
     for quality, sign in preference.signed_qualities():
         if quality.kind == "axis":
             axis = AXES[quality.name]
-            z = np.clip(fit.z[:, fit.columns[axis.column]], -_Z_CLIP, _Z_CLIP)
+            z = np.clip(fit.z[:, fit.columns[axis.column]], -Z_CLIP, Z_CLIP)
             up = quality.direction > 0
             terms.append(
                 (
@@ -136,11 +140,11 @@ class BaselineRanker:
     def __init__(self, dimensions: int = PCA_DIMENSIONS):
         self.dimensions = dimensions
         self._fit_catalog: Catalog | None = None
-        self._fit: _Fit | None = None
+        self._fit: Fit | None = None
 
-    def _fitted(self, catalog: Catalog) -> _Fit:
+    def _fitted(self, catalog: Catalog) -> Fit:
         if self._fit is None or self._fit_catalog is not catalog:
-            self._fit = _Fit(catalog, self.dimensions)
+            self._fit = Fit(catalog, self.dimensions)
             self._fit_catalog = catalog
         return self._fit
 
@@ -173,7 +177,7 @@ class BaselineRanker:
 
         terms += quality_terms(preference, catalog, fit)
         scores = np.sum([values for _, _, values in terms], axis=0)
-        return terms, scores, _allowed(preference, catalog)
+        return terms, scores, allowed_rows(preference, catalog)
 
     @staticmethod
     def build(catalog: Catalog, row: int, terms) -> Recommendation:

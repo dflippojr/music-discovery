@@ -30,7 +30,7 @@ from musicdiscovery.ranking import (
     BaselineRanker,
     Ranker,
     Recommendation,
-    _allowed,
+    allowed_rows,
     display_title,
 )
 
@@ -84,7 +84,7 @@ class RandomRanker:
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
         preference.validate(catalog)
         rng = np.random.default_rng([self.seed, *preference.seeds])
-        candidates = np.flatnonzero(_allowed(preference, catalog))
+        candidates = np.flatnonzero(allowed_rows(preference, catalog))
         picked = rng.permutation(candidates)[: preference.k]
         return _bare(catalog, picked.tolist())
 
@@ -94,7 +94,7 @@ class PopularRanker:
 
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
         preference.validate(catalog)
-        allowed = _allowed(preference, catalog)
+        allowed = allowed_rows(preference, catalog)
         genre = catalog.frame["genre_top"].iloc[catalog.position[preference.seeds[0]]]
         if isinstance(genre, str):
             allowed &= catalog.has_genre(genre)

@@ -26,7 +26,7 @@ from musicdiscovery.profile_ranker import weighted_centre
 from musicdiscovery.ranking import (
     BaselineRanker,
     Recommendation,
-    _allowed,
+    allowed_rows,
     quality_terms,
 )
 
@@ -413,7 +413,7 @@ class AudioEmbeddingRanker:
         terms += quality_terms(preference, catalog, self._baseline._fitted(catalog))
         scores = np.sum([values for _, _, values in terms], axis=0)
 
-        candidates = np.flatnonzero(_allowed(preference, catalog) & aligned.has)
+        candidates = np.flatnonzero(allowed_rows(preference, catalog) & aligned.has)
         # Highest score first; ties go to the lower track id.
         order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
         chosen = candidates[order[: preference.k]]

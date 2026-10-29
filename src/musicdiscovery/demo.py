@@ -22,7 +22,7 @@ import pandas as pd
 from musicdiscovery import ranking
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.evaluation import confined, generate_queries, make_ranker
-from musicdiscovery.hybrid import VARIETY_TEXT, HybridConfig, _Metadata
+from musicdiscovery.hybrid import VARIETY_TEXT, HybridConfig, Metadata
 from musicdiscovery.preference import AXES, Preference
 
 FORMAT_VERSION = 1
@@ -115,13 +115,13 @@ def build_catalog(catalog: Catalog) -> dict:
     frame = catalog.frame
     fit = ranking.BaselineRanker()._fitted(catalog)
     config = HybridConfig.load()
-    metadata = _Metadata(catalog)
+    metadata = Metadata(catalog)
     if metadata.size > _UINT16_MAX:
         raise DemoError("metadata vocabulary is too large for 16-bit token ids")
 
     projected, projected_scale = _quantise(fit.projected, np.abs(fit.projected).max())
     axis_names = sorted(AXES)
-    clip = ranking._Z_CLIP
+    clip = ranking.Z_CLIP
     z = np.stack(
         [
             np.clip(fit.z[:, fit.columns[AXES[a].column]], -clip, clip)
