@@ -44,9 +44,14 @@ export function timestamp(date = new Date()) {
   return `${date.toISOString().slice(0, 19)}Z`;
 }
 
-/** Whether every result in the task has a rating and a preference has been chosen. */
+/** Whether every list in the task shows at least one track; an empty list gives nothing to compare. */
+export function listsFilled(task) {
+  return task.lists.every((list) => list.results.length >= 1);
+}
+
+/** Whether every list has tracks, every result has a rating and a preference has been chosen. */
 export function taskComplete(task) {
-  return task.preferred !== null && task.lists.every((list) => list.results.every((r) => r.rating === 1 || r.rating === -1));
+  return task.preferred !== null && listsFilled(task) && task.lists.every((list) => list.results.every((r) => r.rating === 1 || r.rating === -1));
 }
 
 /**

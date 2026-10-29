@@ -26,6 +26,15 @@ track's source page to listen, gives every track a thumbs up or down, ticks
 "New to me" if they had not heard it, and says which list they prefer overall
 (A, B or no preference). The page shows no ranker names, scores or explanations.
 
+Every list has at least one track. The baseline ranker returns nothing for a
+seed whose sound sits at the catalog mean when no quality is picked
+(`docs/ranking.md`), so the page ranks both lists as the seed and qualities
+change and keeps "Show the two lists" disabled while either would be empty. It
+says that the seed gives one of the lists nothing to show and asks for a
+quality or another seed, without saying which ranker. Such a seed can still be
+studied with a quality, which keeps the baseline the documented one and every
+exported list within the schema.
+
 ## Consent
 
 Shown on the page before the first task and sent with the invitation:

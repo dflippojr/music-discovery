@@ -928,7 +928,7 @@ describe("study page", () => {
     assert.deepEqual(await axeViolations(page), []);
     assert.doesNotMatch((await page.content()).toLowerCase(), /hybrid|baseline/);
 
-    const folk = page.getByRole("button", { name: /^Folk/ });
+    const folk = page.getByRole("button", { name: /^Folk ,/ });
     await folk.click(); // liked
     assert.equal(await show.isDisabled(), false);
     assert.equal(await status.textContent(), "");
@@ -939,7 +939,7 @@ describe("study page", () => {
     await seed("Synthetic track 101");
     assert.equal(await show.isDisabled(), false);
     assert.equal(await status.textContent(), "");
-    for (const lists of [(await newTask()).lists]) for (const list of lists) assert.ok(list.results.length >= 1, list.label);
+    for (const list of (await newTask()).lists) assert.ok(list.results.length >= 1, list.label);
 
     await seed("Synthetic track 100");
     assert.equal(await show.isDisabled(), true);
