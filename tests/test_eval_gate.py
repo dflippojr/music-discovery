@@ -188,10 +188,9 @@ def _damage(split, metric, key, how):
         split[metric][key] = how
 
 
-# A bound that is null, absent, NaN, a string, or whose cell is not a mapping
-# (#163, #175).
-BAD_BOUNDS = [None, "missing", float("nan"), "not a mapping", "0.5"]
-BAD_BOUND_IDS = ["null", "missing", "nan", "not-a-mapping", "string"]
+# A bound that is null, absent, NaN, or whose cell is not a mapping (#163).
+BAD_BOUNDS = [None, "missing", float("nan"), "not a mapping"]
+BAD_BOUND_IDS = ["null", "missing", "nan", "not-a-mapping"]
 
 
 @pytest.mark.parametrize("how", BAD_BOUNDS, ids=BAD_BOUND_IDS)
@@ -251,6 +250,44 @@ def test_a_run_cell_with_a_non_numeric_mean_fails_its_check(
     assert "Traceback" not in captured.err
     assert "| hybrid | same-genre nDCG@10 | undefined |" in captured.out
     assert "**FAIL**: no defined score in the run" in captured.out
+
+
+def test_a_non_numeric_baseline_bound_fails_its_check_in_a_row(
+    checkout, baseline, capsys
+):
+    # #175: a string bound is not missing, so it is not a GateError (#163). Its
+    # check fails, and render() shows the bound as undefined in that check's row.
+    _damage(baseline["rankers"]["hybrid"]["validation"], "genre_ndcg", "lo", "0.5")
+    run = make_report(SCORES)
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "genre_ndcg"): "the baseline's lower bound is not a number"
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert (
+        "| hybrid | same-genre nDCG@10 | 0.990 | undefined | 0.160 "
+        "| **FAIL**: the baseline's lower bound is not a number |"
+    ) in captured.out
+
+
+def test_a_non_numeric_random_bound_fails_its_checks_in_a_row(
+    checkout, baseline, capsys
+):
+    # #175: the same for random's upper bound, which every metric's check uses.
+    run = make_report(SCORES)
+    _damage(run["rankers"]["random"]["validation"], "tag_overlap", "hi", "0.5")
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "tag_overlap"): "random's upper bound is not a number",
+        ("profile", "tag_overlap"): "random's upper bound is not a number",
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert (
+        "| hybrid | tag overlap@10 | 0.250 | 0.210 | undefined "
+        "| **FAIL**: random's upper bound is not a number |"
+    ) in captured.out
 
 
 def test_main_exits_one_when_the_cutoffs_differ(checkout, baseline, capsys):
