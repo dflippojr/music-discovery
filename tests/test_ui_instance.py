@@ -2,6 +2,8 @@
 
 import ast
 import importlib.util
+import io
+import itertools
 import json
 import os
 import re
@@ -11,9 +13,11 @@ import subprocess
 import sys
 import threading
 import time
+from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import psutil
@@ -288,6 +292,121 @@ def test_signal_during_seeding_exits_child_and_allows_restart(
     assert_restart(launcher, monkeypatch, seeding)
 
 
+@pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
+def test_signal_while_serving_cleans_up(launcher, monkeypatch, seeding, capsys, cancel):
+    seed, children, ports = seeding
+    seed()
+    previous_handler = signal.getsignal(cancel)
+    original_serve = ThreadingHTTPServer.serve_forever
+    start_returned = threading.Event()
+    workers = []
+    # Hold the server: garbage collection would close a socket start() left open,
+    # and assert_cleaned's port check would then pass.
+    servers = []
+    errors = []
+    observed = {}
+
+    def signal_once_serving(server):
+        try:
+            observed["instance"] = json.loads(launcher.HANDLE.read_text())["instance"]
+            origin = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(origin + "/__ui_health", timeout=5) as response:
+                observed["health"] = json.load(response)
+            # raise_signal, not os.kill: on Windows os.kill ends the process.
+            signal.raise_signal(cancel)
+            if not start_returned.wait(5):
+                raise TimeoutError("The signal did not stop the server")
+        except Exception as error:
+            errors.append(error)
+        finally:
+            # Bound the test if the signal or the health request fails.
+            server.shutdown()
+
+    def serve(server, **kwargs):
+        servers.append(server)
+        worker = threading.Thread(
+            target=signal_once_serving, args=[server], daemon=True
+        )
+        workers.append(worker)
+        worker.start()
+        original_serve(server, **kwargs)
+
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", serve)
+    try:
+        launcher.start(0)
+    finally:
+        start_returned.set()
+    workers[0].join(timeout=5)
+    assert not workers[0].is_alive()
+    assert not errors
+    assert observed["health"] == {"instance": observed["instance"]}
+    assert signal.getsignal(cancel) == previous_handler
+    assert f"UI_URL=http://127.0.0.1:{ports[-1]}/" in capsys.readouterr().out
+    assert_cleaned(launcher, children, ports)
+
+
+def test_signal_after_the_fixture_cancels_before_ready(
+    launcher, monkeypatch, seeding, capsys
+):
+    seed, children, ports = seeding
+    seed()
+    original_wait = launcher.wait_for_fixture
+
+    def finished_then_signalled(child, stopping):
+        finished = original_wait(child, stopping)
+        signal.raise_signal(signal.SIGTERM)
+        return finished
+
+    def served(server, **kwargs):
+        raise AssertionError("The server started after the cancellation")
+
+    monkeypatch.setattr(launcher, "wait_for_fixture", finished_then_signalled)
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", served)
+    launcher.start(0)
+    captured = capsys.readouterr()
+    assert "UI startup cancelled\n" in captured.err
+    assert "UI_URL=" not in captured.out
+    assert_cleaned(launcher, children, ports)
+
+
+def cancel_after_changing_handle(launcher, monkeypatch, change):
+    def cancelled(child, stopping):
+        change()
+        return False
+
+    monkeypatch.setattr(launcher, "wait_for_fixture", cancelled)
+
+
+def test_start_leaves_another_instances_handle(launcher, monkeypatch, seeding):
+    seed, children, ports = seeding
+    seed(block=True)
+    # Indented, so a rewrite in start()'s own json.dumps format would differ.
+    foreign = json.dumps(
+        {
+            "instance": "run-fedcba9876543210",
+            "pid": 12345,
+            "port": 4173,
+            "token": "synthetic-token-0123456789",
+        },
+        indent=2,
+    ).encode()
+    cancel_after_changing_handle(
+        launcher, monkeypatch, lambda: launcher.HANDLE.write_bytes(foreign)
+    )
+    launcher.start(0)
+    assert launcher.HANDLE.read_bytes() == foreign
+    launcher.HANDLE.unlink()  # assert_cleaned checks everything else start() owns
+    assert_cleaned(launcher, children, ports)
+
+
+def test_start_exits_cleanly_when_its_handle_is_gone(launcher, monkeypatch, seeding):
+    seed, children, ports = seeding
+    seed(block=True)
+    cancel_after_changing_handle(launcher, monkeypatch, launcher.HANDLE.unlink)
+    launcher.start(0)
+    assert_cleaned(launcher, children, ports)
+
+
 def test_cleanup_refuses_paths_outside_disposable_directory(launcher, tmp_path):
     unrelated = tmp_path / "run-unrelated"
     unrelated.mkdir()
@@ -408,6 +527,101 @@ def assert_preserved(launcher, bundle):
     assert launcher.HANDLE.exists()
     assert (bundle / "synthetic.txt").read_text() == "synthetic"
     assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
+
+
+STOP_TOKEN = "synthetic-token-0123456789"
+
+
+@pytest.fixture
+def stop_endpoint(launcher, tmp_path):
+    """The launcher's real server on a thread, built as start() builds it."""
+    server = launcher.ExclusiveHTTPServer(
+        ("127.0.0.1", 0), partial(launcher.Handler, directory=str(tmp_path))
+    )
+    server.instance = "run-0123456789abcdef"
+    server.token = STOP_TOKEN
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    yield server, thread
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
+
+def post(server, path, headers):
+    request = Request(
+        f"http://127.0.0.1:{server.server_port}{path}", method="POST", headers=headers
+    )
+    return urlopen(request, timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "headers"),
+    [
+        ("/__ui_stop", {}),
+        ("/__ui_stop", {"X-UI-Token": "wrong-synthetic-token"}),
+        ("/other", {"X-UI-Token": STOP_TOKEN}),
+    ],
+    ids=["missing", "wrong", "path"],
+)
+def test_stop_endpoint_refuses_missing_or_wrong_token(stop_endpoint, path, headers):
+    server, thread = stop_endpoint
+    with pytest.raises(HTTPError) as refused:
+        post(server, path, headers)
+    assert refused.value.code == 403
+    # A shutdown would take one 0.01 s poll; a health request alone could beat it.
+    # Stay connected meanwhile: a handler that went on to stop the server after its
+    # 403 would otherwise die writing to a closed socket and hide the shutdown.
+    with refused.value:
+        thread.join(timeout=0.2)
+    assert thread.is_alive()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    with urlopen(origin + "/__ui_health", timeout=5) as response:
+        assert json.load(response) == {"instance": server.instance}
+
+
+def test_stop_endpoint_accepts_the_token_and_stops(stop_endpoint):
+    server, thread = stop_endpoint
+    with post(server, "/__ui_stop", {"X-UI-Token": STOP_TOKEN}) as response:
+        assert response.status == 204
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+def test_stop_reports_incomplete_teardown(launcher, monkeypatch, stale):
+    metadata, bundle = stale
+    health = json.dumps({"instance": metadata["instance"]}).encode()
+    monkeypatch.setattr(launcher, "urlopen", lambda *_, **__: io.BytesIO(health))
+    # Replace the module's name for time: patching time.monotonic itself would
+    # also move the clock under pytest and every other thread.
+    clock = itertools.count(step=6)
+    slept = []
+    monkeypatch.setattr(
+        launcher,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock), sleep=slept.append),
+    )
+    with pytest.raises(ValueError, match="Teardown incomplete"):
+        launcher.stop()
+    assert slept == [0.1, 0.1]  # read 6 and 12 before the 15 s deadline, then 18
+    assert_preserved(launcher, bundle)
+
+
+def test_stop_reports_a_bundle_that_outlives_the_handle(launcher, monkeypatch, stale):
+    metadata, bundle = stale
+    health = json.dumps({"instance": metadata["instance"]}).encode()
+
+    def request(url, **kwargs):
+        if isinstance(url, Request):
+            launcher.HANDLE.unlink()
+        return io.BytesIO(health)
+
+    monkeypatch.setattr(launcher, "urlopen", request)
+    with pytest.raises(ValueError, match="Teardown incomplete"):
+        launcher.stop()
+    assert (bundle / "synthetic.txt").read_text() == "synthetic"
 
 
 def test_recover_dead_process_free_port_and_repeat(launcher, stale, capsys):
