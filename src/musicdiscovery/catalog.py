@@ -49,8 +49,9 @@ def _check_usable(frame: pd.DataFrame) -> None:
     missing = sorted(_LOADED_COLUMNS - set(frame.columns))
     if missing:
         raise CatalogError(f"catalog is missing columns: {_named(missing)}")
-    if not pd.api.types.is_integer_dtype(frame["track_id"]):
-        raise CatalogError("catalog column track_id is not integer")
+    track_ids = frame["track_id"]
+    if not pd.api.types.is_integer_dtype(track_ids) or track_ids.isna().any():
+        raise CatalogError("catalog column track_id has missing or non-integer ids")
     if not _is_list_column(frame["tags"], str):
         raise CatalogError("catalog column tags has cells that are not lists of text")
     if not _is_list_column(frame["genre_ids"], numbers.Integral):

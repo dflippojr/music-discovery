@@ -1,6 +1,7 @@
 """A catalog file that loads but that rankers cannot use is reported, not raised."""
 
 from pathlib import Path
+from traceback import format_tb
 
 import pandas as pd
 import pytest
@@ -12,7 +13,11 @@ from test_ingest import _tracks_csv, _write_archive
 
 from musicdiscovery import cli
 from musicdiscovery.catalog import METADATA_COLUMNS, Catalog, CatalogError
-from musicdiscovery.evaluation import generate_queries, write_queries
+from musicdiscovery.evaluation import (
+    DEFAULT_QUERIES,
+    generate_queries,
+    write_queries,
+)
 from musicdiscovery.ingest import ingest
 
 NAN_FIRST = [float("nan")]
@@ -175,6 +180,16 @@ def test_load_checks_the_metadata_rankers_read(tmp_path, column, values, named):
         Catalog.load(path)
 
 
+def test_load_refuses_a_missing_nullable_track_id(tmp_path):
+    frame = make_frame(per_genre=2)
+    frame["track_id"] = frame["track_id"].astype("Int64")
+    frame.iloc[0, frame.columns.get_loc("track_id")] = pd.NA
+    path = tmp_path / "catalog.parquet"
+    frame.to_parquet(path, index=False)
+    with pytest.raises(CatalogError, match="track_id.*run `musicdiscovery ingest`"):
+        Catalog.load(path)
+
+
 def test_many_bad_columns_are_counted_not_listed(tmp_path):
     frame = make_frame(per_genre=2)
     for i in range(7):
@@ -199,7 +214,10 @@ def test_a_missing_axis_column_is_reported(tmp_path, monkeypatch, capsys, argv):
 
 # The class of bug: whatever a damaged file holds, a command either works or
 # prints one line. It never raises. Each law below draws one kind of damage.
-COLUMNS = list(make_frame(per_genre=1).columns)
+BASE_FRAME = make_frame(per_genre=70)  # large enough to generate queries from
+UNDAMAGED = Catalog(BASE_FRAME)
+QUERIES = generate_queries(UNDAMAGED, per_split=2)
+COLUMNS = list(BASE_FRAME.columns)
 JUNK = {
     "text": "x",
     "null": None,
@@ -231,7 +249,7 @@ def _damage_cell(frame, column, junk):
 
 @st.composite
 def damaged(draw):
-    frame = make_frame(per_genre=8)
+    frame = BASE_FRAME
     for _ in range(draw(st.integers(1, 2))):
         how = draw(st.sampled_from(["drop", "column", "cell", "extra"]))
         column = draw(st.sampled_from([c for c in COLUMNS if c in frame]))
@@ -247,47 +265,51 @@ def damaged(draw):
     return frame
 
 
-@pytest.fixture(scope="module")
-def queries(tmp_path_factory):
-    path = tmp_path_factory.mktemp("queries") / "queries.jsonl"
-    catalog = Catalog(make_frame(per_genre=8))
-    write_queries(path, generate_queries(catalog, per_split=2), catalog)
-    return path
+COMMANDS = [
+    ["recommend", "--seed", "100", "--ranker", "baseline"],
+    ["recommend", "--seed", "100", "--ranker", "hybrid"],
+    ["recommend", "--seed", "100", "--ranker", "profile"],
+    ["recommend", "--seed", "100", "--like", "tag:loud", "--like", "more:energy"],
+    ["evaluate", "--generate-queries"],
+    ["evaluate", "--generate-profiles"],
+    ["evaluate", "--ranker", "hybrid", "--ranker", "popular"],
+    ["export-demo", "out"],
+]
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["recommend", "--seed", "100", "--ranker", "baseline"],
-        ["recommend", "--seed", "100", "--ranker", "hybrid"],
-        ["recommend", "--seed", "100", "--ranker", "profile"],
-        ["recommend", "--seed", "100", "--like", "tag:loud", "--like", "more:energy"],
-        ["evaluate", "--generate-queries"],
-        ["evaluate", "--generate-profiles"],
-        ["evaluate", "--ranker", "hybrid", "--ranker", "popular"],
-        ["export-demo", "out"],
-    ],
-    ids=" ".join,
-)
+def _run(frame, argv, capsys):
+    """Write `frame` and run `argv` in the working directory, as a user would."""
+    target = Path("data/catalog")
+    target.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(target / "catalog.parquet", index=False)
+    if argv[:2] == ["evaluate", "--ranker"]:
+        write_queries(DEFAULT_QUERIES, QUERIES, UNDAMAGED)
+    code = cli.main(argv)
+    return code, capsys.readouterr()
+
+
+@pytest.mark.parametrize("argv", COMMANDS, ids=" ".join)
+def test_an_undamaged_catalog_passes_every_command(tmp_path, monkeypatch, capsys, argv):
+    """Without this, the law below would hold for a command that always refuses."""
+    monkeypatch.chdir(tmp_path)
+    code, captured = _run(BASE_FRAME, argv, capsys)
+    assert code == 0, captured.err
+
+
+@pytest.mark.parametrize("argv", COMMANDS, ids=" ".join)
 @settings(
     max_examples=40,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
 @given(frame=damaged())
-def test_a_damaged_catalog_never_raises(
-    tmp_path, monkeypatch, capsys, queries, argv, frame
-):
+def test_a_damaged_catalog_never_raises(tmp_path, monkeypatch, capsys, argv, frame):
     monkeypatch.chdir(tmp_path)
-    target = Path("data/catalog")
-    target.mkdir(parents=True, exist_ok=True)
     try:
-        frame.to_parquet(target / "catalog.parquet", index=False)
-    except (ValueError, TypeError, OverflowError, ArrowException):
-        assume(False)  # some junk cannot be in a parquet file at all
-    if "--ranker" in argv and argv[0] == "evaluate":
-        argv = [*argv, "--queries", str(queries)]
-    code = cli.main(argv)
-    captured = capsys.readouterr()
+        code, captured = _run(frame, argv, capsys)
+    except (ValueError, TypeError, OverflowError, ArrowException) as error:
+        # Some junk cannot be in a parquet file at all, so no such file can exist.
+        assume("to_parquet" not in "".join(format_tb(error.__traceback__)))
+        raise
     assert code in (0, 1)
     if code == 1:
         assert captured.err.count("\n") == 1, captured.err
