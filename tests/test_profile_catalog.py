@@ -44,9 +44,10 @@ def _run(*argv) -> int:
     return main([str(a) for a in argv])
 
 
-def test_main_reports_an_unreadable_vector_cache(data_dir, capsys):
+@pytest.mark.parametrize("content", ["not an npz archive", ""])
+def test_main_reports_an_unreadable_vector_cache(data_dir, capsys, content):
     bad = data_dir / "bad.npz"
-    bad.write_text("not an npz archive")
+    bad.write_text(content)
     out = data_dir / "out.json"
 
     assert _run("--data-dir", data_dir, "--vectors", bad, "--out", out) == 1

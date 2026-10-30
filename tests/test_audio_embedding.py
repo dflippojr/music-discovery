@@ -281,6 +281,9 @@ def test_vector_store_load_errors(tmp_path):
     bad.write_bytes(b"not a cache")
     with pytest.raises(AudioEmbeddingError, match="cannot read"):
         VectorStore.load(bad)
+    bad.write_bytes(b"")  # numpy raises EOFError on an empty file
+    with pytest.raises(AudioEmbeddingError, match="cannot read"):
+        VectorStore.load(bad)
 
 
 def test_vector_store_rejects_a_plain_npy_and_a_non_object_meta(tmp_path):
