@@ -67,7 +67,9 @@ function newStore() {
             },
             set: async (row) => {
               if (store.failing) throw new Error("down");
-              if (store.hold) await store.hold;
+              const held = store.hold; // holds back only the next write
+              store.hold = null;
+              if (held) await held;
               store.docs[`${name}/${id}`] = row;
             },
           }),
@@ -134,17 +136,17 @@ const scenarios = {
     const store = newStore(), phone = device();
     const view = load(phone, store);
     await settle();
-    await view.pick("A");
-    // Another device saved B after this pick was made, before this write ran.
     store.failing = true;
     await view.pick("A");
     await settle();
     store.failing = false;
-    const kitDocs = [...store.collections][0];
-    store.docs[`${kitDocs}/pair-1`] = { pair: 1, pick: "B", at: store.clock + 500 };
-    const again = load(phone, store);
+    // Another device saves B while this pick waits for its retry.
+    const [kit] = store.collections;
+    store.docs[`${kit}/pair-1`] = { pair: 1, pick: "B", at: store.clock + 500 };
+    await view.get("next").click();
+    await view.pick("A");
     await settle();
-    return { local: again.picks()["1"], stored: firstPick(store) };
+    return { local: view.picks()["1"], stored: firstPick(store) };
   },
   async last_of_two_quick_picks_lands() {
     const store = newStore(), phone = device();
@@ -156,7 +158,6 @@ const scenarios = {
     await settle();
     view.pick("B");
     await settle();
-    store.hold = null;
     release();
     await settle();
     return { stored: firstPick(store) };
