@@ -261,9 +261,12 @@ def embed_archive(
     run and this raises `AudioEmbeddingError`.
 
     Until the encoder has handled a clip, a failure cannot be judged, so the clip
-    waits and is tried again at the end of the run. If no clip encodes at all,
-    this raises `AudioEmbeddingError` and records none of them. Both paths must
-    be inside the working directory.
+    waits and is tried again at the end of the run. If no clip encodes at all and
+    the cache has no vectors, the clips are recorded and a later run tries them
+    again, since nothing shows that they, not the encoder, are at fault. If the
+    cache has vectors from before `longest_clip` was kept, this raises
+    `AudioEmbeddingError` and records none of them. Both paths must be inside the
+    working directory.
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
@@ -291,14 +294,20 @@ def embed_archive(
         store = VectorStore(np.zeros(0), np.zeros((0, 0)), {**meta, "failures": {}})
 
     wanted = select_tracks(catalog, limit, sample_seed)
-    done = {int(t) for t in store.track_ids} | {int(t) for t in store.failures}
-    todo = [t for t in wanted if t not in done]
     # One dict, so Ctrl+C cannot land between adding a track id and its vector.
     rows = dict(zip(store.track_ids.tolist(), store.vectors, strict=True))
     failures = store.failures
+    if not rows:  # no clip has ever encoded, so these say nothing about the clips
+        failures = {
+            track: reason
+            for track, reason in failures.items()
+            if not reason.startswith("cannot encode")
+        }
+    done = {*rows, *(int(t) for t in failures)}
+    todo = [t for t in wanted if t not in done]
     resumed_with = len(rows)
     longest = store.meta.get("longest_clip")
-    unjudged = []
+    unjudged: dict[int, str] = {}
 
     def save() -> None:
         stacked = np.stack(list(rows.values())) if rows else np.zeros((0, 0))
@@ -322,6 +331,13 @@ def embed_archive(
         rows.update(zip(track_ids, encode(clips), strict=True))
         longest = max(longest or 0, *(len(clip) for clip in clips))
 
+    def keep_batch(track_ids: list[int], clips: list[np.ndarray]) -> bool:
+        try:
+            keep(track_ids, clips)
+        except Exception:  # noqa: BLE001 - the caller finds the clip that fails
+            return False
+        return True
+
     def check_encoder(samples: int) -> None:
         try:
             encode([_test_tone(samples)])
@@ -332,15 +348,20 @@ def embed_archive(
             ) from error
 
     def encode_alone(track_id: int, clip: np.ndarray) -> None:
+        reason = None
         try:
             keep([track_id], [clip])
         except Exception as error:  # noqa: BLE001 - any encoder error
-            if longest is None:
-                check_encoder(int(MIN_SECONDS * SAMPLE_RATE))
-                unjudged.append(track_id)
-            else:
-                check_encoder(min(len(clip), longest))
-                failures[str(track_id)] = f"cannot encode: {type(error).__name__}"
+            reason = f"cannot encode: {type(error).__name__}"
+        # Out of the handler, whose traceback keeps the failed call's memory.
+        if reason is None:
+            return
+        if longest is None:
+            check_encoder(int(MIN_SECONDS * SAMPLE_RATE))
+            unjudged[track_id] = reason
+        else:
+            check_encoder(min(len(clip), longest))
+            failures[str(track_id)] = reason
 
     def read_clip(zf: zipfile.ZipFile, track_id: int) -> np.ndarray | None:
         """The clip's samples, or None once it is recorded as a failure."""
@@ -369,9 +390,7 @@ def embed_archive(
                         batch_ids.append(track_id)
                         clips.append(clip)
                 if clips:
-                    try:
-                        keep(batch_ids, clips)
-                    except Exception:  # noqa: BLE001 - find the clip that fails
+                    if not keep_batch(batch_ids, clips):
                         for track_id, clip in zip(batch_ids, clips, strict=True):
                             encode_alone(track_id, clip)
                 since_save += len(todo[start : start + batch_size])
@@ -382,14 +401,18 @@ def embed_archive(
                         f"embedded {len(rows)} of {len(wanted)}, {len(failures)} failed"
                     )
             if unjudged and longest is None:
-                raise AudioEmbeddingError(
-                    f"no clip encodes, though a short test tone does; "
-                    f"{len(unjudged)} clips left for the next run"
-                )
-            for track_id in unjudged:
-                clip = read_clip(zf, track_id)
-                if clip is not None:
-                    encode_alone(track_id, clip)
+                if rows:
+                    raise AudioEmbeddingError(
+                        f"no clip encodes, though a short test tone does; "
+                        f"{len(unjudged)} clips left for the next run"
+                    )
+                failures.update({str(t): reason for t, reason in unjudged.items()})
+                log("no clip encoded; a later run tries them again")
+            elif unjudged:
+                for track_id in unjudged:
+                    clip = read_clip(zf, track_id)
+                    if clip is not None:
+                        encode_alone(track_id, clip)
         finally:
             try:
                 save()
