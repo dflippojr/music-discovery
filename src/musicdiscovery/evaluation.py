@@ -229,7 +229,7 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
             for q in payload["queries"]
         ]
         expected = payload.get("catalog_tracks")
-    except (ValueError, KeyError, TypeError) as error:
+    except (ValueError, KeyError, TypeError, OverflowError) as error:
         raise EvaluationError(f"cannot read queries at {path}: {error!r}") from error
     if expected is not None and expected != len(catalog):
         raise EvaluationError(
@@ -295,7 +295,7 @@ def load_profiles(path: Path, catalog: Catalog) -> list[Profile]:
         payload = json.loads(path.read_text())
         profiles = [_profile(record) for record in payload["profiles"]]
         expected = payload["catalog_tracks"]
-    except (ValueError, KeyError, TypeError) as error:
+    except (ValueError, KeyError, TypeError, OverflowError) as error:
         raise EvaluationError(f"cannot read profiles at {path}: {error!r}") from error
     if expected != len(catalog):
         raise EvaluationError(

@@ -12,13 +12,20 @@ import json
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 from test_evaluation import make_frame
 
 from musicdiscovery import profile_training, tuning
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.evaluation import generate_queries, write_profiles, write_queries
+from musicdiscovery.evaluation import (
+    EvaluationError,
+    generate_queries,
+    load_profiles,
+    load_queries,
+    write_profiles,
+    write_queries,
+)
 from musicdiscovery.preference import PreferenceError
 from musicdiscovery.profiles import generate_profiles
 
@@ -117,6 +124,27 @@ def test_train_reports_a_preference_error(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().err == "train: unknown track ids: [999999]\n"
 
 
+@pytest.mark.parametrize(
+    ("load", "records", "write"),
+    [
+        (load_queries, "queries", "q.json"),
+        (load_profiles, "profiles", "p.json"),
+    ],
+)
+def test_loaders_report_an_infinite_id(tmp_path, monkeypatch, load, records, write):
+    monkeypatch.chdir(tmp_path)
+    catalog = write_catalog()
+    if records == "queries":
+        write_queries(Path(write), generate_queries(catalog, per_split=5), catalog)
+    else:
+        write_profiles(Path(write), generate_profiles(catalog, per_split=5), catalog)
+    payload = json.loads(Path(write).read_text())
+    payload[records][0]["id"] = float("inf")
+    Path(write).write_text(json.dumps(payload))
+    with pytest.raises(EvaluationError, match=f"cannot read {records}"):
+        load(Path(write), catalog)
+
+
 @pytest.fixture(scope="module")
 def files(tmp_path_factory):
     """A catalog with valid query and profile files, for edits to start from."""
@@ -153,14 +181,12 @@ def assert_one_line_or_success(name: str, command, args: list[str]) -> None:
         assert text.startswith(f"{name}: ") and text.count("\n") == 1, text
 
 
-@settings(max_examples=40)
 @given(index=RECORDS, field=QUERY_FIELDS, value=ODD_VALUES)
 def test_tune_reports_any_edited_query_in_one_line(files, index, field, value):
     edited("q.json", "queries", index, field, value)
     assert_one_line_or_success("tune", tuning.main, ["--queries", "edited.json"])
 
 
-@settings(max_examples=40)
 @given(index=RECORDS, field=PROFILE_FIELDS, value=ODD_VALUES)
 def test_train_reports_any_edited_profile_in_one_line(files, index, field, value):
     edited("p.json", "profiles", index, field, value)
