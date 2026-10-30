@@ -1000,8 +1000,8 @@ def test_running_out_of_memory_for_full_clips_blames_no_clip(tmp_path, catalog):
 
 
 def test_memory_pressure_on_an_older_cache_blames_no_clip(tmp_path, catalog):
-    # A cache from before `longest_clip`: its clips' lengths are unknown, so a
-    # one-second tone proves nothing about the full clips it holds.
+    # A cache from before `longest_clip`: the length comes from a clip it holds, so
+    # a tone that fits in memory cannot pass for one the size of a full clip.
     archive = write_bad_archive(tmp_path / "a.zip", catalog)
     out = tmp_path / "v.npz"
     decode = decode_with_long_tracks(set())
@@ -1011,7 +1011,7 @@ def test_memory_pressure_on_an_older_cache_blames_no_clip(tmp_path, catalog):
     store = VectorStore.load(out)
     del store.meta["longest_clip"]
     store.save(out)
-    with pytest.raises(AudioEmbeddingError, match="no clip encodes"):
+    with pytest.raises(AudioEmbeddingError, match="test tone"):
         embed_archive(
             catalog,
             archive,
@@ -1043,6 +1043,57 @@ def test_an_older_cache_gets_past_a_clip_over_the_length_limit(tmp_path, catalog
     store = VectorStore.load(out)
     assert store.failures == {str(long_track): "cannot encode: RuntimeError"}
     assert store.meta["longest_clip"] == 2 * SAMPLE_RATE
+
+
+def test_an_older_cache_gets_past_a_last_clip_that_always_fails(tmp_path, catalog):
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    tracks = [int(t) for t in catalog.track_ids]
+    decode = decode_with_bad_tracks({tracks[-1]})
+    with zipfile.ZipFile(archive) as zf:
+        rows = [fake_decode(zf.read(member_name(t)))[:DIMENSION] for t in tracks[:-1]]
+    VectorStore(
+        np.array(tracks[:-1]),
+        np.array(rows),
+        {
+            "model": "fake-encoder",
+            "sample_rate": SAMPLE_RATE,
+            "archive_sha1": sha1_of(archive),
+            "failures": {},
+        },
+    ).save(out)
+    result = embed_archive(
+        catalog, archive, out, RejectingEncoder(), expected_sha1=None, decode=decode
+    )
+    assert (result.embedded, result.failed, result.skipped) == (0, 1, 59)
+    store = VectorStore.load(out)
+    assert store.failures == {str(tracks[-1]): "cannot encode: RuntimeError"}
+    assert store.meta["longest_clip"] == SAMPLE_RATE
+
+
+def test_an_older_cache_with_no_readable_clip_still_completes(tmp_path, catalog):
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    VectorStore(
+        np.array([1]),
+        np.eye(1, DIMENSION),
+        {
+            "model": "fake-encoder",
+            "sample_rate": SAMPLE_RATE,
+            "archive_sha1": sha1_of(archive),
+            "failures": {},
+        },
+    ).save(out)
+    result = embed_archive(
+        catalog,
+        archive,
+        out,
+        RejectingEncoder(),
+        expected_sha1=None,
+        decode=decode_with_bad_tracks({100}),
+    )
+    assert (result.embedded, result.failed) == (59, 1)
+    assert VectorStore.load(out).failures == {"100": "cannot encode: RuntimeError"}
 
 
 def test_a_selection_of_only_failing_clips_completes_and_stays_retryable(
