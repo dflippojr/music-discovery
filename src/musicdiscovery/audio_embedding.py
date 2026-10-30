@@ -334,9 +334,10 @@ class AudioEmbeddingRanker:
     The profile is the strength-weighted mean of the vectors of the seeds that
     have one. Only tracks with a vector can be returned, so scoring stays inside
     the embedded catalog. An optional description vector (from
-    `describe_vector`) adds a text-to-audio term. When no seed has a vector and
-    there is no description, nothing in the query says what to sound like, so
-    the ranker returns an empty list instead of ordering tracks by id.
+    `describe_vector`) adds a text-to-audio term. When no seed has a vector, or
+    the seeds' vectors cancel out, and there is no description, nothing in the
+    query says what to sound like, so the ranker returns an empty list instead
+    of ordering tracks by id.
     """
 
     def __init__(
@@ -373,26 +374,39 @@ class AudioEmbeddingRanker:
         has = self.aligned(catalog).has
         return tuple(s for s in preference.seeds if not has[catalog.position[s]])
 
-    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
-        preference.validate(catalog)
+    def _seed_centre(
+        self, preference: Preference, catalog: Catalog
+    ) -> np.ndarray | None:
+        """The weighted centre of the seeds' vectors, or None with no seed vector."""
         aligned = self.aligned(catalog)
-        if not aligned.has.any():
-            raise AudioEmbeddingError("no catalog track has an audio vector")
         seed_rows = [catalog.position[s] for s in preference.seeds]
         pairs = [
             (row, w)
             for row, w in zip(seed_rows, preference.seed_weights(), strict=True)
             if aligned.has[row]
         ]
-        if not pairs and self.description is None:
+        if not pairs:
+            return None
+        rows, weights = zip(*pairs, strict=True)
+        return weighted_centre(aligned.unit[list(rows)], weights)
+
+    def seeds_cancel_out(self, preference: Preference, catalog: Catalog) -> bool:
+        """Whether seeds have vectors but their weighted centre is exactly zero."""
+        centre = self._seed_centre(preference, catalog)
+        return centre is not None and not np.linalg.norm(centre)
+
+    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
+        preference.validate(catalog)
+        aligned = self.aligned(catalog)
+        if not aligned.has.any():
+            raise AudioEmbeddingError("no catalog track has an audio vector")
+        centre = self._seed_centre(preference, catalog)
+        norm = 0.0 if centre is None else np.linalg.norm(centre)
+        # A centre of norm 0 (seeds whose vectors cancel out) says no more about
+        # the sound than no seed vector at all.
+        if not norm and self.description is None:
             return []
-        similarity = np.zeros(len(catalog))
-        if pairs:
-            rows, weights = zip(*pairs, strict=True)
-            centre = weighted_centre(aligned.unit[list(rows)], weights)
-            norm = np.linalg.norm(centre)
-            if norm:
-                similarity = aligned.unit @ (centre / norm)
+        similarity = aligned.unit @ (centre / norm) if norm else np.zeros(len(catalog))
         terms = [("embedding", SIMILARITY_TEXT, SIMILARITY_WEIGHT * similarity)]
         if self.description is not None:
             text, vector = self.description
