@@ -37,6 +37,7 @@ def make_frame(per_genre=40, extra_features=0, seed=0):
                     "genre_top": genre,
                     "genre_ids": [g + 1],
                     "tags": ["loud"] if i % 5 == 0 else ["quiet"],
+                    "listens": track_id,
                     "mfcc_mean_01": vec[0],
                     "mfcc_mean_02": vec[1],
                     "mfcc_mean_03": vec[2],
