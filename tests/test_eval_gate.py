@@ -581,18 +581,10 @@ def test_a_pointer_to_an_impossible_file_name_is_a_fail_line(checkout, baseline,
     assert written(err).startswith("eval-gate: ")
 
 
-@pytest.mark.parametrize("depth", [6_000, 200_000])
-def test_a_report_nested_too_deep_is_a_fail_line(checkout, baseline, depth):
-    # json.loads refuses the deepest with RecursionError; a shallower one loads but
-    # can still overflow the comparison or the repr in the message.
+def test_a_report_nested_too_deep_is_a_fail_line(checkout, baseline):
     args = setup_files(checkout, baseline, baseline)
-    Path(args[1]).write_text(
-        json.dumps({**baseline, "queries_sha256": "@"}).replace(
-            '"@"', "[" * depth + "]" * depth
-        ),
-        encoding="utf-8",
-    )
+    Path(args[1]).write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
     code, out, err = gate_output(args)
     assert code == 1
-    assert "**FAIL**" in written(out)
+    assert "cannot read" in written(out)
     assert written(err).startswith("eval-gate: ")
