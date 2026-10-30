@@ -312,3 +312,43 @@ def test_vendor_script_copies_runtime_files_and_the_stamp(bundle, tmp_path):
     assert empty.returncode == 1 and "missing" in empty.stderr
     usage = subprocess.run(["sh", str(script)], capture_output=True, text=True)
     assert usage.returncode == 2
+
+
+def test_export_demo_refuses_an_empty_catalog(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data" / "catalog"
+    data.mkdir(parents=True)
+    make_frame(per_genre=60).iloc[:0].to_parquet(data / "catalog.parquet", index=False)
+    out = tmp_path / "o"
+    assert main(["export-demo", str(out), "--data-dir", str(tmp_path / "data")]) == 1
+    err = capsys.readouterr().err
+    assert err.splitlines() == ["export-demo: catalog has no tracks"]
+    assert not out.exists()
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+def test_build_catalog_refuses_an_empty_catalog():
+    with pytest.raises(demo.DemoError, match="no tracks"):
+        demo.build_catalog(Catalog(make_frame(per_genre=60).iloc[:0]))
+
+
+def test_build_catalog_refuses_a_vocabulary_over_16_bits(catalog, monkeypatch):
+    size = demo.Metadata(catalog).size
+    monkeypatch.setattr(demo, "_UINT16_MAX", size)
+    assert demo.build_catalog(catalog)["count"] == len(catalog)
+    monkeypatch.setattr(demo, "_UINT16_MAX", size - 1)
+    with pytest.raises(demo.DemoError, match="too large for 16-bit"):
+        demo.build_catalog(catalog)
+
+
+def test_cli_reports_an_oversized_vocabulary(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data" / "catalog"
+    data.mkdir(parents=True)
+    make_frame(per_genre=60).to_parquet(data / "catalog.parquet", index=False)
+    monkeypatch.setattr(demo, "_UINT16_MAX", 1)
+    argv = ["export-demo", str(tmp_path / "o"), "--data-dir", str(tmp_path / "data")]
+    assert main(argv) == 1
+    assert capsys.readouterr().err.startswith(
+        "export-demo: metadata vocabulary is too large"
+    )

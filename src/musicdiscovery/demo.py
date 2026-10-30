@@ -112,6 +112,8 @@ def _table(values: list[str]) -> tuple[list[str], list[int]]:
 
 def build_catalog(catalog: Catalog) -> dict:
     """Everything the browser needs to run both rankers on this catalog."""
+    if not len(catalog):
+        raise DemoError("catalog has no tracks")
     frame = catalog.frame
     fit = ranking.BaselineRanker()._fitted(catalog)
     config = HybridConfig.load()
@@ -307,12 +309,13 @@ def export_demo(catalog: Catalog, out_dir: Path, release: bool = False) -> Bundl
     """
     out_dir = confined(out_dir)
     source_stamp = build_source(release)
+    catalog_data = build_catalog(catalog)  # refuses bad input before writing
     out_dir.mkdir(parents=True, exist_ok=True)
     source = resources.files("musicdiscovery").joinpath("demo")
     for name in STATIC_FILES:
         with resources.as_file(source.joinpath(name)) as path:
             shutil.copyfile(path, out_dir / name)
-    _write_json(out_dir / CATALOG_FILE, build_catalog(catalog))
+    _write_json(out_dir / CATALOG_FILE, catalog_data)
     _write_json(out_dir / SOURCES_FILE, build_sources(catalog))
     _write_json(out_dir / PARITY_FILE, build_parity(catalog))
     (out_dir / SOURCE_FILE).write_text(
