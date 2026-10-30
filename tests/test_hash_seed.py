@@ -34,8 +34,8 @@ def run(hash_seed: str, *argv: str, cwd: Path | None = None) -> str:
     return result.stdout
 
 
-def cli(hash_seed: str, *argv: str) -> str:
-    return run(hash_seed, "-c", CLI, *argv)
+def cli(hash_seed: str, *argv: str, cwd: Path | None = None) -> str:
+    return run(hash_seed, "-c", CLI, *argv, cwd=cwd)
 
 
 def files(root: Path) -> dict[str, bytes]:
@@ -73,11 +73,11 @@ def test_metadata_arrays_do_not_depend_on_hash_seed():
 
 
 def test_export_demo_bundle_does_not_depend_on_hash_seed(data_dir, tmp_path):
+    # export-demo writes only inside the working directory.
     bundles = []
     for seed in HASH_SEEDS:
-        out = tmp_path / seed
-        cli(seed, "export-demo", str(out), "--data-dir", str(data_dir))
-        bundle = files(out)
+        cli(seed, "export-demo", seed, "--data-dir", str(data_dir), cwd=tmp_path)
+        bundle = files(tmp_path / seed)
         # The one field allowed to differ: when the bundle was built.
         stamp = json.loads(bundle.pop("SOURCE.json"))
         assert stamp.pop("built")
@@ -98,16 +98,17 @@ def test_evaluate_reports_do_not_depend_on_hash_seed(tmp_path):
     # The query sampler refuses a catalog as small as the one above.
     (tmp_path / "data").mkdir()
     data_dir = write_catalog(tmp_path / "data", per_genre=100)
+    # evaluate writes only inside the working directory.
     common = ["--data-dir", str(data_dir), "--benchmark", "all"]
-    common += ["--queries", str(tmp_path / "queries.json")]
-    common += ["--profiles", str(tmp_path / "profiles.json")]
+    common += ["--queries", "queries.json", "--profiles", "profiles.json"]
     for ranker in CATALOG_RANKERS:
         common += ["--ranker", ranker]
-    cli("1", "evaluate", *common, "--generate-queries")
-    cli("1", "evaluate", *common, "--generate-profiles")
+    cli("1", "evaluate", *common, "--generate-queries", cwd=tmp_path)
+    cli("1", "evaluate", *common, "--generate-profiles", cwd=tmp_path)
     reports = []
     for seed in HASH_SEEDS:
-        out = tmp_path / f"report-{seed}"
-        cli(seed, "evaluate", *common, "--out-dir", str(out), "--date", "2026-01-02")
-        reports.append(files(out))
+        out = f"report-{seed}"
+        argv = [*common, "--out-dir", out, "--date", "2026-01-02"]
+        cli(seed, "evaluate", *argv, cwd=tmp_path)
+        reports.append(files(tmp_path / out))
     assert reports[0] == reports[1]
