@@ -999,6 +999,30 @@ def test_running_out_of_memory_for_full_clips_blames_no_clip(tmp_path, catalog):
     assert VectorStore.load(out).failures == {}
 
 
+def test_memory_pressure_on_an_older_cache_blames_no_clip(tmp_path, catalog):
+    # A cache from before `longest_clip`: its clips' lengths are unknown, so a
+    # one-second tone proves nothing about the full clips it holds.
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    decode = decode_with_long_tracks(set())
+    embed_archive(
+        catalog, archive, out, FakeEncoder(), limit=5, expected_sha1=None, decode=decode
+    )
+    store = VectorStore.load(out)
+    del store.meta["longest_clip"]
+    store.save(out)
+    with pytest.raises(AudioEmbeddingError, match="test tone"):
+        embed_archive(
+            catalog,
+            archive,
+            out,
+            LengthLimitEncoder(SAMPLE_RATE),
+            expected_sha1=None,
+            decode=decode,
+        )
+    assert VectorStore.load(out).failures == {}
+
+
 @pytest.mark.parametrize("clips_left", [1_000, 6], ids=["finished", "encoder-failed"])
 def test_ctrl_c_during_the_exit_save_still_saves(
     tmp_path, catalog, monkeypatch, clips_left
