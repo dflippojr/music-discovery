@@ -1120,7 +1120,9 @@ def test_a_selection_of_only_failing_clips_completes_and_stays_retryable(
 
     result = run(LengthLimitEncoder(SAMPLE_RATE))
     assert (result.embedded, result.failed, result.total) == (0, 3, 3)
-    assert lines == ["no clip encoded; a later run tries them again"]
+    assert lines == [
+        "no clip encoded; while the cache has no vectors, a later run tries them again"
+    ]
     store = VectorStore.load(out)
     assert set(store.failures.values()) == {"cannot encode: RuntimeError"}
 

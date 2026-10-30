@@ -261,12 +261,11 @@ def embed_archive(
     run and this raises `AudioEmbeddingError`.
 
     Until the encoder has handled a clip, a failure cannot be judged, so the clip
-    waits and is tried again at the end of the run. If no clip encodes at all and
-    the cache has no vectors, the clips are recorded and a later run tries them
-    again, since nothing shows that they, not the encoder, are at fault. If the
-    cache has vectors from before `longest_clip` was kept, this raises
-    `AudioEmbeddingError` and records none of them. Both paths must be inside the
-    working directory.
+    waits and is tried again at the end of the run. If no clip encodes at all,
+    the clips are recorded, and a later run tries them again while the cache has
+    no vectors, since nothing shows that they, not the encoder, are at fault. A
+    cache from before `longest_clip` was kept takes the length from a clip it
+    holds. Both paths must be inside the working directory.
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
@@ -379,8 +378,19 @@ def embed_archive(
             return None
         return np.asarray(clip, dtype=np.float32)
 
+    def length_of_a_cached_clip(zf: zipfile.ZipFile) -> int | None:
+        """A length the encoder has handled, for a cache that did not keep one."""
+        for track_id in rows:
+            try:
+                return len(decode(zf.read(member_name(track_id))))
+            except Exception:  # noqa: BLE001 - any archive or decoder error
+                continue
+        return None
+
     with zipfile.ZipFile(archive) as zf:
         since_save = 0
+        if longest is None and todo:
+            longest = length_of_a_cached_clip(zf)
         try:
             for start in range(0, len(todo), batch_size):
                 batch_ids, clips = [], []
@@ -401,13 +411,10 @@ def embed_archive(
                         f"embedded {len(rows)} of {len(wanted)}, {len(failures)} failed"
                     )
             if unjudged and longest is None:
-                if rows:
-                    raise AudioEmbeddingError(
-                        f"no clip encodes, though a short test tone does; "
-                        f"{len(unjudged)} clips left for the next run"
-                    )
                 failures.update({str(t): reason for t, reason in unjudged.items()})
-                log("no clip encoded; a later run tries them again")
+                log(
+                    "no clip encoded; while the cache has no vectors, a later run tries them again"
+                )
             elif unjudged:
                 for track_id in unjudged:
                     clip = read_clip(zf, track_id)
