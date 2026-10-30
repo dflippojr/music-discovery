@@ -189,7 +189,10 @@ def test_fit_logistic_separates_and_needs_both_classes():
 
 def test_fit_logistic_stops_at_the_step_limit():
     rng = np.random.default_rng(0)
-    x = np.vstack([rng.normal(1, 1, (50, 2)), rng.normal(-1, 1, (50, 2))])
+    # Positives sit at x0 in [1, 3] and negatives at x0 in [-3, -1]: separable.
+    positive = np.column_stack([rng.uniform(1, 3, 50), rng.normal(0, 1, 50)])
+    negative = np.column_stack([rng.uniform(-3, -1, 50), rng.normal(0, 1, 50)])
+    x = np.vstack([positive, negative])
     y = np.r_[np.ones(50), np.zeros(50)]
     weights, bias = fit_logistic(x, y, steps=1)
     assert np.isfinite(weights).all() and np.isfinite(bias)
