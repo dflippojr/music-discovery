@@ -2,6 +2,9 @@
 
 import io
 import json
+import os
+import shutil
+import subprocess
 import sys
 import urllib.error
 from pathlib import Path
@@ -606,3 +609,70 @@ def test_main_reports_errors_in_one_line(tmp_path, capsys):
     assert "run fetch first" in capsys.readouterr().err
     assert pilot.main(["unblind", "--data-dir", str(tmp_path)]) == 1
     assert "needs the picks" in capsys.readouterr().err
+
+
+@pytest.fixture(scope="module")
+def page_scenarios(tmp_path_factory):
+    """The page's real script, run in node on a stubbed DOM and store."""
+    node = shutil.which("node")
+    if node is None:
+        if os.environ.get("CI"):
+            pytest.fail("the page scenarios need node on PATH")
+        pytest.skip("node is not on PATH")
+    pairs = [
+        {
+            "pair": n,
+            "artist": "A",
+            "title": "S",
+            "a": f"http://a/{n}",
+            "b": f"http://b/{n}",
+        }
+        for n in (1, 2, 3)
+    ]
+    page = tmp_path_factory.mktemp("page") / "listen.html"
+    page.write_text(pilot.render_page(pairs), encoding="utf-8")
+    harness = ROOT / "tests" / "bridge_pilot_page.mjs"
+    done = subprocess.run(
+        [node, str(harness), str(page)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    return json.loads(done.stdout), pilot.kit_id(pairs)
+
+
+def test_page_keeps_a_pick_whose_write_failed_and_sends_it_on_reload(page_scenarios):
+    result = page_scenarios[0]["failed_write_survives_reload"]
+    assert result == {"warned": True, "local": "B", "stored": "B"}
+
+
+def test_page_warns_until_every_failed_write_has_landed(page_scenarios):
+    result = page_scenarios[0]["warning_stays_until_every_failed_write_lands"]
+    assert result == {"whileDown": True, "afterRetry": False, "stored": "B"}
+
+
+def test_page_takes_a_newer_pick_from_another_device(page_scenarios):
+    result = page_scenarios[0]["newer_pick_from_another_device_wins"]
+    assert result == {"phone": "B", "stored": "B"}
+
+
+def test_page_does_not_overwrite_a_newer_stored_pick(page_scenarios):
+    result = page_scenarios[0]["older_write_does_not_overwrite_a_newer_stored_pick"]
+    assert result == {"local": "B", "stored": "B"}
+
+
+def test_page_writes_one_at_a_time_so_the_last_pick_lands_last(page_scenarios):
+    assert page_scenarios[0]["last_of_two_quick_picks_lands"] == {"stored": "B"}
+
+
+def test_page_keeps_picks_in_a_collection_of_its_own_kit(page_scenarios):
+    results, kit = page_scenarios
+    assert results["picks_live_in_a_collection_of_this_kit"] == {
+        "collections": [f"picks-{kit}"]
+    }
+
+
+def test_kits_with_different_pairs_have_different_ids():
+    pair = {"pair": 1, "artist": "A", "title": "S", "a": "http://a", "b": "http://b"}
+    assert pilot.kit_id([pair]) != pilot.kit_id([{**pair, "a": "http://c"}])

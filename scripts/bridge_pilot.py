@@ -509,9 +509,16 @@ def listening_pairs(key: list[dict], frame: pd.DataFrame) -> list[dict]:
     return pairs
 
 
+def kit_id(pairs: list[dict]) -> str:
+    """Name a kit by its pairs; the page keeps picks in `picks-<kit>`."""
+    body = json.dumps(pairs, ensure_ascii=True, sort_keys=True)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+
+
 def render_page(pairs: list[dict], template: Path = PAGE_TEMPLATE) -> str:
     payload = json.dumps(pairs, ensure_ascii=True).replace("</", "<\\/")
-    return template.read_text(encoding="utf-8").replace("__PAIRS__", payload)
+    page = template.read_text(encoding="utf-8").replace("__PAIRS__", payload)
+    return page.replace("__KIT__", kit_id(pairs))
 
 
 def prepare(
@@ -563,11 +570,13 @@ def prepare(
     body = json.dumps({"seed": plan["seed"], "pairs": key}, indent=2)
     sealed.write_text(body, encoding="utf-8")
     page = out_dir / ("listen-live.html" if live_links else "listen.html")
-    page.write_text(render_page(listening_pairs(key, frame)), encoding="utf-8")
+    pairs = listening_pairs(key, frame)
+    page.write_text(render_page(pairs), encoding="utf-8")
     summary = {
         "pairs": len(key),
         "catalog_rows": len(frame),
         "page": str(page),
+        "kit": kit_id(pairs),
         "key_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
     if checker:

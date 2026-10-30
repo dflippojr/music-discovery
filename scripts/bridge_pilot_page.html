@@ -97,21 +97,22 @@ details ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
 
   <details>
     <summary>Back up your picks</summary>
-    <p class="muted">Your picks save to this page's record. If that ever fails, copy this text and send it to Claude.</p>
+    <p class="muted">Your picks save to this page's record. If that ever fails, copy this text and send it to Claude. This is kit __KIT__.</p>
     <p><button id="copy" type="button">Copy picks</button></p>
     <textarea id="picks-text" readonly aria-label="Your picks as text"></textarea>
   </details>
 </main>
 <script id="pairs" type="application/json">__PAIRS__</script>
 <script>
-const PAIRS_TEXT = document.getElementById("pairs").textContent;
-const PAIRS = JSON.parse(PAIRS_TEXT);
-// Each kit keeps its own draft: pair numbers mean different tracks in each.
-const KIT = [...PAIRS_TEXT].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 7);
+const PAIRS = JSON.parse(document.getElementById("pairs").textContent);
+// Each kit keeps its own picks: pair numbers mean different tracks in each.
+const KIT = "__KIT__";
 const DRAFT_KEY = `bridge-pilot-picks-${KIT}`;
 const picks = {}; // pair number -> { pick, at }; the newest choice wins across devices
 let current = 0;
 let collection = null;
+let writes = Promise.resolve(); // one at a time, so an older pick never lands last
+const unsaved = new Set();
 const $ = (id) => document.getElementById(id);
 
 function readDraft() {
@@ -147,22 +148,41 @@ function render() {
   $("picks-text").value = JSON.stringify(plainPicks());
 }
 
-async function save(pair) {
-  try {
-    await collection.doc(`pair-${pair}`).set({ pair: Number(pair), ...picks[pair] });
-    $("warning").hidden = true;
-  } catch {
-    $("warning").textContent = "That pick didn't reach the record. It is kept on this device and will be sent when you reload, or back up your picks below.";
-    $("warning").hidden = false;
-  }
+function showUnsaved() {
+  $("warning").textContent = "Some picks didn't reach the record. They are kept on this device and will be sent with your next pick or when you reload.";
+  $("warning").hidden = unsaved.size === 0;
 }
 
-async function choose(pick) {
+async function save(pair) {
+  const ref = collection.doc(`pair-${pair}`);
+  try {
+    const stored = await ref.get();
+    const theirs = stored.exists ? stored.data() : null;
+    if (theirs && (theirs.at || 0) > picks[pair].at) {
+      picks[pair] = { pick: theirs.pick, at: theirs.at };
+      writeDraft();
+      render();
+    } else {
+      await ref.set({ pair: Number(pair), ...picks[pair] });
+    }
+    unsaved.delete(String(pair));
+  } catch {
+    unsaved.add(String(pair));
+  }
+  showUnsaved();
+}
+
+function send(pairs) {
+  for (const pair of pairs) writes = writes.then(() => save(pair));
+  return writes;
+}
+
+function choose(pick) {
   const pair = PAIRS[current].pair;
   picks[pair] = { pick, at: Date.now() };
   writeDraft();
   render();
-  if (collection) await save(pair);
+  return collection ? send(new Set([String(pair), ...unsaved])) : undefined;
 }
 
 PAIRS.forEach((pair, index) => {
@@ -192,7 +212,7 @@ render();
     $("warning").hidden = false;
     return;
   }
-  collection = db.collection("picks");
+  collection = db.collection(`picks-${KIT}`);
   try {
     const stored = await collection.get();
     const stale = new Set(Object.keys(picks));
@@ -206,7 +226,7 @@ render();
       }
     });
     writeDraft();
-    await Promise.all([...stale].map(save));
+    await send(stale);
     const first = PAIRS.findIndex((pair) => !picks[pair.pair]);
     if (first >= 0) current = first;
     render();

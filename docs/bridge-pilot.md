@@ -99,13 +99,14 @@ audio downloaded.
 ## Listening
 
 The listening page is a private page on claude.ai, published from the kit's
-`listen*.html`. Each pick saves to the page's `picks` collection as it is made,
-so the check works over several sittings. "Can't compare" records a pair as unplayable.
+`listen*.html`. Each pick saves to the page's `picks-<kit>` collection as it is made,
+so the check works over several sittings. `tests/bridge_pilot_page.mjs` runs the
+page's script in node, on a stubbed page and store, to test how it saves picks. "Can't compare" records a pair as unplayable.
 
 ## Scoring
 
 Save the picks as JSON (`{"1": "A", "2": "unplayable", ...}`), from the page's
-`picks` collection or its backup box, then run `bridge_pilot.py unblind
+`picks-<kit>` collection or its backup box, then run `bridge_pilot.py unblind
 PICKS.json`, adding `--live-links` for the second kit. An unplayable pair can't win, so the bar
 always counts wins out of 30. The result gives wins, the two-sided exact sign
 test on all pairs and on played pairs, pass or fail, and how many picks were
