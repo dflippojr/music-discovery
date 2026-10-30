@@ -189,7 +189,7 @@ class VectorStore:
                 return cls(
                     data["track_ids"], data["vectors"], json.loads(str(data["meta"]))
                 )
-        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+        except (OSError, EOFError, ValueError, KeyError, zipfile.BadZipFile) as error:
             raise AudioEmbeddingError(
                 f"cannot read audio vectors at {path}: {error}"
             ) from error
