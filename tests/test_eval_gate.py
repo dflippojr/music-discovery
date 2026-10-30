@@ -4,17 +4,23 @@ No catalog is downloaded: the job in ci.yml runs the real evaluation, and these
 tests feed `compare` reports shaped like `musicdiscovery evaluate`'s JSON.
 """
 
+import contextlib
 import copy
+import io
 import json
 import runpy
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from musicdiscovery import eval_gate
 from musicdiscovery.eval_gate import GateError, compare, main, render
 
+ROOT = Path(__file__).resolve().parents[1]
 SPLITS = ("validation", "test")
 METRICS = ("genre_ndcg", "tag_overlap")
 
@@ -416,6 +422,168 @@ def test_the_module_runs_as_a_script(checkout, baseline, monkeypatch):
 
 def test_the_committed_baseline_points_at_a_report_that_passes_itself():
     # Catches a pointer to a missing file, and a report the rules cannot read.
-    pointer = Path(__file__).resolve().parents[1] / "reports" / "baseline.json"
+    pointer = ROOT / "reports" / "baseline.json"
     report = eval_gate.load_baseline(pointer)
     assert failures(compare(report, report)) == {}
+
+
+def gate_files(mutate):
+    base = json.loads(
+        (ROOT / "reports/offline-2026-10-22.json").read_text(encoding="utf-8")
+    )
+    Path("reports").mkdir()
+    Path("reports/b.json").write_text(json.dumps(base), encoding="utf-8")
+    Path("reports/baseline.json").write_text('{"report": "b.json"}', encoding="utf-8")
+    Path("run.json").write_text(json.dumps(mutate(base)), encoding="utf-8")
+
+
+@pytest.mark.parametrize("rankers", [None, []])
+def test_gate_reports_malformed_rankers(tmp_path, monkeypatch, capsys, rankers):
+    # #209: _cell caught only KeyError, so these were TypeError tracebacks.
+    monkeypatch.chdir(tmp_path)
+    gate_files(lambda r: {**r, "rankers": rankers})
+    assert eval_gate.main(["reports/baseline.json", "run.json"]) == 1
+    captured = capsys.readouterr()
+    assert "FAIL" in captured.out
+    assert "eval-gate: no validation" in captured.err
+
+
+def test_gate_reports_non_object_pointer(tmp_path, monkeypatch, capsys):
+    # #209: load_baseline called .get on a JSON list, an AttributeError traceback.
+    monkeypatch.chdir(tmp_path)
+    gate_files(lambda r: r)
+    Path("reports/baseline.json").write_text("[1]", encoding="utf-8")
+    assert eval_gate.main(["reports/baseline.json", "run.json"]) == 1
+    captured = capsys.readouterr()
+    assert "FAIL" in captured.out
+    assert "no 'report' file name" in captured.err
+
+
+def gate_output(args):
+    """main's exit code and output, on streams that refuse anything but ASCII.
+
+    A console's encoding can be narrower than UTF-8, and a lone surrogate from a
+    JSON string cannot be written to any of them.
+    """
+    streams = [io.TextIOWrapper(io.BytesIO(), encoding="ascii") for _ in range(2)]
+    with contextlib.redirect_stdout(streams[0]), contextlib.redirect_stderr(streams[1]):
+        code = main(args)
+    return code, streams[0], streams[1]
+
+
+def written(stream):
+    stream.flush()
+    return stream.buffer.getvalue().decode("ascii")
+
+
+def assert_reports_a_reason(code, out, err):
+    assert code in (0, 1)
+    if code == 1:
+        assert "**FAIL**" in written(out)
+    if "**FAIL**" in written(out) and "Verdict" not in written(out):
+        assert written(err).startswith("eval-gate: ")
+
+
+def paths_in(value, prefix=()):
+    """The path of ``value`` and of everything inside it."""
+    yield prefix
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield from paths_in(inner, (*prefix, key))
+
+
+def replaced(document, path, value):
+    """A copy of ``document`` with ``value`` at ``path``."""
+    if not path:
+        return value
+    result = copy.deepcopy(document)
+    target = result
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    return result
+
+
+GOOD_REPORT = make_report(SCORES)
+GOOD_POINTER = {"report": "offline-base.json"}
+# JSON loads each of these, and each one has broken the gate or could. The NUL and
+# the lone surrogates are in a file name a pointer can hold (#209).
+AWKWARD_JSON = st.sampled_from(
+    [10**400, -(10**400), "a\x00b", "\ud800", "\udc80", float("inf"), float("nan")]
+)
+ANY_JSON = st.recursive(
+    AWKWARD_JSON | st.none() | st.booleans() | st.integers() | st.floats() | st.text(),
+    lambda inner: (
+        st.lists(inner, max_size=3)
+        | st.dictionaries(st.text(max_size=8), inner, max_size=3)
+    ),
+    max_leaves=6,
+)
+
+
+@given(
+    which=st.sampled_from(["baseline", "run"]),
+    path=st.sampled_from(list(paths_in(GOOD_REPORT))),
+    value=ANY_JSON,
+)
+def test_any_json_anywhere_in_a_report_is_a_verdict_not_a_traceback(which, path, value):
+    # The class behind #163, #170, #175 and #209: whatever a report holds, the gate
+    # ends in a verdict or a FAIL line. Any exception from main fails this test.
+    bad = replaced(GOOD_REPORT, path, value)
+    baseline, run = (bad, GOOD_REPORT) if which == "baseline" else (GOOD_REPORT, bad)
+    with tempfile.TemporaryDirectory() as folder, pytest.MonkeyPatch.context() as patch:
+        patch.chdir(folder)
+        assert_reports_a_reason(*gate_output(setup_files(Path(folder), baseline, run)))
+
+
+@given(path=st.sampled_from(list(paths_in(GOOD_POINTER))), value=ANY_JSON)
+def test_any_json_in_the_pointer_is_a_verdict_not_a_traceback(path, value):
+    with tempfile.TemporaryDirectory() as folder, pytest.MonkeyPatch.context() as patch:
+        patch.chdir(folder)
+        args = setup_files(Path(folder), GOOD_REPORT, GOOD_REPORT)
+        write(Path(args[0]), replaced(GOOD_POINTER, path, value))
+        # A generated name can be a real report's, so a pass is a fair verdict here.
+        assert_reports_a_reason(*gate_output(args))
+
+
+@pytest.mark.parametrize("huge", [10**400, -(10**400)], ids=["positive", "negative"])
+def test_an_integer_too_large_for_a_float_is_an_undefined_score(
+    checkout, baseline, huge
+):
+    run = run_with(baseline, hybrid__genre_ndcg=huge)
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "genre_ndcg"): "no defined score in the run"
+    }
+    code, out, _ = gate_output(setup_files(checkout, baseline, run))
+    assert code == 1
+    assert "| hybrid | same-genre nDCG@10 | undefined |" in written(out)
+
+
+def test_an_integer_too_large_for_a_float_fails_a_bound_check(baseline):
+    baseline["rankers"]["hybrid"]["validation"]["genre_ndcg"]["lo"] = 10**400
+    assert failures(compare(baseline, make_report(SCORES))) == {
+        ("hybrid", "genre_ndcg"): "the baseline's lower bound is not a number"
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["a\x00b", "\ud800", "\udc80", "caf\xe9"],
+    ids=["nul", "lone", "bytes", "latin"],
+)
+def test_a_pointer_to_an_impossible_file_name_is_a_fail_line(checkout, baseline, name):
+    args = setup_files(checkout, baseline, baseline)
+    write(Path(args[0]), {"report": name})
+    code, out, err = gate_output(args)
+    assert code == 1
+    assert "**FAIL**" in written(out)
+    assert written(err).startswith("eval-gate: ")
+
+
+def test_a_report_nested_too_deep_is_a_fail_line(checkout, baseline):
+    args = setup_files(checkout, baseline, baseline)
+    Path(args[1]).write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
+    code, out, err = gate_output(args)
+    assert code == 1
+    assert "cannot read" in written(out)
+    assert written(err).startswith("eval-gate: ")

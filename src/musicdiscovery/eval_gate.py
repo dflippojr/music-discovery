@@ -43,13 +43,18 @@ class Check:
 
 
 def _defined(value: object) -> bool:
-    return isinstance(value, int | float) and not math.isnan(value)
+    if not isinstance(value, int | float):
+        return False
+    try:
+        return not math.isnan(value)
+    except OverflowError:  # an integer too large for a float (#209)
+        return False
 
 
 def _cell(report: dict, ranker: str, metric: str) -> dict:
     try:
         cell = report["rankers"][ranker][SPLIT][metric]
-    except KeyError:
+    except (KeyError, TypeError):  # TypeError: a level is not a mapping (#209)
         raise GateError(f"no {SPLIT} {metric} for {ranker}") from None
     return cell
 
@@ -117,9 +122,9 @@ def compare(baseline: dict, run: dict) -> list[Check]:
                 cell = None
             mean = cell.get("mean") if isinstance(cell, dict) else None
             # render() formats the value, so a mean that is not a number is undefined.
-            value = mean if isinstance(mean, int | float) else None
+            value = mean if _defined(mean) else None
             problem = ""
-            if not _defined(value):
+            if value is None:
                 problem = "no defined score in the run"
             elif lower is None:
                 problem = "the baseline's lower bound is not a number"
@@ -160,7 +165,10 @@ def render(checks: Sequence[Check]) -> str:
 
 def _inside(path: Path, root: Path, where: str) -> Path:
     """``path`` resolved, or a GateError when it resolves outside ``root``."""
-    resolved = path.resolve()
+    try:
+        resolved = path.resolve()
+    except ValueError as error:  # a NUL or lone surrogate in a pointer's file name
+        raise GateError(f"refusing to read {path!r}: {error}") from None
     if not resolved.is_relative_to(root.resolve()):
         raise GateError(f"refusing to read {path}: it is outside {where}")
     return resolved
@@ -169,7 +177,7 @@ def _inside(path: Path, root: Path, where: str) -> Path:
 def _load(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         raise GateError(f"cannot read {path}: {error}") from None
 
 
@@ -178,7 +186,8 @@ def load_baseline(pointer: Path) -> dict:
 
     The report must be in the pointer's own directory.
     """
-    target = _load(pointer).get("report")
+    content = _load(pointer)
+    target = content.get("report") if isinstance(content, dict) else None
     if not isinstance(target, str):
         raise GateError(f"{pointer} has no 'report' file name")
     report = _inside(
@@ -200,8 +209,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             baseline, _load(_inside(args.run, cwd, "the working directory"))
         )
     except GateError as error:
-        print(f"eval-gate: {error}", file=sys.stderr)
-        print(f"### Evaluation gate\n\n**FAIL**: {error}\n")
+        # The message can quote a report, and a console may not encode what it holds.
+        reason = str(error).encode("ascii", "backslashreplace").decode("ascii")
+        print(f"eval-gate: {reason}", file=sys.stderr)
+        print(f"### Evaluation gate\n\n**FAIL**: {reason}\n")
         return 1
     print(render(checks), end="")
     return 0 if all(check.passed for check in checks) else 1
