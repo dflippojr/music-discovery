@@ -262,9 +262,20 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def send_head(self):
+        # open() raises ValueError, not OSError, for a NUL from an escaped path.
+        try:
+            return super().send_head()
+        except ValueError:
+            self.send_error(404)
+            return None
+
     def do_POST(self):
+        # http.server decodes headers as Latin-1, and compare_digest refuses a
+        # non-ASCII str, so compare bytes.
         if self.path != "/__ui_stop" or not secrets.compare_digest(
-            self.headers.get("X-UI-Token", ""), self.server.token
+            self.headers.get("X-UI-Token", "").encode("latin-1"),
+            self.server.token.encode(),
         ):
             self.send_error(403)
             return
