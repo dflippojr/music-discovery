@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import numpy as np
 import pandas as pd
 from pyarrow import ArrowException
 
@@ -207,7 +208,8 @@ def build_catalog(archive_path: Path) -> tuple[pd.DataFrame, IngestResult]:
     catalog = tracks.join(links[["license_url", "track_url"]]).drop(columns="license")
     catalog = catalog.rename(columns={"track_url": "source_url"})
 
-    has_features = tracks.index.isin(features.dropna().index)
+    finite = np.isfinite(features.to_numpy(dtype=np.float64)).all(axis=1)
+    has_features = tracks.index.isin(features.index[finite])
     kept = licensed & has_features
     result = IngestResult(
         skipped=False,

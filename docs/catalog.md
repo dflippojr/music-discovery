@@ -44,8 +44,15 @@ are git-ignored. Columns: `track_id`, `title`, `artist`, `album`, `genre_top`,
 `source_url`, then 518 feature columns named `<feature>_<statistic>_<nn>`
 (for example `mfcc_mean_01`) as `float32`.
 
+`Catalog.load` refuses a file that rankers could not use: a missing required
+column, non-integer track ids, `tags` or `genre_ids` cells that are not lists of
+text or integers, or a non-numeric or non-finite `listens` or feature column.
+Each command reports that in one line and points at `ingest`. Tracks with an
+infinite feature count as missing features, so `ingest` never publishes such a
+file.
+
 A second run skips rebuilding only when the manifest has valid counts and the
-parquet catalog is readable, has the expected columns and unique track ids, and
+parquet catalog passes those `Catalog.load` checks, has unique track ids, and
 contains the recorded number of kept tracks. Malformed metadata or damaged
 catalogs are rebuilt from the checksum-verified cached archive without another
 download when that archive is usable.

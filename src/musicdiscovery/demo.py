@@ -114,6 +114,9 @@ def build_catalog(catalog: Catalog) -> dict:
     """Everything the browser needs to run both rankers on this catalog."""
     if not len(catalog):
         raise DemoError("catalog has no tracks")
+    for name, axis in AXES.items():
+        if axis.column not in catalog.feature_columns:
+            raise DemoError(f"catalog has no column {axis.column!r} for axis {name!r}")
     frame = catalog.frame
     fit = ranking.BaselineRanker()._fitted(catalog)
     config = HybridConfig.load()

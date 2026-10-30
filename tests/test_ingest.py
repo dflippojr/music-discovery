@@ -70,7 +70,7 @@ def _raw_tracks_csv() -> str:
     return "\n".join(rows) + "\n"
 
 
-def _features_csv() -> str:
+def _features_csv(overrides: dict[int, str] | None = None) -> str:
     rows = [
         "feature,chroma,chroma,mfcc",
         "statistics,mean,std,mean",
@@ -78,16 +78,19 @@ def _features_csv() -> str:
         "track_id,,,",
     ]
     for track_id, (_, _, _, present, _) in TRACKS.items():
-        rows.append(f"{track_id},1.5,2.5,3.5" if present else f"{track_id},1.5,,3.5")
+        values = "1.5,2.5,3.5" if present else "1.5,,3.5"
+        rows.append(f"{track_id},{(overrides or {}).get(track_id, values)}")
     return "\n".join(rows) + "\n"
 
 
-def _write_archive(path: Path, tracks_csv: str) -> tuple[Path, str]:
+def _write_archive(
+    path: Path, tracks_csv: str, features: dict[int, str] | None = None
+) -> tuple[Path, str]:
     path.parent.mkdir(parents=True)
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("fma_metadata/tracks.csv", tracks_csv)
         zf.writestr("fma_metadata/raw_tracks.csv", _raw_tracks_csv())
-        zf.writestr("fma_metadata/features.csv", _features_csv())
+        zf.writestr("fma_metadata/features.csv", _features_csv(features))
     return path, hashlib.sha1(path.read_bytes()).hexdigest()
 
 

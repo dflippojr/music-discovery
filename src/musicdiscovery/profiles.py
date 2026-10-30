@@ -151,6 +151,11 @@ def generate_profiles(
     """Sample tastes and interactions with a fixed seed; one catalog gives one list."""
     if interactions < 2 or interactions > len(catalog):
         raise ProfileError(f"catalog of {len(catalog)} tracks is too small")
+    for name, axis in AXES.items():
+        if axis.column not in catalog.feature_columns:
+            raise ProfileError(
+                f"catalog has no column {axis.column!r} for axis {name!r}"
+            )
     rng = np.random.default_rng(seed)
     pools = _genre_tags(catalog)
     genres = sorted(pools)
