@@ -537,14 +537,13 @@ def test_any_json_anywhere_in_a_report_is_a_verdict_not_a_traceback(which, path,
 
 
 @given(path=st.sampled_from(list(paths_in(GOOD_POINTER))), value=ANY_JSON)
-def test_any_json_in_the_pointer_is_a_fail_line_not_a_traceback(path, value):
+def test_any_json_in_the_pointer_is_a_verdict_not_a_traceback(path, value):
     with tempfile.TemporaryDirectory() as folder, pytest.MonkeyPatch.context() as patch:
         patch.chdir(folder)
         args = setup_files(Path(folder), GOOD_REPORT, GOOD_REPORT)
         write(Path(args[0]), replaced(GOOD_POINTER, path, value))
-        code, out, err = gate_output(args)
-        assert code == 1
-        assert_reports_a_reason(code, out, err)
+        # A generated name can be a real report's, so a pass is a fair verdict here.
+        assert_reports_a_reason(*gate_output(args))
 
 
 @pytest.mark.parametrize("huge", [10**400, -(10**400)], ids=["positive", "negative"])
