@@ -43,10 +43,11 @@ class Check:
 
 
 def _defined(value: object) -> bool:
-    if not isinstance(value, int | float):
+    # A bool is an int, and Infinity clears every bound, so neither is a score (#210).
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return False
     try:
-        return not math.isnan(value)
+        return math.isfinite(value)
     except OverflowError:  # an integer too large for a float (#209)
         return False
 
@@ -62,14 +63,14 @@ def _cell(report: dict, ranker: str, metric: str) -> dict:
 def _bound(report: dict, who: str, ranker: str, metric: str, key: str) -> float | None:
     """The interval bound ``key`` of a cell, or None when it is not a number.
 
-    A bound that is missing, null or NaN is a GateError (#163). Any other
-    non-number is None, so its check fails (#175).
+    A bound that is missing, null or NaN is a GateError (#163). Any other value
+    that is not a finite number is None, so its check fails (#175, #210).
     """
     cell = _cell(report, ranker, metric)
     value = cell.get(key) if isinstance(cell, dict) else None
     if _defined(value):
         return value
-    if value is None or isinstance(value, float):  # a NaN bound
+    if value is None or (isinstance(value, float) and math.isnan(value)):
         raise GateError(f"{who} has no interval for {ranker}/{metric}")
     return None
 
@@ -105,9 +106,10 @@ def compare(baseline: dict, run: dict) -> list[Check]:
     the run's point estimate is undefined, is below the lower bound of the
     baseline's 95% interval, or is below the upper bound of ``random``'s
     interval in the same run. A run cell with no ``mean``, one that is not a
-    mapping, or one whose ``mean`` is not a number, has an undefined point
-    estimate, so its check fails. A bound that is not a number fails its check
-    too, but a missing, null or NaN bound is a GateError.
+    mapping, or one whose ``mean`` is not a finite number (``Infinity`` and
+    ``true`` are not), has an undefined point estimate, so its check fails. A
+    bound that is not a finite number fails its check too, but a missing, null
+    or NaN bound is a GateError.
     """
     _cutoff(baseline, run)
     _same(baseline, run)
@@ -121,7 +123,8 @@ def compare(baseline: dict, run: dict) -> list[Check]:
             except GateError:
                 cell = None
             mean = cell.get("mean") if isinstance(cell, dict) else None
-            # render() formats the value, so a mean that is not a number is undefined.
+            # render() formats the value, and a mean that is not a finite number
+            # must not clear a bound, so it is undefined.
             value = mean if _defined(mean) else None
             problem = ""
             if value is None:
