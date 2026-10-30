@@ -73,7 +73,7 @@ class TfIdf:
         n = len(documents)
         rows, columns = [], []
         for row, doc in enumerate(documents):
-            for token in doc:
+            for token in sorted(doc):
                 rows.append(row)
                 columns.append(vocabulary[token])
         self.rows = np.array(rows, dtype=np.intp)
