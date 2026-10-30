@@ -170,6 +170,8 @@ def _source(data_dir: Path) -> dict:
         saved = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    if not isinstance(saved, dict):
+        return {}
     return {
         "subset": saved.get("subset"),
         "source_sha1": saved.get("source_sha1"),
@@ -188,7 +190,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
 
-    from musicdiscovery.audio_embedding import DEFAULT_VECTORS, VectorStore
+    from musicdiscovery.audio_embedding import (
+        DEFAULT_VECTORS,
+        AudioEmbeddingError,
+        VectorStore,
+    )
     from musicdiscovery.catalog import Catalog, CatalogError
 
     try:
@@ -199,7 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     vectors = args.vectors or args.data_dir / DEFAULT_VECTORS.relative_to("data")
     vector_ids = None
     if vectors.exists():
-        vector_ids = VectorStore.load(vectors).track_ids
+        try:
+            vector_ids = VectorStore.load(vectors).track_ids
+        except AudioEmbeddingError as error:
+            print(f"profile_catalog: {error}", file=sys.stderr)
+            return 1
     elif args.vectors:
         print(f"profile_catalog: no vector cache at {vectors}", file=sys.stderr)
         return 1
