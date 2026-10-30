@@ -58,10 +58,13 @@ function newStore() {
       collection(name) {
         store.collections.add(name);
         return {
-          get: async () => ({
+          get: async () => {
+            if (store.loadFails) throw new Error("down");
+            return {
             docs: Object.keys(store.docs).filter((k) => k.startsWith(`${name}/`))
               .map((k) => ({ data: () => store.docs[k] })),
-          }),
+            };
+          },
           doc: (id) => ({
             get: async () => {
               if (store.failing) throw new Error("down");
@@ -186,6 +189,27 @@ const scenarios = {
     view.pick("A");
     await settle();
     return { allSaved, whileWriting, afterFailure: view.get("finished").hidden === false };
+  },
+  async finish_waits_for_the_record_to_load() {
+    const store = newStore(), phone = device();
+    let view = load(phone, store);
+    await settle();
+    store.failing = true;
+    for (let index = 0; index < 3; index += 1) {
+      view.get("sheet").children[index].click();
+      await view.pick("A");
+    }
+    await settle();
+    store.loadFails = true;
+    view = load(phone, store);
+    await settle();
+    view.get("sheet").children[0].click();
+    await view.pick("B");
+    await settle();
+    return {
+      finished: view.get("finished").hidden === false,
+      warned: view.get("warning").hidden === false,
+    };
   },
   async store_that_fails_to_start_warns() {
     const store = newStore();

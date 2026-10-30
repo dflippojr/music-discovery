@@ -114,6 +114,7 @@ let collection = null;
 let writes = Promise.resolve(); // one at a time, so an older pick never lands last
 const unsaved = new Set();
 let pending = 0;
+let loaded = false; // the record has answered, so what it holds is known
 const $ = (id) => document.getElementById(id);
 
 function readDraft() {
@@ -145,11 +146,12 @@ function render() {
     cell.classList.toggle("picked", Boolean(picks[PAIRS[index].pair]));
     cell.setAttribute("aria-current", String(index === current));
   });
-  $("finished").hidden = count < PAIRS.length || !collection || pending > 0 || unsaved.size > 0;
+  $("finished").hidden = count < PAIRS.length || !loaded || pending > 0 || unsaved.size > 0;
   $("picks-text").value = JSON.stringify(plainPicks());
 }
 
 function showUnsaved() {
+  if (!loaded) return; // the load's own warning stays up
   $("warning").textContent = "Some picks didn't reach the record. They are kept on this device and will be sent with your next pick or when you reload.";
   $("warning").hidden = unsaved.size === 0;
 }
@@ -221,6 +223,7 @@ render();
   collection = db.collection(`picks-${KIT}`);
   try {
     const stored = await collection.get();
+    loaded = true;
     const stale = new Set(Object.keys(picks));
     stored.docs.forEach((doc) => {
       const row = doc.data();

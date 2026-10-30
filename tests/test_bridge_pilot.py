@@ -575,6 +575,22 @@ def test_client_waits_out_the_rate_limit_and_retries():
     assert slept == [pilot.REQUEST_GAP_SECONDS, 10.0, pilot.REQUEST_GAP_SECONDS, 6.0]
 
 
+def test_client_backs_off_longer_each_time_a_throttled_answer_has_no_header():
+    slept: list[float] = []
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        raise http_error(503, {})
+
+    client = pilot.Client(opener=opener, sleep=slept.append)
+    with pytest.raises(pilot.PilotError, match="HTTP 503"):
+        client.get("http://x")
+    assert len(calls) == pilot.ATTEMPTS == 6
+    backoffs = [wait for wait in slept if wait != pilot.REQUEST_GAP_SECONDS]
+    assert backoffs == [5, 10, 20, 40, 80]
+
+
 def test_client_cache_answers_a_second_time_without_asking(tmp_path):
     calls = []
 
@@ -665,6 +681,11 @@ def test_page_writes_one_at_a_time_so_the_last_pick_lands_last(page_scenarios):
 def test_page_shows_the_finish_card_only_when_every_pick_is_stored(page_scenarios):
     result = page_scenarios[0]["finish_waits_for_every_pick_to_reach_the_store"]
     assert result == {"allSaved": True, "whileWriting": False, "afterFailure": False}
+
+
+def test_page_shows_no_finish_card_until_the_record_has_loaded(page_scenarios):
+    result = page_scenarios[0]["finish_waits_for_the_record_to_load"]
+    assert result == {"finished": False, "warned": True}
 
 
 def test_page_warns_when_the_store_fails_to_start(page_scenarios):
