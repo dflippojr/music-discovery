@@ -204,8 +204,6 @@ const scenarios = {
     view = load(phone, store);
     await settle();
     view.get("sheet").children[0].click();
-    await view.pick("B");
-    await settle();
     return {
       finished: view.get("finished").hidden === false,
       warned: view.get("warning").hidden === false,
