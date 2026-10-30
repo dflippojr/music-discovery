@@ -1,6 +1,7 @@
 """Guard the disposable launcher's isolation and cleanup boundaries."""
 
 import ast
+import http.client
 import importlib.util
 import io
 import itertools
@@ -22,6 +23,8 @@ from urllib.request import Request, urlopen
 
 import psutil
 import pytest
+from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import strategies as st
 from playwright_config import load_playwright_config
 
 
@@ -580,6 +583,102 @@ def test_stop_endpoint_refuses_missing_or_wrong_token(stop_endpoint, path, heade
     origin = f"http://127.0.0.1:{server.server_port}"
     with urlopen(origin + "/__ui_health", timeout=5) as response:
         assert json.load(response) == {"instance": server.instance}
+
+
+@pytest.mark.parametrize("token", [b"\xc3\xa9", b"\xff"], ids=["utf-8", "latin-1"])
+def test_stop_token_non_ascii_gets_403(stop_endpoint, token):
+    server, thread = stop_endpoint
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    conn.putrequest("POST", "/__ui_stop")
+    conn.putheader("X-UI-Token", token)
+    conn.endheaders()
+    assert conn.getresponse().status == 403
+    conn.close()
+    assert thread.is_alive()
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_nul_in_path_gets_404(stop_endpoint, method):
+    server, _ = stop_endpoint
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    conn.request(method, "/%00")
+    assert conn.getresponse().status == 404
+    conn.close()
+
+
+def send_raw(server, request):
+    """Send exact bytes; a handler that raised answers with an empty reply."""
+    with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as conn:
+        conn.sendall(request)
+        reply = b""
+        # The handler has finished, and reported any error, by the time of EOF.
+        while chunk := conn.recv(4096):
+            reply += chunk
+    return reply
+
+
+def wire_request(method, path, header, value):
+    return b"%s %s HTTP/1.1\r\n%s: %s\r\nConnection: close\r\n\r\n" % (
+        method,
+        path,
+        header,
+        value,
+    )
+
+
+@pytest.fixture
+def handler_errors(stop_endpoint):
+    """Exceptions that escape a request handler, which would drop the connection."""
+    server, _ = stop_endpoint
+    errors = []
+    server.handle_error = lambda *_: errors.append(sys.exception())
+    return errors
+
+
+# Lean on the bytes that have broken the handler: NUL and anything above 0x7f.
+WIRE_BYTES = st.lists(
+    st.one_of(st.sampled_from([0x00, 0x80, 0xC3, 0xFF]), st.integers(0, 255)),
+    max_size=20,
+).map(bytes)
+FIELD_BYTES = WIRE_BYTES.filter(lambda raw: not set(raw) & set(b"\r\n"))
+ESCAPED_BYTES = WIRE_BYTES.map(
+    lambda raw: "".join(f"%{byte:02x}" for byte in raw).encode()
+)
+FUZZ_SETTINGS = settings(
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture]
+)
+
+
+@FUZZ_SETTINGS
+@given(token=FIELD_BYTES)
+def test_every_wrong_stop_token_gets_403(stop_endpoint, handler_errors, token):
+    server, thread = stop_endpoint
+    assume(token.strip() != STOP_TOKEN.encode())
+    handler_errors.clear()
+    reply = send_raw(server, wire_request(b"POST", b"/__ui_stop", b"X-UI-Token", token))
+    assert handler_errors == []
+    assert reply.split()[1] == b"403"
+    assert thread.is_alive()
+
+
+@FUZZ_SETTINGS
+@given(
+    method=st.sampled_from([b"GET", b"HEAD", b"POST"]),
+    path=st.one_of(st.just(b"__ui_stop"), FIELD_BYTES, ESCAPED_BYTES),
+    header=st.sampled_from([b"Host", b"If-Modified-Since", b"X-UI-Token"]),
+    value=FIELD_BYTES,
+)
+def test_every_request_gets_an_http_reply(
+    stop_endpoint, handler_errors, method, path, header, value
+):
+    """The class behind #215: no client bytes may raise inside the handler."""
+    server, thread = stop_endpoint
+    assume(value.strip() != STOP_TOKEN.encode())
+    handler_errors.clear()
+    reply = send_raw(server, wire_request(method, b"/" + path, header, value))
+    assert handler_errors == []
+    assert reply.startswith(b"HTTP/1.")
+    assert thread.is_alive()
 
 
 def test_stop_endpoint_accepts_the_token_and_stops(stop_endpoint):
