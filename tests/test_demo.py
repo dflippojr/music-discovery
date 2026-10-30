@@ -323,7 +323,7 @@ def test_export_demo_refuses_an_empty_catalog(tmp_path, capsys, monkeypatch):
     assert main(["export-demo", str(out), "--data-dir", str(tmp_path / "data")]) == 1
     err = capsys.readouterr().err
     assert err.splitlines() == ["export-demo: catalog has no tracks"]
-    assert not out.exists() or not any(out.iterdir())
+    assert not out.exists()
 
 
 @pytest.mark.filterwarnings("error::RuntimeWarning")
