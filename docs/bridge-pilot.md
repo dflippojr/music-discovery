@@ -32,7 +32,7 @@ before any match runs.
 MusicBrainz's search hits vary between runs, so `resolved.json` from the one
 fetch that fed the match is the record, not a fresh run.
 
-Requests send a contact User-Agent, leave 1.1 s between calls, and wait out any
+Requests send a contact User-Agent, leave 1.5 s between calls, and wait out any
 `X-RateLimit` or 429 answer.
 
 ## Matching

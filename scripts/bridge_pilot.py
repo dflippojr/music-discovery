@@ -38,8 +38,8 @@ USER_AGENT = (
 )
 MUSICBRAINZ = "https://musicbrainz.org/ws/2/recording"
 ACOUSTICBRAINZ = "https://acousticbrainz.org/api/v1"
-REQUEST_GAP_SECONDS = 1.1  # MusicBrainz allows about one request per second
-ATTEMPTS = 4
+REQUEST_GAP_SECONDS = 1.5  # MusicBrainz allows about one request per second
+ATTEMPTS = 6
 SEARCH_LIMIT = 100
 COUNT_BATCH = 25  # AcousticBrainz takes at most 25 ids per bulk call
 MAX_RECORDS_TRIED = 15
@@ -112,7 +112,7 @@ class Client:
                     or attempt == ATTEMPTS - 1
                 ):
                     raise PilotError(f"{url} answered HTTP {error.code}") from error
-                self._sleep(_reset_seconds(error.headers, 2**attempt))
+                self._sleep(_reset_seconds(error.headers, 5 * 2**attempt))
             except (urllib.error.URLError, TimeoutError) as error:
                 if attempt == ATTEMPTS - 1:
                     raise PilotError(f"{url} failed: {error}") from error
