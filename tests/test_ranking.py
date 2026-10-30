@@ -11,10 +11,13 @@ import pytest
 
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.cli import main
-from musicdiscovery.preference import Preference, PreferenceError, Quality
+from musicdiscovery.hybrid import HybridRanker
+from musicdiscovery.preference import AXES, Preference, PreferenceError, Quality
+from musicdiscovery.profile_ranker import ProfileRanker
 from musicdiscovery.ranking import BaselineRanker
 
 GENRES = ["Folk", "Rock", "Jazz"]
+RANKERS = {"baseline": BaselineRanker, "hybrid": HybridRanker, "profile": ProfileRanker}
 
 
 def make_frame(per_genre=40, extra_features=0, seed=0):
@@ -146,6 +149,19 @@ def test_less_axis_goes_the_other_way():
         rmse[[r.track_id for r in down]].mean() < rmse[[r.track_id for r in up]].mean()
     )
     assert down[0].explanations[0] in ("calmer, as asked", "similar sound to the seed")
+
+
+@pytest.mark.parametrize("axis", sorted(AXES))
+@pytest.mark.parametrize("ranker", list(RANKERS))
+def test_axis_without_its_column_is_refused(ranker, axis):
+    column = AXES[axis].column
+    catalog = Catalog(make_frame().drop(columns=column))
+    message = f"catalog has no column {column!r} for axis {axis!r}"
+    ranker = RANKERS[ranker]()
+    with pytest.raises(PreferenceError, match=message):
+        ranker.rank(pref(likes=[f"more:{axis}"]), catalog)
+    with pytest.raises(PreferenceError, match=message):
+        ranker.rank(pref(dislikes=[f"less:{axis}"]), catalog)
 
 
 def test_genre_and_tag_boost_and_penalty(catalog):

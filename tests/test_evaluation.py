@@ -133,6 +133,16 @@ def test_query_file_errors(tmp_path, catalog, queries):
         generate_queries(catalog, per_split=500)
 
 
+def test_queries_with_an_unknown_split_are_refused(tmp_path, catalog, queries):
+    path = tmp_path / "queries.json"
+    write_queries(path, queries, catalog)
+    payload = json.loads(path.read_text())
+    payload["queries"][0]["split"] = "holdout"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(EvaluationError, match="query splits must be one of"):
+        load_queries(path, catalog)
+
+
 def test_write_queries_refuses_a_file_made_for_another_catalog(
     tmp_path, catalog, queries
 ):
@@ -435,6 +445,21 @@ def test_cli_refuses_likes_that_are_not_a_list_of_strings(data_dir, capsys, like
     assert main(argv) == 1
     err = capsys.readouterr().err
     assert err.startswith("evaluate: cannot read queries at ")
+    assert err.count("\n") == 1
+    assert "Traceback" not in err
+
+
+def test_evaluate_cli_reports_an_unknown_split(data_dir, capsys):
+    base = ["evaluate", "--data-dir", str(data_dir)]
+    assert main([*base, "--queries", "q.json", "--generate-queries"]) == 0
+    payload = json.loads(Path("q.json").read_text())
+    payload["queries"][0]["split"] = "holdout"
+    Path("bad.json").write_text(json.dumps(payload))
+    capsys.readouterr()
+    argv = [*base, "--queries", "bad.json", "--out-dir", "out", "--ranker", "random"]
+    assert main(argv) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("evaluate: query splits must be one of ")
     assert err.count("\n") == 1
     assert "Traceback" not in err
 

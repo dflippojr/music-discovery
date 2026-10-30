@@ -29,6 +29,18 @@ def recommend(data_dir, capsys, name, *extra):
     return json.loads(capsys.readouterr().out)
 
 
+def test_recommend_reports_a_missing_axis_column(tmp_path, capsys):
+    out = tmp_path / "catalog"
+    out.mkdir()
+    frame = make_frame().drop(columns="rmse_mean_01")
+    frame.to_parquet(out / "catalog.parquet", index=False)
+    argv = ["recommend", "--data-dir", str(tmp_path), "--seed", "100"]
+    assert main([*argv, "--like", "more:energy"]) == 1
+    err = capsys.readouterr().err
+    assert err == "recommend: catalog has no column 'rmse_mean_01' for axis 'energy'\n"
+    assert "Traceback" not in err
+
+
 @pytest.mark.parametrize("name", NAMES)
 def test_recommend_every_ranker(data_dir, capsys, name):
     assert name in RANKERS
