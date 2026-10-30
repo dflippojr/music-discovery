@@ -130,8 +130,19 @@ def fetch_archive(url: str, sha1: str, cache_dir: Path) -> Path:
 def _parse_list(value: object) -> list:
     if not isinstance(value, str) or not value.strip():
         return []
-    parsed = ast.literal_eval(value)
+    try:
+        parsed = ast.literal_eval(value)
+    except (SyntaxError, TypeError) as error:
+        # Neither is a ValueError, so ingest would print a traceback (#190).
+        raise ValueError(f"malformed list cell {value!r}: {error}") from error
     return list(parsed) if isinstance(parsed, list | tuple) else []
+
+
+def _genre_ids(ids: list) -> list[int]:
+    try:
+        return [int(i) for i in ids]
+    except TypeError as error:
+        raise ValueError(f"malformed genre ids {ids!r}: {error}") from error
 
 
 def _read_tracks(archive: zipfile.ZipFile) -> pd.DataFrame:
@@ -206,7 +217,7 @@ def build_catalog(archive_path: Path) -> tuple[pd.DataFrame, IngestResult]:
         dropped_missing_features=int((licensed & ~has_features).sum()),
     )
     catalog = pd.concat([catalog[kept], features.reindex(catalog.index[kept])], axis=1)
-    catalog["genre_ids"] = catalog["genre_ids"].map(lambda ids: [int(i) for i in ids])
+    catalog["genre_ids"] = catalog["genre_ids"].map(_genre_ids)
     return catalog.reset_index(), result
 
 

@@ -36,18 +36,23 @@ TRACKS = {
 }
 
 
-def _tracks_csv() -> str:
+def _tracks_csv(cells: dict[str, str] | None = None) -> str:
+    """Write tracks.csv; ``cells`` replaces track 1's list cells by column name."""
+    cells = cells or {}
     groups = ",".join(["", *(group for group, _ in TRACK_COLUMNS)])
     names = ",".join(["", *(name for _, name in TRACK_COLUMNS)])
     rows = ["track_id" + "," * len(TRACK_COLUMNS)]
     for track_id, (subset, lic, _, _, tags) in TRACKS.items():
+        genres = f"[{track_id}, 2]"
+        if track_id == 1:
+            genres, tags = cells.get("genres_all", genres), cells.get("tags", tags)
         values = [
             f"Album {track_id}",
             f"Artist {track_id}",
             subset,
             "120",
             "Rock",
-            f'"[{track_id}, 2]"',
+            f'"{genres}"',
             lic or "",
             "7",
             f'"{tags}"',
@@ -77,15 +82,18 @@ def _features_csv() -> str:
     return "\n".join(rows) + "\n"
 
 
-@pytest.fixture
-def archive(tmp_path: Path) -> tuple[Path, str]:
-    path = tmp_path / "source" / "fma_metadata.zip"
-    path.parent.mkdir()
+def _write_archive(path: Path, tracks_csv: str) -> tuple[Path, str]:
+    path.parent.mkdir(parents=True)
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("fma_metadata/tracks.csv", _tracks_csv())
+        zf.writestr("fma_metadata/tracks.csv", tracks_csv)
         zf.writestr("fma_metadata/raw_tracks.csv", _raw_tracks_csv())
         zf.writestr("fma_metadata/features.csv", _features_csv())
     return path, hashlib.sha1(path.read_bytes()).hexdigest()
+
+
+@pytest.fixture
+def archive(tmp_path: Path) -> tuple[Path, str]:
+    return _write_archive(tmp_path / "source" / "fma_metadata.zip", _tracks_csv())
 
 
 def test_ingest_builds_clean_catalog(tmp_path, archive):
@@ -408,3 +416,53 @@ def test_invalid_manifest_encoding_recovers(cached_catalog):
     data_dir, sha1 = cached_catalog
     (data_dir / "catalog" / "catalog.json").write_bytes(b"\xff")
     assert not ingest(data_dir, sha1=sha1).skipped
+
+
+MALFORMED_CELLS = [
+    pytest.param({"tags": "['a', 'b'"}, id="tags-unclosed"),
+    pytest.param({"genres_all": "[2, [2]]"}, id="genres_all-nested"),
+]
+
+
+@pytest.mark.parametrize("cells", MALFORMED_CELLS)
+@pytest.mark.parametrize("previous", [False, True], ids=["fresh", "cached"])
+def test_malformed_list_cell_fails_cleanly(tmp_path, archive, cells, previous):
+    data_dir = tmp_path / "data"
+    out_dir = data_dir / "catalog"
+    if previous:
+        path, sha1 = archive
+        ingest(data_dir, url=path.as_uri(), sha1=sha1)
+        (data_dir / "raw" / "fma_metadata.zip").unlink()  # fetch the bad archive
+    old = {p.name: p.read_bytes() for p in out_dir.glob("*")} if previous else {}
+    bad, bad_sha1 = _write_archive(
+        tmp_path / "bad" / "fma_metadata.zip", _tracks_csv(cells)
+    )
+
+    with pytest.raises(IngestError, match="could not rebuild catalog"):
+        ingest(data_dir, url=bad.as_uri(), sha1=bad_sha1)
+
+    assert {p.name: p.read_bytes() for p in out_dir.glob("*")} == old
+
+
+@pytest.mark.parametrize("cells", MALFORMED_CELLS)
+def test_cli_reports_malformed_list_cell(tmp_path, monkeypatch, capsys, cells):
+    bad, sha1 = _write_archive(
+        tmp_path / "bad" / "fma_metadata.zip", _tracks_csv(cells)
+    )
+    monkeypatch.setattr(ingest_module.ingest, "__defaults__", (bad.as_uri(), sha1))
+
+    assert main(["ingest", "--data-dir", str(tmp_path / "data")]) == 1
+    captured = capsys.readouterr()
+    assert "ingest: could not rebuild catalog:" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("value", ["{'a': 1}", "5", "", "  ", float("nan")])
+def test_non_list_literal_reads_as_empty(value):
+    assert ingest_module._parse_list(value) == []
+
+
+@pytest.mark.parametrize("value", ["['a', 'b'", "{[1]: 2}"])
+def test_unparsable_list_cell_raises_value_error(value):
+    with pytest.raises(ValueError, match="malformed list cell"):
+        ingest_module._parse_list(value)
