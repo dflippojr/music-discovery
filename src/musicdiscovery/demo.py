@@ -306,18 +306,22 @@ def export_demo(catalog: Catalog, out_dir: Path, release: bool = False) -> Bundl
     """Write the bundle into `out_dir` (inside the working directory).
 
     With `release`, refuse to export from a work tree with uncommitted changes.
+    A refused export changes nothing in `out_dir`.
     """
     out_dir = confined(out_dir)
     source_stamp = build_source(release)
-    catalog_data = build_catalog(catalog)  # refuses bad input before writing
+    bundle = {  # built first: each of these can refuse the catalog
+        CATALOG_FILE: build_catalog(catalog),
+        SOURCES_FILE: build_sources(catalog),
+        PARITY_FILE: build_parity(catalog),
+    }
     out_dir.mkdir(parents=True, exist_ok=True)
     source = resources.files("musicdiscovery").joinpath("demo")
     for name in STATIC_FILES:
         with resources.as_file(source.joinpath(name)) as path:
             shutil.copyfile(path, out_dir / name)
-    _write_json(out_dir / CATALOG_FILE, catalog_data)
-    _write_json(out_dir / SOURCES_FILE, build_sources(catalog))
-    _write_json(out_dir / PARITY_FILE, build_parity(catalog))
+    for name, data in bundle.items():
+        _write_json(out_dir / name, data)
     (out_dir / SOURCE_FILE).write_text(
         json.dumps(source_stamp, indent=2) + "\n", encoding="utf-8"
     )
