@@ -460,3 +460,9 @@ def test_cli_reports_malformed_list_cell(tmp_path, monkeypatch, capsys, cells):
 @pytest.mark.parametrize("value", ["{'a': 1}", "5", "", "  ", float("nan")])
 def test_non_list_literal_reads_as_empty(value):
     assert ingest_module._parse_list(value) == []
+
+
+@pytest.mark.parametrize("value", ["['a', 'b'", "{[1]: 2}"])
+def test_unparsable_list_cell_raises_value_error(value):
+    with pytest.raises(ValueError, match="malformed list cell"):
+        ingest_module._parse_list(value)
