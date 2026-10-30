@@ -374,7 +374,10 @@ later run gets past it. It first tries a test tone as long as the clip, but no
 longer than the longest clip the encoder has handled, so a clip over a length
 limit is recorded and running out of memory for a length it has handled is not.
 If the tone fails too, the encoder is at fault, not the clip: the job prints one
-`embed-audio:` line, exits 1 and leaves the clip for the next run.
+`embed-audio:` line, exits 1 and leaves the clip for the next run. A clip that
+fails before the encoder has handled any waits until the end of the run and is
+tried again. If no clip encodes at all, the job stops the same way and records
+none of them.
 
 On the full catalog, 7,989 of 7,995 clips were embedded. The six that failed
 (track ids 98565, 98567, 98569, 99134, 108925 and 133297) do not decode; they

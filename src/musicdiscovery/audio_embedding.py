@@ -255,11 +255,15 @@ def embed_archive(
     A batch the encoder fails on is retried one clip at a time. A clip that
     fails alone is recorded as a failure only if the encoder can still encode a
     test tone. The tone is as long as the clip, but no longer than the longest
-    clip the encoder has handled (one second before it has handled any), so a
-    clip over a length limit is the clip's fault and running out of memory for a
-    length it has handled is not. If the tone fails, the encoder is at fault: the
-    clip stays unrecorded for the next run and this raises `AudioEmbeddingError`.
-    Both paths must be inside the working directory.
+    clip the encoder has handled, so a clip over a length limit is the clip's
+    fault and running out of memory for a length it has handled is not. If the
+    tone fails, the encoder is at fault: the clip stays unrecorded for the next
+    run and this raises `AudioEmbeddingError`.
+
+    Until the encoder has handled a clip, a failure cannot be judged, so the clip
+    waits and is tried again at the end of the run. If no clip encodes at all,
+    this raises `AudioEmbeddingError` and records none of them. Both paths must
+    be inside the working directory.
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
@@ -294,7 +298,7 @@ def embed_archive(
     failures = store.failures
     resumed_with = len(rows)
     longest = store.meta.get("longest_clip")
-    one_second = int(MIN_SECONDS * SAMPLE_RATE)
+    unjudged = []
 
     def save() -> None:
         stacked = np.stack(list(rows.values())) if rows else np.zeros((0, 0))
@@ -318,45 +322,52 @@ def embed_archive(
         rows.update(zip(track_ids, encode(clips), strict=True))
         longest = max(longest or 0, *(len(clip) for clip in clips))
 
+    def check_encoder(samples: int) -> None:
+        try:
+            encode([_test_tone(samples)])
+        except Exception as error:  # noqa: BLE001 - any encoder error
+            raise AudioEmbeddingError(
+                f"the encoder fails even on a test tone ({_described(error)}); "
+                f"{len(rows)} clips saved in {out}, run again to resume"
+            ) from error
+
     def encode_alone(track_id: int, clip: np.ndarray) -> None:
         try:
             keep([track_id], [clip])
         except Exception as error:  # noqa: BLE001 - any encoder error
-            try:
-                # A cache from before `longest_clip` holds clips of unknown length.
-                proven = longest or (len(clip) if rows else one_second)
-                encode([_test_tone(min(len(clip), proven))])
-            except Exception as tone_error:  # noqa: BLE001 - any encoder error
-                raise AudioEmbeddingError(
-                    f"the encoder fails even on a test tone "
-                    f"({_described(tone_error)}); {len(rows)} clips saved in {out}, "
-                    f"run again to resume"
-                ) from tone_error
-            failures[str(track_id)] = f"cannot encode: {type(error).__name__}"
+            if longest is None:
+                check_encoder(int(MIN_SECONDS * SAMPLE_RATE))
+                unjudged.append(track_id)
+            else:
+                check_encoder(min(len(clip), longest))
+                failures[str(track_id)] = f"cannot encode: {type(error).__name__}"
+
+    def read_clip(zf: zipfile.ZipFile, track_id: int) -> np.ndarray | None:
+        """The clip's samples, or None once it is recorded as a failure."""
+        name = member_name(track_id)
+        if name not in zf.NameToInfo:
+            failures[str(track_id)] = "missing from archive"
+            return None
+        try:
+            clip = decode(zf.read(name))
+        except Exception as error:  # noqa: BLE001 - any decoder error
+            failures[str(track_id)] = f"cannot decode: {type(error).__name__}"
+            return None
+        if len(clip) < MIN_SECONDS * SAMPLE_RATE:
+            failures[str(track_id)] = f"clip shorter than {MIN_SECONDS:g} s"
+            return None
+        return np.asarray(clip, dtype=np.float32)
 
     with zipfile.ZipFile(archive) as zf:
-        names = set(zf.namelist())
         since_save = 0
         try:
             for start in range(0, len(todo), batch_size):
                 batch_ids, clips = [], []
                 for track_id in todo[start : start + batch_size]:
-                    name = member_name(track_id)
-                    if name not in names:
-                        failures[str(track_id)] = "missing from archive"
-                        continue
-                    try:
-                        clip = decode(zf.read(name))
-                    except Exception as error:  # noqa: BLE001 - any decoder error
-                        failures[str(track_id)] = (
-                            f"cannot decode: {type(error).__name__}"
-                        )
-                        continue
-                    if len(clip) < MIN_SECONDS * SAMPLE_RATE:
-                        failures[str(track_id)] = f"clip shorter than {MIN_SECONDS:g} s"
-                        continue
-                    batch_ids.append(track_id)
-                    clips.append(np.asarray(clip, dtype=np.float32))
+                    clip = read_clip(zf, track_id)
+                    if clip is not None:
+                        batch_ids.append(track_id)
+                        clips.append(clip)
                 if clips:
                     try:
                         keep(batch_ids, clips)
@@ -370,6 +381,15 @@ def embed_archive(
                     log(
                         f"embedded {len(rows)} of {len(wanted)}, {len(failures)} failed"
                     )
+            if unjudged and longest is None:
+                raise AudioEmbeddingError(
+                    f"no clip encodes, though a short test tone does; "
+                    f"{len(unjudged)} clips left for the next run"
+                )
+            for track_id in unjudged:
+                clip = read_clip(zf, track_id)
+                if clip is not None:
+                    encode_alone(track_id, clip)
         finally:
             try:
                 save()
