@@ -67,6 +67,14 @@ def store_for(catalog: Catalog, skip: tuple[int, ...] = ()) -> VectorStore:
     return VectorStore(np.array(ids), unit, {"model": "fake"})
 
 
+def cancelling_store(catalog: Catalog) -> VectorStore:
+    """`store_for`, with track 101's vector the negative of track 100's."""
+    store = store_for(catalog)
+    ids = list(store.track_ids)
+    store.vectors[ids.index(101)] = -store.vectors[ids.index(100)]
+    return store
+
+
 def genre_of(catalog, track_id):
     return catalog.frame.set_index("track_id")["genre_top"][track_id]
 
@@ -176,6 +184,42 @@ def test_embed_archive_records_failures_and_resumes(tmp_path, catalog):
     )
     assert (again.embedded, again.failed, again.skipped) == (0, 0, 60)
     assert np.array_equal(VectorStore.load(out).vectors, store.vectors)
+
+
+def test_embed_archive_batch_with_only_failures(tmp_path, catalog):
+    # Tracks 100 and 101 sort first, so the first batch of two holds only them.
+    archive = write_archive(tmp_path / "a.zip", catalog, broken=(100,), short=(101,))
+    out = tmp_path / "v.npz"
+    encoder = FakeEncoder()
+    checkpoints = []
+
+    def log(line):
+        checkpoints.append((line, VectorStore.load(out).failures))
+
+    result = embed_archive(
+        catalog,
+        archive,
+        out,
+        encoder,
+        batch_size=2,
+        checkpoint_every=2,
+        expected_sha1=None,
+        decode=fake_decode,
+        log=log,
+    )
+    assert (result.embedded, result.failed) == (58, 2)
+    assert 0 not in encoder.batches
+    assert len(checkpoints) == 30
+    first_line, first_failures = checkpoints[0]
+    assert first_line == "embedded 0 of 60, 2 failed"
+    assert first_failures == {
+        "100": "cannot decode: ValueError",
+        "101": "clip shorter than 1 s",
+    }
+    again = embed_archive(
+        catalog, archive, out, FakeEncoder(), expected_sha1=None, decode=fake_decode
+    )
+    assert (again.embedded, again.failed, again.skipped) == (0, 0, 60)
 
 
 def test_embed_archive_a_bounded_sample(tmp_path, catalog):
@@ -415,6 +459,29 @@ def test_description_still_ranks_when_no_seed_has_a_vector(catalog):
     assert results[0].explanations[0] == "sounds like your description: Jazz"
 
 
+def test_cancelling_seed_vectors_return_nothing(catalog):
+    ranker = AudioEmbeddingRanker(store=cancelling_store(catalog))
+    assert ranker.rank(Preference((100, 101), k=5), catalog) == []
+    assert ranker.seeds_cancel_out(Preference((100, 101), k=5), catalog)
+    assert not ranker.seeds_cancel_out(Preference((100,), k=5), catalog)
+
+
+def test_cancelling_seeds_with_a_description_rank_on_the_description(catalog):
+    description = describe_vector("Jazz", FakeEncoder())
+    ranker = AudioEmbeddingRanker(
+        store=cancelling_store(catalog), description=description
+    )
+    results = ranker.rank(Preference((100, 101), k=5), catalog)
+    assert len(results) == 5
+    for result in results:
+        terms = {t.name: t.value for t in result.terms}
+        assert terms["embedding"] == 0.0 and terms["description"] > 0.0
+        assert "sounds like your description: Jazz" in result.explanations
+        assert genre_of(catalog, result.track_id) == "Jazz"
+    lowest = sorted(int(t) for t in catalog.track_ids if t not in (100, 101))[:5]
+    assert [r.track_id for r in results] != lowest
+
+
 def test_ranker_errors_without_vectors(catalog, tmp_path):
     empty = VectorStore(np.array([1]), np.ones((1, DIMENSION)))
     with pytest.raises(AudioEmbeddingError, match="no catalog track"):
@@ -497,6 +564,18 @@ def test_recommend_without_a_seed_vector_says_so(catalog, capsys):
     assert "no seed has an audio vector (100)" in captured.err
     assert main([*args, "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == []
+
+
+def test_recommend_says_when_seed_vectors_cancel(catalog, capsys):
+    write_catalog(catalog)
+    cancelling_store(catalog).save(DEFAULT_VECTORS)
+    args = ["recommend", "--seed", "100", "--seed", "101"]
+    assert main([*args, "--ranker", "audio-embedding"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        "recommend: the seeds' audio vectors (100, 101) cancel out; nothing to rank on"
+    ]
 
 
 def test_embed_audio_command(catalog, capsys, monkeypatch):
