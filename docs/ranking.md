@@ -363,10 +363,16 @@ musicdiscovery recommend --ranker audio-embedding --seed 2 --describe "warm acou
 
 `musicdiscovery embed-audio` reads each clip straight from the checksum-verified
 `data/audio/fma_small.zip`, decodes it to 16 kHz mono and caches unit vectors in
-`data/embeddings/embeddinggemma-2.npz`. It saves every 200 tracks, so a stopped
-run resumes where it left off, and it records failed tracks with the reason.
-`--limit` embeds a seeded sample instead. Neither audio nor vectors are
-committed.
+`data/embeddings/embeddinggemma-2.npz`. It saves every 200 tracks and again
+however it stops, Ctrl+C included, so a stopped run resumes where it left off,
+and it records failed tracks with the reason. `--limit` embeds a seeded sample
+instead. Neither audio nor vectors are committed.
+
+When the encoder fails on a batch, the job retries that batch one clip at a
+time and records a clip that fails alone as `cannot encode: <error type>`, so a
+later run gets past it. It first tries a test tone of the same length. If the
+tone fails too, the encoder is at fault, not the clip: the job prints one
+`embed-audio:` line, exits 1 and leaves the clip for the next run.
 
 On the full catalog, 7,989 of 7,995 clips were embedded. The six that failed
 (track ids 98565, 98567, 98569, 99134, 108925 and 133297) do not decode; they

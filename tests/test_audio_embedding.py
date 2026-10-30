@@ -401,6 +401,22 @@ def test_encoder_settings_and_calls(monkeypatch):
     assert inputs == ["calm piano"] and kwargs["prompt_name"] == "SearchQuery"
 
 
+def test_encoder_reports_a_model_that_will_not_load(monkeypatch):
+    def refuse(*_, **__):
+        raise RuntimeError("corrupt\nweights")
+
+    monkeypatch.setitem(
+        sys.modules, "torch", types.SimpleNamespace(float32=0, set_num_threads=int)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(SentenceTransformer=refuse),
+    )
+    with pytest.raises(AudioEmbeddingError, match="RuntimeError: corrupt weights"):
+        SentenceTransformerEncoder()
+
+
 # --- the ranker ---------------------------------------------------------------
 
 
@@ -661,7 +677,7 @@ class DyingEncoder(FakeEncoder):
 
     def encode_audio(self, clips):
         if len(clips) > self.clips_left:
-            raise self.error("encoder failed")
+            raise self.error("encoder\nfailed")
         self.clips_left -= len(clips)
         return super().encode_audio(clips)
 
@@ -828,12 +844,13 @@ def test_ctrl_c_anywhere_leaves_the_finished_clips(tmp_path, catalog, site):
             out,
             encoder,
             batch_size=2,
-            checkpoint_every=6,
+            checkpoint_every=4,
             expected_sha1=None,
             decode=decode,
             log=log,
         )
-    assert len(VectorStore.load(out).track_ids) == 6
+    # Two batches reach the checkpoint, whose log line is the "log" site's Ctrl+C.
+    assert len(VectorStore.load(out).track_ids) == (4 if site == "log" else 6)
 
 
 def test_embed_audio_reports_an_encoder_failure_in_one_line(

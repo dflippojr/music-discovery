@@ -42,6 +42,7 @@ DESCRIPTION_WEIGHT = 1.0
 # The model card's retrieval query prompt; clips are embedded with no prompt.
 QUERY_PROMPT = "SearchQuery"
 SIMILARITY_TEXT = "similar sound to the seeds (audio embedding)"
+TEST_TONE_HZ = 440
 
 
 class AudioEmbeddingError(Exception):
@@ -78,12 +79,17 @@ class SentenceTransformerEncoder:
             ) from error
         torch.set_num_threads(threads)
         self.name = model_id
-        self._model = SentenceTransformer(
-            model_id,
-            device="cpu",
-            model_kwargs={"torch_dtype": torch.float32},
-            config_kwargs={"vision_config": None},
-        )
+        try:
+            self._model = SentenceTransformer(
+                model_id,
+                device="cpu",
+                model_kwargs={"torch_dtype": torch.float32},
+                config_kwargs={"vision_config": None},
+            )
+        except Exception as error:  # noqa: BLE001 - any error from the model loader
+            raise AudioEmbeddingError(
+                f"cannot load {model_id}: {_described(error)}"
+            ) from error
 
     def encode_audio(self, clips: Sequence[np.ndarray]) -> np.ndarray:
         inputs = [
@@ -121,6 +127,17 @@ def member_name(track_id: int) -> str:
 def confined(path: Path) -> Path:
     """Resolve a user-supplied path and keep it inside the working directory."""
     return paths.confined(path, AudioEmbeddingError)
+
+
+def _described(error: Exception) -> str:
+    """The error's type and message on one line, for a one-line CLI report."""
+    return f"{type(error).__name__}: {' '.join(str(error).split())}"
+
+
+def _test_tone(samples: int) -> np.ndarray:
+    """A plain tone as long as the clip the encoder just failed on."""
+    seconds = np.arange(samples) / SAMPLE_RATE
+    return (0.1 * np.sin(2 * np.pi * TEST_TONE_HZ * seconds)).astype(np.float32)
 
 
 def _unit(vectors: np.ndarray) -> np.ndarray:
@@ -231,10 +248,15 @@ def embed_archive(
     """Embed catalog clips from the archive into the cache at `out`.
 
     A second run resumes: tracks already embedded or recorded as failed are
-    skipped. The cache is saved every `checkpoint_every` tracks and at the end.
-    A missing, undecodable or shorter-than-a-second clip is recorded as a
-    failure and the run goes on. Both paths must be inside the working
-    directory.
+    skipped. The cache is saved every `checkpoint_every` tracks and however the
+    loop ends, Ctrl+C included. A missing, undecodable or shorter-than-a-second
+    clip is recorded as a failure and the run goes on.
+
+    A batch the encoder fails on is retried one clip at a time. A clip that
+    fails alone is recorded as a failure only if the encoder can still encode a
+    test tone of the same length. If it cannot, the encoder is at fault, not the
+    clip: the clip stays unrecorded for the next run and this raises
+    `AudioEmbeddingError`. Both paths must be inside the working directory.
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
@@ -264,49 +286,83 @@ def embed_archive(
     wanted = select_tracks(catalog, limit, sample_seed)
     done = {int(t) for t in store.track_ids} | {int(t) for t in store.failures}
     todo = [t for t in wanted if t not in done]
-    ids, vectors = list(store.track_ids), list(store.vectors)
+    # One dict, so Ctrl+C cannot land between adding a track id and its vector.
+    rows = dict(zip(store.track_ids.tolist(), store.vectors, strict=True))
     failures = store.failures
-    embedded = 0
+    resumed_with = len(rows)
 
     def save() -> None:
-        stacked = np.stack(vectors) if vectors else np.zeros((0, 0))
-        VectorStore(np.array(ids), stacked, {**meta, "failures": failures}).save(out)
+        stacked = np.stack(list(rows.values())) if rows else np.zeros((0, 0))
+        VectorStore(np.array(list(rows)), stacked, {**meta, "failures": failures}).save(
+            out
+        )
+
+    def encode(clips: list[np.ndarray]) -> np.ndarray:
+        """Unit vectors for the clips, refusing output the cache could not hold."""
+        encoded = np.asarray(encoder.encode_audio(clips), dtype=np.float32)
+        width = len(next(iter(rows.values()))) if rows else None
+        if encoded.ndim != 2 or len(encoded) != len(clips):
+            raise ValueError(f"encoder output has shape {encoded.shape}")
+        if width not in (None, encoded.shape[1]):
+            raise ValueError(f"encoder output has {encoded.shape[1]} dimensions")
+        if not np.all(np.isfinite(encoded)):
+            raise ValueError("encoder output has non-finite values")
+        return _unit(encoded)
+
+    def encode_alone(track_id: int, clip: np.ndarray) -> None:
+        try:
+            rows[track_id] = encode([clip])[0]
+        except Exception as error:  # noqa: BLE001 - any encoder error
+            try:
+                encode([_test_tone(len(clip))])
+            except Exception as tone_error:  # noqa: BLE001 - any encoder error
+                raise AudioEmbeddingError(
+                    f"the encoder fails even on a test tone "
+                    f"({_described(tone_error)}); {len(rows)} clips saved in {out}, "
+                    f"run again to resume"
+                ) from tone_error
+            failures[str(track_id)] = f"cannot encode: {type(error).__name__}"
 
     with zipfile.ZipFile(archive) as zf:
         names = set(zf.namelist())
         since_save = 0
-        for start in range(0, len(todo), batch_size):
-            batch_ids, clips = [], []
-            for track_id in todo[start : start + batch_size]:
-                name = member_name(track_id)
-                if name not in names:
-                    failures[str(track_id)] = "missing from archive"
-                    continue
-                try:
-                    clip = decode(zf.read(name))
-                except Exception as error:  # noqa: BLE001 - any decoder error
-                    failures[str(track_id)] = f"cannot decode: {type(error).__name__}"
-                    continue
-                if len(clip) < MIN_SECONDS * SAMPLE_RATE:
-                    failures[str(track_id)] = f"clip shorter than {MIN_SECONDS:g} s"
-                    continue
-                batch_ids.append(track_id)
-                clips.append(np.asarray(clip, dtype=np.float32))
-            if clips:
-                encoded = _unit(
-                    np.asarray(encoder.encode_audio(clips), dtype=np.float32)
-                )
-                ids += batch_ids
-                vectors += list(encoded)
-                embedded += len(batch_ids)
-            since_save += len(todo[start : start + batch_size])
-            if since_save >= checkpoint_every:
-                save()
-                since_save = 0
-                log(f"embedded {len(ids)} of {len(wanted)}, {len(failures)} failed")
-    save()
+        try:
+            for start in range(0, len(todo), batch_size):
+                batch_ids, clips = [], []
+                for track_id in todo[start : start + batch_size]:
+                    name = member_name(track_id)
+                    if name not in names:
+                        failures[str(track_id)] = "missing from archive"
+                        continue
+                    try:
+                        clip = decode(zf.read(name))
+                    except Exception as error:  # noqa: BLE001 - any decoder error
+                        failures[str(track_id)] = (
+                            f"cannot decode: {type(error).__name__}"
+                        )
+                        continue
+                    if len(clip) < MIN_SECONDS * SAMPLE_RATE:
+                        failures[str(track_id)] = f"clip shorter than {MIN_SECONDS:g} s"
+                        continue
+                    batch_ids.append(track_id)
+                    clips.append(np.asarray(clip, dtype=np.float32))
+                if clips:
+                    try:
+                        rows.update(zip(batch_ids, encode(clips), strict=True))
+                    except Exception:  # noqa: BLE001 - find the clip that fails
+                        for track_id, clip in zip(batch_ids, clips, strict=True):
+                            encode_alone(track_id, clip)
+                since_save += len(todo[start : start + batch_size])
+                if since_save >= checkpoint_every:
+                    save()
+                    since_save = 0
+                    log(
+                        f"embedded {len(rows)} of {len(wanted)}, {len(failures)} failed"
+                    )
+        finally:
+            save()
     return EmbedResult(
-        embedded=embedded,
+        embedded=len(rows) - resumed_with,
         failed=sum(1 for t in todo if str(t) in failures),
         skipped=len(wanted) - len(todo),
         total=len(wanted),
