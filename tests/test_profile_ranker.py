@@ -187,6 +187,21 @@ def test_fit_logistic_separates_and_needs_both_classes():
         fit_logistic(x, np.ones(100))
 
 
+def test_fit_logistic_stops_at_the_step_limit():
+    rng = np.random.default_rng(0)
+    # Positives sit at x0 in [1, 3] and negatives at x0 in [-3, -1]: separable.
+    positive = np.column_stack([rng.uniform(1, 3, 50), rng.normal(0, 1, 50)])
+    negative = np.column_stack([rng.uniform(-3, -1, 50), rng.normal(0, 1, 50)])
+    x = np.vstack([positive, negative])
+    y = np.r_[np.ones(50), np.zeros(50)]
+    weights, bias = fit_logistic(x, y, steps=1)
+    assert np.isfinite(weights).all() and np.isfinite(bias)
+    converged, _ = fit_logistic(x, y)
+    assert not np.allclose(weights, converged)
+    again, again_bias = fit_logistic(x, y, steps=1)
+    assert np.array_equal(weights, again) and bias == again_bias
+
+
 def test_training_is_reproducible_and_uses_validation_only(catalog, profiles):
     first = train(catalog, profiles, negatives=20)
     second = train(catalog, profiles, negatives=20)
@@ -223,6 +238,21 @@ def test_training_script_writes_the_same_weights_twice(workdir, capsys):
     assert '"weights"' in capsys.readouterr().out
     assert train_main(["--data-dir", "nowhere"]) == 1
     assert "train:" in capsys.readouterr().err
+
+
+def test_training_dry_run_writes_nothing(workdir, capsys):
+    import musicdiscovery.profile_training as training
+
+    model_file = workdir / training.MODEL_PATH
+    model_file.parent.mkdir(parents=True)
+    model_file.write_bytes(b"sentinel")
+    assert train_main([]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert set(printed["weights"]) == set(FEATURES)
+    assert model_file.read_bytes() == b"sentinel"
+    model_file.unlink()
+    assert train_main([]) == 0
+    assert not model_file.exists()
 
 
 def test_cli_reports_a_broken_model(workdir, monkeypatch, capsys):

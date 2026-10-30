@@ -1,12 +1,13 @@
 """Hybrid ranker and its tuning, on a synthetic catalog with planted structure."""
 
+import math
 from dataclasses import replace
 
 import pytest
 from test_evaluation import make_frame
 
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.evaluation import generate_queries, write_queries
+from musicdiscovery.evaluation import EvaluationError, generate_queries, write_queries
 from musicdiscovery.hybrid import (
     VARIETY_TEXT,
     HybridConfig,
@@ -170,6 +171,38 @@ def test_tuning_is_reproducible_and_respects_the_floor(catalog):
     assert chosen["means"]["genre_precision"] >= chosen["floor"]
 
 
+def tied_at_the_top(ranker, *_):
+    # metadata_weight 0.0 and 1.0 tie at the top; every other config scores 0.
+    config = ranker.config
+    top = config.mmr_lambda == 0.5 and config.genre_redundancy == 0.5
+    return {"genre_precision": 1.0, "genre_ndcg": float(top), "artist_diversity": 0.0}
+
+
+def test_tune_breaks_ties_in_grid_order(catalog, monkeypatch):
+    import musicdiscovery.tuning as tuning
+
+    monkeypatch.setattr(tuning, "validation_means", tied_at_the_top)
+    queries = generate_queries(catalog, per_split=20)
+    best, rows = tune(catalog, queries, GRID)
+    tied = [r["config"] for r in rows if r["means"]["genre_ndcg"] == 1.0]
+    assert [c.metadata_weight for c in tied] == [0.0, 1.0]
+    assert best == tied[0]
+
+
+def below_the_floor(*_):
+    # Genre precision of -inf is below any floor, so no config is feasible.
+    return {"genre_precision": -math.inf, "genre_ndcg": 0.0, "artist_diversity": 0.0}
+
+
+def test_tune_reports_when_no_config_is_feasible(catalog, monkeypatch):
+    import musicdiscovery.tuning as tuning
+
+    monkeypatch.setattr(tuning, "validation_means", below_the_floor)
+    queries = generate_queries(catalog, per_split=20)
+    with pytest.raises(EvaluationError, match="no config keeps genre precision"):
+        tune(catalog, queries, GRID)
+
+
 @pytest.fixture
 def workdir(tmp_path, monkeypatch, catalog):
     monkeypatch.chdir(tmp_path)
@@ -195,3 +228,37 @@ def test_tune_cli(workdir, monkeypatch, capsys):
     assert out.count("\n* meta=") == 1
     assert tune_main(["--data-dir", "nowhere"]) == 1
     assert "tune:" in capsys.readouterr().err
+
+
+def test_tune_dry_run_writes_nothing(workdir, monkeypatch, capsys):
+    import musicdiscovery.tuning as tuning
+
+    real_tune = tuning.tune
+    monkeypatch.setattr(tuning, "tune", lambda c, q: real_tune(c, q, GRID))
+    config_file = workdir / tuning.CONFIG_PATH
+    config_file.parent.mkdir(parents=True)
+    config_file.write_bytes(b"sentinel")
+    assert tune_main(["--queries", "eval/q.json"]) == 0
+    out = capsys.readouterr().out
+    assert "genre precision floor" in out
+    assert out.count(" meta=") == math.prod(len(v) for v in GRID.values())
+    assert out.count("\n* meta=") == 1
+    assert '"metadata_weight"' in out
+    assert config_file.read_bytes() == b"sentinel"
+    config_file.unlink()
+    assert tune_main(["--queries", "eval/q.json"]) == 0
+    assert not config_file.exists()
+
+
+def test_tune_cli_writes_nothing_when_no_config_is_feasible(
+    workdir, monkeypatch, capsys
+):
+    import musicdiscovery.tuning as tuning
+
+    monkeypatch.setattr(tuning, "validation_means", below_the_floor)
+    config_file = workdir / tuning.CONFIG_PATH
+    config_file.parent.mkdir(parents=True)
+    config_file.write_bytes(b"sentinel")
+    assert tune_main(["--queries", "eval/q.json", "--write"]) == 1
+    assert "tune: no config keeps genre precision" in capsys.readouterr().err
+    assert config_file.read_bytes() == b"sentinel"
