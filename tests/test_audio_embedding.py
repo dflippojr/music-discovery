@@ -1011,7 +1011,7 @@ def test_memory_pressure_on_an_older_cache_blames_no_clip(tmp_path, catalog):
     store = VectorStore.load(out)
     del store.meta["longest_clip"]
     store.save(out)
-    with pytest.raises(AudioEmbeddingError, match="test tone"):
+    with pytest.raises(AudioEmbeddingError, match="no clip encodes"):
         embed_archive(
             catalog,
             archive,
@@ -1020,6 +1020,69 @@ def test_memory_pressure_on_an_older_cache_blames_no_clip(tmp_path, catalog):
             expected_sha1=None,
             decode=decode,
         )
+    assert VectorStore.load(out).failures == {}
+
+
+def test_an_older_cache_gets_past_a_clip_over_the_length_limit(tmp_path, catalog):
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    first = select_tracks(catalog, 5, 0)
+    long_track = next(int(t) for t in catalog.track_ids if int(t) not in first)
+    decode = decode_with_long_tracks({long_track})
+    encoder = LengthLimitEncoder(2 * SAMPLE_RATE)
+    embed_archive(
+        catalog, archive, out, encoder, limit=5, expected_sha1=None, decode=decode
+    )
+    store = VectorStore.load(out)
+    del store.meta["longest_clip"]
+    store.save(out)
+    result = embed_archive(
+        catalog, archive, out, encoder, expected_sha1=None, decode=decode
+    )
+    assert (result.embedded, result.failed) == (54, 1)
+    store = VectorStore.load(out)
+    assert store.failures == {str(long_track): "cannot encode: RuntimeError"}
+    assert store.meta["longest_clip"] == 2 * SAMPLE_RATE
+
+
+def test_memory_pressure_from_the_first_clip_blames_no_clip(tmp_path, catalog):
+    # A short tone encodes but no clip does, so nothing shows the clips are at fault.
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    with pytest.raises(AudioEmbeddingError, match="no clip encodes"):
+        embed_archive(
+            catalog,
+            archive,
+            out,
+            LengthLimitEncoder(SAMPLE_RATE),
+            expected_sha1=None,
+            decode=decode_with_long_tracks(set()),
+        )
+    store = VectorStore.load(out)
+    assert store.failures == {} and len(store.track_ids) == 0
+
+
+def test_a_clip_that_fails_before_any_encodes_gets_its_second_chance(tmp_path, catalog):
+    # The first clip's failure was passing, so it is embedded, not recorded.
+    class FirstCallsFail(FakeEncoder):
+        def encode_audio(self, clips):
+            if len(clips[0]) > SAMPLE_RATE and len(self.batches) < 2:
+                self.batches.append(0)
+                raise MemoryError
+            return super().encode_audio(clips)
+
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    result = embed_archive(
+        catalog,
+        archive,
+        out,
+        FirstCallsFail(),
+        batch_size=1,
+        expected_sha1=None,
+        decode=decode_with_long_tracks(set()),
+    )
+    assert (result.embedded, result.failed) == (60, 0)
     assert VectorStore.load(out).failures == {}
 
 
