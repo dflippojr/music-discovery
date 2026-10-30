@@ -27,6 +27,7 @@ from musicdiscovery.hybrid import (
     HybridRanker,
 )
 from musicdiscovery.ingest import CATALOG_NAME
+from musicdiscovery.preference import PreferenceError
 
 GRID: dict[str, tuple[float, ...]] = {
     "metadata_weight": (0.0, 0.25, 0.5, 1.0, 2.0),
@@ -98,7 +99,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         config, rows = tune(catalog, queries)
         if args.write:
             confined(CONFIG_PATH).write_text(config.dump(), encoding="utf-8")
-    except (CatalogError, EvaluationError, HybridConfigError, OSError) as error:
+    except (
+        CatalogError,
+        EvaluationError,
+        HybridConfigError,
+        OSError,
+        PreferenceError,
+    ) as error:
         print(f"tune: {error}", file=sys.stderr)
         return 1
     floor = rows[0]["floor"]
