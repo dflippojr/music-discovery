@@ -14,6 +14,7 @@ from test_evaluation import make_frame
 from musicdiscovery import demo
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.cli import main
+from musicdiscovery.evaluation import EvaluationError
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -324,6 +325,70 @@ def test_export_demo_refuses_an_empty_catalog(tmp_path, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert err.splitlines() == ["export-demo: catalog has no tracks"]
     assert not out.exists()
+
+
+def files_under(directory):
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_export_refusal_leaves_old_bundle_alone(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    frame = make_frame()
+    demo.export_demo(Catalog(frame), Path("bundle"))
+    before = Path("bundle/catalog.json").read_bytes()
+    with pytest.raises(EvaluationError, match="too small"):
+        demo.export_demo(Catalog(frame.head(20)), Path("bundle"))
+    assert Path("bundle/catalog.json").read_bytes() == before
+
+
+# Every build_* in the module, found by name, so a stage added later is held to
+# the same rule: nothing reaches the out directory until all of them succeeded.
+BUILD_STAGES = sorted(name for name in vars(demo) if name.startswith("build_"))
+
+
+def test_the_build_stages_include_the_ones_a_bundle_needs():
+    assert {"build_source", "build_catalog", "build_sources", "build_parity"} <= set(
+        BUILD_STAGES
+    )
+
+
+@pytest.mark.parametrize("stage", BUILD_STAGES)
+def test_a_refusal_at_any_build_stage_changes_nothing(tmp_path, monkeypatch, stage):
+    monkeypatch.chdir(tmp_path)
+    catalog = Catalog(make_frame())
+    demo.export_demo(catalog, Path("bundle"))
+    before = files_under(Path("bundle"))
+
+    def refuse(*args, **kwargs):
+        raise demo.DemoError(f"{stage} refused")
+
+    monkeypatch.setattr(demo, stage, refuse)
+    with pytest.raises(demo.DemoError, match=f"{stage} refused"):
+        demo.export_demo(catalog, Path("bundle"))
+    assert files_under(Path("bundle")) == before
+    with pytest.raises(demo.DemoError, match=f"{stage} refused"):
+        demo.export_demo(catalog, Path("fresh/bundle"))
+    assert not Path("fresh").exists()
+
+
+@pytest.mark.parametrize("tracks", [0, 1, 23])
+def test_the_cli_refusing_a_small_catalog_changes_nothing(
+    tmp_path, capsys, monkeypatch, tracks
+):
+    monkeypatch.chdir(tmp_path)
+    frame = make_frame()
+    demo.export_demo(Catalog(frame), Path("bundle"))
+    before = files_under(Path("bundle"))
+    data = tmp_path / "data" / "catalog"
+    data.mkdir(parents=True)
+    frame.head(tracks).to_parquet(data / "catalog.parquet", index=False)
+    assert main(["export-demo", "bundle", "--data-dir", "data"]) == 1
+    assert capsys.readouterr().err.startswith("export-demo: catalog ")
+    assert files_under(Path("bundle")) == before
 
 
 @pytest.mark.filterwarnings("error::RuntimeWarning")
