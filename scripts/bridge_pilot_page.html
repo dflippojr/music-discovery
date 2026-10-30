@@ -1,0 +1,247 @@
+<title>Sound Bridge Listening Check</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<style>
+/* One song at a time, thumb-sized buttons, a strip of 30 cells as the score sheet. */
+:root {
+  --bg: #eef1f6; --surface: #ffffff; --fg: #17202e; --muted: #566175;
+  --line: #c9d1de; --accent: #1f46c4; --on-accent: #ffffff; --done: #d7e0f8; --warn: #8a4b00;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11161f; --surface: #1a2130; --fg: #e8ecf4; --muted: #a0abbe;
+  --line: #37425a; --accent: #9db2ff; --on-accent: #10172a; --done: #2a3863; --warn: #f2b56b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11161f; --surface: #1a2130; --fg: #e8ecf4; --muted: #a0abbe;
+  --line: #37425a; --accent: #9db2ff; --on-accent: #10172a; --done: #2a3863; --warn: #f2b56b; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 17px/1.5 var(--body);
+  padding-block: 20px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 34rem; margin-inline: auto; display: grid; gap: 20px; }
+h1, h2 { font-family: var(--display); font-weight: 600; line-height: 1.15; margin: 0; text-wrap: balance; }
+h1 { font-size: 1.6rem; } h2 { font-size: 1.5rem; }
+p { margin: 0; }
+[hidden] { display: none !important; }
+.muted { color: var(--muted); font-size: .94rem; }
+#status { font-variant-numeric: tabular-nums; font-weight: 700; }
+#warning { color: var(--warn); font-weight: 700; }
+#sheet { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+#sheet button { min-height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+  color: var(--fg); font: 600 .82rem var(--body); font-variant-numeric: tabular-nums; cursor: pointer; }
+#sheet button.picked { background: var(--done); }
+#sheet button[aria-current="true"] { border: 2px solid var(--accent); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 16px; display: grid; gap: 16px; }
+.eyebrow { font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-variant-numeric: tabular-nums; }
+.listen { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+a.track { display: block; text-align: center; padding: 16px 8px; border: 2px solid var(--accent); border-radius: 8px;
+  color: var(--accent); font: 600 1.15rem var(--display); text-decoration: none; }
+fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+legend { font-weight: 700; padding: 0; margin-bottom: 8px; }
+.choice { display: block; width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; color: var(--fg); font: 400 1rem var(--body); text-align: left; cursor: pointer; }
+.choice[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+.nav { display: flex; justify-content: space-between; gap: 10px; }
+.nav button, #copy { min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); font: 400 1rem var(--body); cursor: pointer; }
+button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+details summary { cursor: pointer; font-weight: 700; }
+details[open] summary { margin-bottom: 8px; }
+details ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
+#picks-text { width: 100%; min-height: 6rem; font: .8rem ui-monospace, monospace; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+</style>
+<main>
+  <header>
+    <h1>Which one sounds closer?</h1>
+    <p id="status" aria-live="polite">Loading your picks</p>
+    <p id="warning" hidden></p>
+  </header>
+
+  <details>
+    <summary>How this works</summary>
+    <ul>
+      <li>Each pair has one song you know and two tracks from the Free Music Archive, A and B. Pick the one that sounds closer to the song.</li>
+      <li>Give each track about a minute. That is about 3 minutes a pair, or 1.5 hours in all. Stop whenever you like: every pick saves as you make it.</li>
+      <li>Judge by ear. Ignore the tags, artist and play counts on the archive's page.</li>
+      <li>If a page is gone or a track won't play, choose "Can't compare". Don't search for the track elsewhere.</li>
+      <li>You can change a pick until you finish. There is no right answer to chase, and a close call still gets a pick.</li>
+    </ul>
+  </details>
+
+  <div id="sheet" role="group" aria-label="Pairs, tap one to jump to it"></div>
+
+  <section class="card" aria-labelledby="song">
+    <p class="eyebrow" id="position"></p>
+    <div>
+      <h2 id="song"></h2>
+      <p class="muted"><span id="artist"></span> · <a id="hear" href="https://www.youtube.com/" rel="noreferrer">Find it on YouTube</a></p>
+    </div>
+    <div class="listen">
+      <a class="track" id="link-a" href="https://freemusicarchive.org/" rel="noreferrer">Play A</a>
+      <a class="track" id="link-b" href="https://freemusicarchive.org/" rel="noreferrer">Play B</a>
+    </div>
+    <fieldset>
+      <legend>Closer to the song</legend>
+      <button class="choice" id="pick-a" type="button" data-pick="A">A sounds closer</button>
+      <button class="choice" id="pick-b" type="button" data-pick="B">B sounds closer</button>
+      <button class="choice" id="pick-unplayable" type="button" data-pick="unplayable">Can't compare: a page is gone or won't play</button>
+    </fieldset>
+    <div class="nav">
+      <button id="prev" type="button">Back</button>
+      <button id="next" type="button">Next pair</button>
+    </div>
+  </section>
+
+  <section class="card" id="finished" hidden>
+    <h2>All 30 pairs are picked</h2>
+    <p>Tell Claude you've finished, and it will unblind the pairs and report the score. The result stays hidden on this page.</p>
+  </section>
+
+  <details>
+    <summary>Back up your picks</summary>
+    <p class="muted">Your picks save to this page's record. If that ever fails, copy this text and send it to Claude. This is kit __KIT__.</p>
+    <p><button id="copy" type="button">Copy picks</button></p>
+    <textarea id="picks-text" readonly aria-label="Your picks as text"></textarea>
+  </details>
+</main>
+<script id="pairs" type="application/json">__PAIRS__</script>
+<script>
+const PAIRS = JSON.parse(document.getElementById("pairs").textContent);
+// Each kit keeps its own picks: pair numbers mean different tracks in each.
+const KIT = "__KIT__";
+const DRAFT_KEY = `bridge-pilot-picks-${KIT}`;
+const picks = {}; // pair number -> { pick, at }; the newest choice wins across devices
+let current = 0;
+let collection = null;
+let writes = Promise.resolve(); // one at a time, so an older pick never lands last
+const unsaved = new Set();
+let pending = 0;
+let loaded = false; // the record has answered, so what it holds is known
+const $ = (id) => document.getElementById(id);
+
+function readDraft() {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) || {}; } catch { return {}; }
+}
+function writeDraft() {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(picks)); } catch { /* the record still holds them */ }
+}
+const picked = () => PAIRS.filter((pair) => picks[pair.pair]).length;
+const pickOf = (pair) => picks[pair]?.pick;
+const plainPicks = () => Object.fromEntries(Object.entries(picks).map(([pair, row]) => [pair, row.pick]));
+
+function render() {
+  const pair = PAIRS[current];
+  const count = picked();
+  $("status").textContent = `${count} of ${PAIRS.length} picked`;
+  $("position").textContent = `Pair ${pair.pair} of ${PAIRS.length}`;
+  $("song").textContent = pair.title;
+  $("artist").textContent = pair.artist;
+  $("hear").href = "https://www.youtube.com/results?search_query=" + encodeURIComponent(`${pair.artist} ${pair.title}`);
+  $("link-a").href = pair.a;
+  $("link-b").href = pair.b;
+  document.querySelectorAll(".choice").forEach((button) => {
+    button.setAttribute("aria-pressed", String(pickOf(pair.pair) === button.dataset.pick));
+  });
+  $("prev").disabled = current === 0;
+  $("next").disabled = current === PAIRS.length - 1;
+  document.querySelectorAll("#sheet button").forEach((cell, index) => {
+    cell.classList.toggle("picked", Boolean(picks[PAIRS[index].pair]));
+    cell.setAttribute("aria-current", String(index === current));
+  });
+  $("finished").hidden = count < PAIRS.length || !loaded || pending > 0 || unsaved.size > 0;
+  $("picks-text").value = JSON.stringify(plainPicks());
+}
+
+function showUnsaved() {
+  if (!loaded) return; // the load's own warning stays up
+  $("warning").textContent = "Some picks didn't reach the record. They are kept on this device and will be sent with your next pick or when you reload.";
+  $("warning").hidden = unsaved.size === 0;
+}
+
+async function save(pair) {
+  const ref = collection.doc(`pair-${pair}`);
+  try {
+    const stored = await ref.get();
+    const theirs = stored.exists ? stored.data() : null;
+    if (theirs && (theirs.at || 0) > picks[pair].at) {
+      picks[pair] = { pick: theirs.pick, at: theirs.at };
+      writeDraft();
+      render();
+    } else {
+      await ref.set({ pair: Number(pair), ...picks[pair] });
+    }
+    unsaved.delete(String(pair));
+  } catch {
+    unsaved.add(String(pair));
+  }
+  showUnsaved();
+}
+
+function send(pairs) {
+  for (const pair of pairs) {
+    pending += 1;
+    writes = writes.then(() => save(pair)).then(() => { pending -= 1; render(); });
+  }
+  return writes;
+}
+
+function choose(pick) {
+  const pair = PAIRS[current].pair;
+  picks[pair] = { pick, at: Date.now() };
+  writeDraft();
+  const sent = collection ? send(new Set([String(pair), ...unsaved])) : undefined;
+  render();
+  return sent;
+}
+
+PAIRS.forEach((pair, index) => {
+  const cell = document.createElement("button");
+  cell.type = "button";
+  cell.textContent = pair.pair;
+  cell.addEventListener("click", () => { current = index; render(); });
+  $("sheet").append(cell);
+});
+document.querySelectorAll(".choice").forEach((button) => {
+  button.addEventListener("click", () => choose(button.dataset.pick));
+});
+$("prev").addEventListener("click", () => { current -= 1; render(); });
+$("next").addEventListener("click", () => { current += 1; render(); window.scrollTo(0, 0); });
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("picks-text").value); $("copy").textContent = "Copied"; }
+  catch { $("picks-text").select(); }
+});
+
+Object.assign(picks, readDraft());
+render();
+
+(async () => {
+  let db = null;
+  try { db = window.claude ? await window.claude.use("db") : null; } catch { /* warned below */ }
+  if (!db) {
+    $("warning").textContent = "This view can't reach the record, so picks stay on this device. Open the page signed in to claude.ai, or back up your picks below.";
+    $("warning").hidden = false;
+    return;
+  }
+  collection = db.collection(`picks-${KIT}`);
+  try {
+    const stored = await collection.get();
+    loaded = true;
+    const stale = new Set(Object.keys(picks));
+    stored.docs.forEach((doc) => {
+      const row = doc.data();
+      if (!row) return;
+      const local = picks[row.pair];
+      if (!local || (row.at || 0) >= local.at) {
+        picks[row.pair] = { pick: row.pick, at: row.at || 0 };
+        stale.delete(String(row.pair));
+      }
+    });
+    writeDraft();
+    await send(stale);
+    const first = PAIRS.findIndex((pair) => !picks[pair.pair]);
+    if (first >= 0) current = first;
+    render();
+  } catch {
+    $("warning").textContent = "Your saved picks didn't load. Reload the page before picking more.";
+    $("warning").hidden = false;
+  }
+})();
+</script>
