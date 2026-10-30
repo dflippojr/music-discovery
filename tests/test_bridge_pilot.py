@@ -356,6 +356,44 @@ def test_prepare_needs_fetch_and_every_pair(tmp_path):
         pilot.prepare({"pairs": 30, "seed": 1}, tmp_path)
 
 
+def test_playable_rules_out_picks_and_controls_alike():
+    frame = catalog()
+    order = np.tile(np.arange(len(frame)), (4, 1))
+    dead = {100, 101, 108, 109, 110}
+    tracks = known_tracks(4)
+    key = pilot.build_pairs(tracks, frame, order, 7, lambda t: t not in dead)
+    shown = {e["bridge_track_id"] for e in key} | {e["control_track_id"] for e in key}
+    assert not shown & dead
+    assert min(e["bridge_neighbor_rank"] for e in key) >= 2
+
+
+def test_all_playable_gives_the_same_pairs_as_no_check():
+    frame = catalog()
+    order = np.tile(np.arange(len(frame)), (4, 1))
+    plain = pilot.build_pairs(known_tracks(4), frame, order, 7)
+    assert pilot.build_pairs(known_tracks(4), frame, order, 7, lambda _: True) == plain
+
+
+def test_live_variant_keeps_its_own_key_and_page_and_leaves_the_first_alone(tmp_path):
+    plan = write_prepared_inputs(tmp_path)
+    pilot.prepare(plan, tmp_path)
+    first = pilot.key_path(tmp_path).read_text(encoding="utf-8")
+
+    class AllDeadButLate:
+        def is_playable(self, url):
+            return not url.endswith(("t0", "t1", "t2"))
+
+        def counts(self):
+            return {"links_checked": 9, "links_dead": 3}
+
+    summary = pilot.prepare(plan, tmp_path, live_links=True, checker=AllDeadButLate())
+    assert summary["links_dead"] == 3
+    assert pilot.key_path(tmp_path).read_text(encoding="utf-8") == first
+    assert pilot.key_path(tmp_path, live_links=True).exists()
+    page = pilot.pilot_dir(tmp_path) / "listen-live.html"
+    assert "freemusicarchive.org/music/t0" not in page.read_text(encoding="utf-8")
+
+
 def test_sign_test_matches_the_bar_quoted_in_the_report():
     assert round(pilot.sign_test(21, 30), 3) == 0.043
     assert round(pilot.sign_test(20, 30), 3) == 0.099
@@ -414,9 +452,88 @@ def test_unblind_end_to_end_writes_the_result(tmp_path, capsys):
 
 
 class FakeResponse(io.BytesIO):
-    def __init__(self, body: bytes, headers: dict):
+    def __init__(self, body: bytes, headers: dict, url: str = "u"):
         super().__init__(body)
         self.headers = headers
+        self._url = url
+
+    def geturl(self) -> str:
+        return self._url
+
+
+PAGE_URL = "https://freemusicarchive.org/music/a/b/c"
+
+
+def player_page(url: str = PAGE_URL) -> bytes:
+    info = json.dumps({"url": url, "fileUrl": "https://files.example/c.mp3"})
+    return f"<div data-track-info='{info.replace(chr(34), '&quot;')}'>".encode()
+
+
+def checker_for(tmp_path, answers: list) -> tuple[pilot.LinkChecker, list]:
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.get_method())
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return pilot.LinkChecker(tmp_path / "links.json", opener, lambda _: None), calls
+
+
+def test_audio_url_ignores_a_trailing_slash_on_the_players_url():
+    page = player_page(PAGE_URL + "/").decode()
+    assert pilot._audio_url(page, PAGE_URL) == "https://files.example/c.mp3"
+
+
+def test_link_checker_asks_for_audio_headers_only_and_remembers(tmp_path):
+    checker, calls = checker_for(
+        tmp_path,
+        [
+            FakeResponse(player_page(), {}, PAGE_URL),
+            FakeResponse(b"", {"Content-Type": "audio/mpeg"}),
+        ],
+    )
+    assert checker.is_playable("http://old") is True
+    assert checker.is_playable("http://old") is True
+    assert calls == ["GET", "HEAD"]
+    assert checker.counts() == {"links_checked": 1, "links_dead": 0}
+    reopened = pilot.LinkChecker(tmp_path / "links.json", None, lambda _: None)
+    assert reopened.is_playable("http://old") is True
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        [None],
+        [FakeResponse(b"<html>no player</html>", {}, PAGE_URL)],
+        [FakeResponse(player_page("https://other/track"), {}, PAGE_URL)],
+        [
+            FakeResponse(player_page(), {}, PAGE_URL),
+            FakeResponse(b"", {"Content-Type": "text/html"}),
+        ],
+    ],
+)
+def test_link_checker_counts_gone_pages_and_missing_audio_as_dead(tmp_path, answers):
+    if answers == [None]:
+        answers = [urllib.error.HTTPError("u", 404, "x", {}, io.BytesIO())]
+    checker, _ = checker_for(tmp_path, answers)
+    assert checker.is_playable("http://old") is False
+    assert checker.counts() == {"links_checked": 1, "links_dead": 1}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.HTTPError("u", 503, "x", {}, io.BytesIO()),
+        urllib.error.URLError("down"),
+    ],
+)
+def test_link_checker_stops_when_it_cannot_tell(tmp_path, error):
+    checker, _ = checker_for(tmp_path, [error])
+    with pytest.raises(pilot.PilotError):
+        checker.is_playable("http://old")
 
 
 def http_error(code: int, headers: dict) -> urllib.error.HTTPError:

@@ -1,12 +1,13 @@
 """Blind pilot of the sound bridge from known tracks to FMA (#227, #226).
 
 Usage: python scripts/bridge_pilot.py fetch [--data-dir data]
-       python scripts/bridge_pilot.py prepare [--data-dir data]
-       python scripts/bridge_pilot.py unblind PICKS_JSON [--data-dir data]
+       python scripts/bridge_pilot.py prepare [--live-links] [--data-dir data]
+       python scripts/bridge_pilot.py unblind PICKS [--live-links] [--data-dir data]
 
 `fetch` looks up the tracks in `eval/bridge_pilot.json` on MusicBrainz and saves
 their AcousticBrainz low-level records. `prepare` matches them to the catalog
 and writes the listening page and the sealed key. `unblind` scores the picks.
+`--live-links` is the variant that skips archive pages that no longer play.
 
 `prepare` prints counts only, and the page holds no role for any link: run
 nothing that prints `sealed/key.json` until the listener has finished. All of
@@ -15,6 +16,7 @@ this stays under the ignored data directory. See docs/bridge-pilot.md.
 
 import argparse
 import hashlib
+import html
 import json
 import math
 import re
@@ -24,6 +26,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -77,8 +80,9 @@ def pilot_dir(data_dir: Path) -> Path:
     return data_dir / "bridge-pilot"
 
 
-def key_path(data_dir: Path) -> Path:
-    return pilot_dir(data_dir) / "sealed" / "key.json"
+def key_path(data_dir: Path, live_links: bool = False) -> Path:
+    name = "key-live.json" if live_links else "key.json"
+    return pilot_dir(data_dir) / "sealed" / name
 
 
 def _normalized(text: str) -> str:
@@ -150,6 +154,69 @@ def _reset_seconds(headers, default: float) -> float:
         if value and value.isdigit():
             return float(value) + 1
     return default
+
+
+class LinkChecker:
+    """Check that a catalog track's archive page still offers its audio.
+
+    Answers stay in a file, so the pairs hold still. It reads the page and asks
+    only for the audio's headers, so no audio is downloaded.
+    """
+
+    def __init__(self, cache: Path, opener=urllib.request.urlopen, sleep=time.sleep):
+        self._cache_path = cache
+        self._opener = opener
+        self._sleep = sleep
+        self._answers = (
+            json.loads(cache.read_text(encoding="utf-8")) if cache.exists() else {}
+        )
+
+    def is_playable(self, url: str) -> bool:
+        if url not in self._answers:
+            self._answers[url] = self._check(url)
+            self._cache_path.write_text(json.dumps(self._answers), encoding="utf-8")
+        return self._answers[url]
+
+    def counts(self) -> dict:
+        alive = sum(self._answers.values())
+        return {
+            "links_checked": len(self._answers),
+            "links_dead": len(self._answers) - alive,
+        }
+
+    def _open(self, url: str, method: str):
+        self._sleep(REQUEST_GAP_SECONDS)
+        request = urllib.request.Request(
+            url, method=method, headers={"User-Agent": USER_AGENT}
+        )
+        return self._opener(request, timeout=30)
+
+    def _check(self, url: str) -> bool:
+        try:
+            with self._open(url, "GET") as response:
+                page = response.read().decode("utf-8", "replace")
+                final = response.geturl()
+            audio = _audio_url(page, final)
+            if audio is None:
+                return False
+            with self._open(audio, "HEAD") as response:
+                return response.headers.get("Content-Type", "").startswith("audio/")
+        except urllib.error.HTTPError as error:
+            if error.code in (404, 410):
+                return False
+            raise PilotError(f"{url} answered HTTP {error.code}") from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise PilotError(f"{url} failed: {error}") from error
+
+
+def _audio_url(page: str, url: str) -> str | None:
+    """The audio file of the track this page is about, from its player data."""
+    for raw in re.findall(r"data-track-info='([^']+)'", page):
+        info = json.loads(html.unescape(raw))
+        same_page = str(info.get("url", "")).rstrip("/") == url.rstrip("/")
+        if same_page and info.get("fileUrl"):
+            return info["fileUrl"]
+    return None
 
 
 def _credit(recording: dict) -> str:
@@ -363,14 +430,19 @@ def match(known: np.ndarray, catalog: np.ndarray) -> np.ndarray:
 
 
 def build_pairs(
-    tracks: list[dict], frame: pd.DataFrame, order: np.ndarray, seed: int
+    tracks: list[dict],
+    frame: pd.DataFrame,
+    order: np.ndarray,
+    seed: int,
+    playable: Callable[[int], bool] = lambda _: True,
 ) -> list[dict]:
     """Pair each track's bridge pick with a random track of the track's genre.
 
     The genre is the known track's own: the control stands for a genre stand-in,
     which is what the bridge has to beat. A pick already used falls to the next
     nearest track, and no track appears twice, because a link seen in two pairs
-    would give away the bridge's. Returns the full key, in listening order.
+    would give away the bridge's. `playable` rules a track out the same way for
+    picks and controls. Returns the full key, in listening order.
     """
     rng = np.random.default_rng(seed)
     ids = frame["track_id"].to_numpy()
@@ -379,7 +451,9 @@ def build_pairs(
     picks = []
     for row in order:
         rank = next(
-            rank for rank, position in enumerate(row) if int(ids[position]) not in used
+            rank
+            for rank, position in enumerate(row)
+            if int(ids[position]) not in used and playable(int(ids[position]))
         )
         pick = int(ids[row[rank]])
         used.add(pick)
@@ -390,9 +464,13 @@ def build_pairs(
             dtype=int
         )
         pool = np.sort(pool[~np.isin(pool, list(used))])
-        if not len(pool):
-            raise PilotError(f"no control left in genre {track['genre']}")
-        control = int(rng.choice(pool))
+        while True:
+            if not len(pool):
+                raise PilotError(f"no control left in genre {track['genre']}")
+            control = int(rng.choice(pool))
+            if playable(control):
+                break
+            pool = pool[pool != control]
         used.add(control)
         entries.append(
             {
@@ -436,13 +514,18 @@ def render_page(pairs: list[dict], template: Path = PAGE_TEMPLATE) -> str:
     return template.read_text(encoding="utf-8").replace("__PAIRS__", payload)
 
 
-def prepare(plan: dict, data_dir: Path) -> dict:
+def prepare(
+    plan: dict,
+    data_dir: Path,
+    live_links: bool = False,
+    checker: LinkChecker | None = None,
+) -> dict:
     """Match, pair and seal. Prints nothing that tells a pick from a control."""
     out_dir = pilot_dir(data_dir)
     resolved_path = out_dir / "resolved.json"
     if not resolved_path.exists():
         raise PilotError(f"{resolved_path} is missing; run fetch first")
-    sealed = key_path(data_dir)
+    sealed = key_path(data_dir, live_links)
     if sealed.exists():
         raise PilotError(f"{sealed} exists; a second prepare would reseal the pilot")
     tracks = json.loads(resolved_path.read_text(encoding="utf-8"))["tracks"]
@@ -468,11 +551,18 @@ def prepare(plan: dict, data_dir: Path) -> dict:
         ]
     )
     order = match(known, frame[feature_columns()].to_numpy(dtype=np.float64))
-    key = build_pairs(tracks, frame, order, plan["seed"])
+    playable = lambda _: True  # noqa: E731
+    if live_links:
+        checker = checker or LinkChecker(out_dir / "links.json")
+        urls = dict(
+            zip(frame["track_id"].astype(int), frame["source_url"], strict=True)
+        )
+        playable = lambda track_id: checker.is_playable(urls[track_id])  # noqa: E731
+    key = build_pairs(tracks, frame, order, plan["seed"], playable)
     sealed.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps({"seed": plan["seed"], "pairs": key}, indent=2)
     sealed.write_text(body, encoding="utf-8")
-    page = out_dir / "listen.html"
+    page = out_dir / ("listen-live.html" if live_links else "listen.html")
     page.write_text(render_page(listening_pairs(key, frame)), encoding="utf-8")
     summary = {
         "pairs": len(key),
@@ -480,6 +570,8 @@ def prepare(plan: dict, data_dir: Path) -> dict:
         "page": str(page),
         "key_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
+    if checker:
+        summary.update(checker.counts())
     print(json.dumps(summary, indent=2))
     return summary
 
@@ -531,12 +623,15 @@ def score(key: list[dict], picks: dict[str, str], plan: dict) -> dict:
     }
 
 
-def unblind(plan: dict, data_dir: Path, picks_path: Path) -> dict:
+def unblind(
+    plan: dict, data_dir: Path, picks_path: Path, live_links: bool = False
+) -> dict:
     """Score the finished picks and write the result next to the key."""
     picks = json.loads(picks_path.read_text(encoding="utf-8"))
-    key = json.loads(key_path(data_dir).read_text(encoding="utf-8"))["pairs"]
+    sealed = key_path(data_dir, live_links)
+    key = json.loads(sealed.read_text(encoding="utf-8"))["pairs"]
     result = score(key, picks, plan)
-    out = pilot_dir(data_dir) / "result.json"
+    out = pilot_dir(data_dir) / ("result-live.json" if live_links else "result.json")
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(
         json.dumps(
@@ -551,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=("fetch", "prepare", "unblind"))
     parser.add_argument("picks", nargs="?", type=Path, help="picks JSON for unblind")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
+    parser.add_argument("--live-links", action="store_true")
     args = parser.parse_args(argv)
     plan = load_plan()
     try:
@@ -558,11 +654,11 @@ def main(argv: list[str] | None = None) -> int:
             out_dir = pilot_dir(args.data_dir)
             fetch(Client(cache_dir=out_dir / "cache"), plan, out_dir)
         elif args.command == "prepare":
-            prepare(plan, args.data_dir)
+            prepare(plan, args.data_dir, args.live_links)
         else:
             if args.picks is None:
                 raise PilotError("unblind needs the picks JSON")
-            unblind(plan, args.data_dir, args.picks)
+            unblind(plan, args.data_dir, args.picks, args.live_links)
     except (PilotError, OSError) as error:
         print(f"bridge_pilot: {error}", file=sys.stderr)
         return 1

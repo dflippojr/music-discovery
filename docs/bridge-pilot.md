@@ -80,16 +80,33 @@ another genre could be told from the control by someone who reads the page. The
 page asks the listener to judge by ear and ignore those labels, and `unblind`
 reports how many picks were off-genre.
 
+## Dead links
+
+The first sealed kit, `listen.html` and `sealed/key.json`, follows the issue
+as written: a pair with a gone page is recorded as unplayable. A link check after
+sealing found 14 of its 60 links gone, in 13 pairs, mostly because the whole
+artist has left the archive. That caps the bridge at 17 wins, so it could not
+reach the bar whatever the listener heard.
+
+`prepare --live-links` builds a second sealed kit, `listen-live.html` and
+`sealed/key-live.json`, from the same tracks, match and seed. A track whose page
+no longer offers its audio is skipped, for picks and controls alike. A pick falls
+to the next nearest live track, and a control is drawn again. The bar stays at 21
+of 30, and `unblind --live-links` reports how far picks moved. The owner chooses
+which kit counts. The link check reads pages and audio headers only, with no
+audio downloaded.
+
 ## Listening
 
-The listening page is a private page on claude.ai, published from
-`data/bridge-pilot/listen.html`. Each pick saves as it is made, so the check
-works over several sittings. "Can't compare" records a pair as unplayable.
+The listening page is a private page on claude.ai, published from the kit's
+`listen*.html`. Each pick saves to the page's `picks` collection as it is made,
+so the check works over several sittings. "Can't compare" records a pair as unplayable.
 
 ## Scoring
 
-Save the picks as JSON (`{"1": "A", "2": "unplayable", ...}`), then run
-`bridge_pilot.py unblind PICKS.json`. An unplayable pair can't win, so the bar
+Save the picks as JSON (`{"1": "A", "2": "unplayable", ...}`), from the page's
+`picks` collection or its backup box, then run `bridge_pilot.py unblind
+PICKS.json`, adding `--live-links` for the second kit. An unplayable pair can't win, so the bar
 always counts wins out of 30. The result gives wins, the two-sided exact sign
 test on all pairs and on played pairs, pass or fail, and how many picks were
 moved or off-genre.
