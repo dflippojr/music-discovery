@@ -1045,21 +1045,60 @@ def test_an_older_cache_gets_past_a_clip_over_the_length_limit(tmp_path, catalog
     assert store.meta["longest_clip"] == 2 * SAMPLE_RATE
 
 
-def test_memory_pressure_from_the_first_clip_blames_no_clip(tmp_path, catalog):
-    # A short tone encodes but no clip does, so nothing shows the clips are at fault.
+def test_a_selection_of_only_failing_clips_completes_and_stays_retryable(
+    tmp_path, catalog
+):
+    # With no vector in the cache, nothing shows the clips rather than the encoder
+    # are at fault. The run records them and a later run tries them again.
     archive = write_bad_archive(tmp_path / "a.zip", catalog)
     out = tmp_path / "v.npz"
-    with pytest.raises(AudioEmbeddingError, match="no clip encodes"):
-        embed_archive(
+    decode = decode_with_long_tracks(set())
+    lines = []
+
+    def run(encoder):
+        return embed_archive(
             catalog,
             archive,
             out,
-            LengthLimitEncoder(SAMPLE_RATE),
+            encoder,
+            limit=3,
             expected_sha1=None,
-            decode=decode_with_long_tracks(set()),
+            decode=decode,
+            log=lines.append,
         )
+
+    result = run(LengthLimitEncoder(SAMPLE_RATE))
+    assert (result.embedded, result.failed, result.total) == (0, 3, 3)
+    assert lines == ["no clip encoded; a later run tries them again"]
     store = VectorStore.load(out)
-    assert store.failures == {} and len(store.track_ids) == 0
+    assert set(store.failures.values()) == {"cannot encode: RuntimeError"}
+
+    result = run(FakeEncoder())
+    assert (result.embedded, result.failed, result.skipped) == (3, 0, 0)
+    assert VectorStore.load(out).failures == {}
+
+
+def test_retries_run_outside_the_failed_calls_exception_handler(tmp_path, catalog):
+    # Inside the handler, the traceback keeps the failed call's memory allocated.
+    class Recording(LengthLimitEncoder):
+        handling = []
+
+        def encode_audio(self, clips):
+            self.handling.append(sys.exc_info()[0])
+            return super().encode_audio(clips)
+
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    encoder = Recording(2 * SAMPLE_RATE)
+    embed_archive(
+        catalog,
+        archive,
+        tmp_path / "v.npz",
+        encoder,
+        expected_sha1=None,
+        decode=decode_with_long_tracks({100, 130}),
+    )
+    assert len(encoder.handling) > 60 / 4
+    assert set(encoder.handling) == {None}
 
 
 def test_a_clip_that_fails_before_any_encodes_gets_its_second_chance(tmp_path, catalog):
