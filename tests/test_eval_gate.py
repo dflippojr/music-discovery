@@ -659,9 +659,12 @@ def test_a_random_bound_that_is_not_a_finite_number_fails_its_checks(
 
 def is_finite_number(value):
     """A JSON number the gate can compare: not a bool, and it fits in a float."""
-    if type(value) is int:
-        return abs(value) < 10**308
-    return type(value) is float and math.isfinite(value)
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 # Every value the gate judges a check on, by report: a change to any other number,
