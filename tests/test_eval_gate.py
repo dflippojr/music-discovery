@@ -8,6 +8,7 @@ import contextlib
 import copy
 import io
 import json
+import math
 import runpy
 import sys
 import tempfile
@@ -587,3 +588,112 @@ def test_a_report_nested_too_deep_is_a_fail_line(checkout, baseline):
     assert code == 1
     assert "cannot read" in written(out)
     assert written(err).startswith("eval-gate: ")
+
+
+@pytest.mark.parametrize("mean", [float("inf"), True])
+def test_gate_fails_a_mean_that_is_not_a_finite_number(
+    tmp_path, monkeypatch, capsys, mean
+):
+    # #210: Infinity and true passed _defined, so they cleared every bound and
+    # the gate said "all pass". This was the one case where it failed open.
+    monkeypatch.chdir(tmp_path)
+
+    def mutate(report):
+        for ranker in ("hybrid", "profile"):
+            for metric in METRICS:
+                report["rankers"][ranker]["validation"][metric]["mean"] = mean
+        return report
+
+    gate_files(mutate)
+    assert eval_gate.main(["reports/baseline.json", "run.json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.count("**FAIL**: no defined score in the run") == 4
+    assert "Verdict: 4 of 4 checks failed." in captured.out
+
+
+@pytest.mark.parametrize("mean", [float("-inf"), False])
+def test_a_mean_below_every_bound_is_undefined_not_merely_low(baseline, mean):
+    # #210: these failed before, but on the wrong reason for a value with no score.
+    run = run_with(baseline, hybrid__genre_ndcg=mean)
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "genre_ndcg"): "no defined score in the run"
+    }
+
+
+NOT_FINITE = [float("-inf"), float("inf"), True, False]
+NOT_FINITE_IDS = ["-inf", "inf", "true", "false"]
+
+
+@pytest.mark.parametrize("bound", NOT_FINITE, ids=NOT_FINITE_IDS)
+def test_a_baseline_bound_that_is_not_a_finite_number_fails_its_check(
+    checkout, baseline, capsys, bound
+):
+    baseline["rankers"]["hybrid"]["validation"]["genre_ndcg"]["lo"] = bound
+    run = make_report(SCORES)
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "genre_ndcg"): "the baseline's lower bound is not a number"
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    assert (
+        "| hybrid | same-genre nDCG@10 | 0.990 | undefined | 0.160 "
+        "| **FAIL**: the baseline's lower bound is not a number |"
+    ) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bound", NOT_FINITE, ids=NOT_FINITE_IDS)
+def test_a_random_bound_that_is_not_a_finite_number_fails_its_checks(
+    checkout, baseline, capsys, bound
+):
+    run = make_report(SCORES)
+    run["rankers"]["random"]["validation"]["tag_overlap"]["hi"] = bound
+    assert failures(compare(baseline, run)) == {
+        ("hybrid", "tag_overlap"): "random's upper bound is not a number",
+        ("profile", "tag_overlap"): "random's upper bound is not a number",
+    }
+    assert main(setup_files(checkout, baseline, run)) == 1
+    assert (
+        "| hybrid | tag overlap@10 | 0.250 | 0.210 | undefined "
+        "| **FAIL**: random's upper bound is not a number |"
+    ) in capsys.readouterr().out
+
+
+def is_finite_number(value):
+    """A JSON number the gate can compare: not a bool, and it fits in a float."""
+    if type(value) is int:
+        return abs(value) < 10**308
+    return type(value) is float and math.isfinite(value)
+
+
+# Every value the gate judges a check on, by report: a change to any other number,
+# such as a test-split score or an ungated ranker's, does not reach a verdict.
+JUDGED_SLOTS = [
+    *(
+        ("run", ("rankers", ranker, "validation", metric, "mean"))
+        for ranker in ("hybrid", "profile")
+        for metric in METRICS
+    ),
+    *(
+        ("baseline", ("rankers", ranker, "validation", metric, "lo"))
+        for ranker in ("hybrid", "profile")
+        for metric in METRICS
+    ),
+    *(("run", ("rankers", "random", "validation", m, "hi")) for m in METRICS),
+]
+
+
+@given(
+    slot=st.sampled_from(JUDGED_SLOTS),
+    value=st.sampled_from(NOT_FINITE)
+    | ANY_JSON.filter(lambda v: not is_finite_number(v)),
+)
+def test_a_judged_value_that_is_not_a_finite_number_never_passes(slot, value):
+    # The class behind #210: the gate fails open when a value that is not a finite
+    # number clears a bound. Whatever sits in a slot the gate judges, it must fail.
+    which, path = slot
+    bad = replaced(GOOD_REPORT, path, value)
+    baseline, run = (bad, GOOD_REPORT) if which == "baseline" else (GOOD_REPORT, bad)
+    with tempfile.TemporaryDirectory() as folder, pytest.MonkeyPatch.context() as patch:
+        patch.chdir(folder)
+        code, out, _ = gate_output(setup_files(Path(folder), baseline, run))
+    assert code == 1
+    assert "Verdict: all pass." not in written(out)
