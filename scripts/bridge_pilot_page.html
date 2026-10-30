@@ -60,7 +60,7 @@ details ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
     <ul>
       <li>Each pair has one song you know and two tracks from the Free Music Archive, A and B. Pick the one that sounds closer to the song.</li>
       <li>Give each track about a minute. That is about 3 minutes a pair, or 1.5 hours in all. Stop whenever you like: every pick saves as you make it.</li>
-      <li>Judge by ear. Ignore the genre, tags, artist and play counts on the archive's page, because they could give away how a track was chosen.</li>
+      <li>Judge by ear. Ignore the tags, artist and play counts on the archive's page.</li>
       <li>If a page is gone or a track won't play, choose "Can't compare". Don't search for the track elsewhere.</li>
       <li>You can change a pick until you finish. There is no right answer to chase, and a close call still gets a pick.</li>
     </ul>
@@ -104,9 +104,12 @@ details ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
 </main>
 <script id="pairs" type="application/json">__PAIRS__</script>
 <script>
-const PAIRS = JSON.parse(document.getElementById("pairs").textContent);
-const DRAFT_KEY = "bridge-pilot-picks";
-const picks = {};
+const PAIRS_TEXT = document.getElementById("pairs").textContent;
+const PAIRS = JSON.parse(PAIRS_TEXT);
+// Each kit keeps its own draft: pair numbers mean different tracks in each.
+const KIT = [...PAIRS_TEXT].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 7);
+const DRAFT_KEY = `bridge-pilot-picks-${KIT}`;
+const picks = {}; // pair number -> { pick, at }; the newest choice wins across devices
 let current = 0;
 let collection = null;
 const $ = (id) => document.getElementById(id);
@@ -118,6 +121,8 @@ function writeDraft() {
   try { localStorage.setItem(DRAFT_KEY, JSON.stringify(picks)); } catch { /* the record still holds them */ }
 }
 const picked = () => PAIRS.filter((pair) => picks[pair.pair]).length;
+const pickOf = (pair) => picks[pair]?.pick;
+const plainPicks = () => Object.fromEntries(Object.entries(picks).map(([pair, row]) => [pair, row.pick]));
 
 function render() {
   const pair = PAIRS[current];
@@ -130,7 +135,7 @@ function render() {
   $("link-a").href = pair.a;
   $("link-b").href = pair.b;
   document.querySelectorAll(".choice").forEach((button) => {
-    button.setAttribute("aria-pressed", String(picks[pair.pair] === button.dataset.pick));
+    button.setAttribute("aria-pressed", String(pickOf(pair.pair) === button.dataset.pick));
   });
   $("prev").disabled = current === 0;
   $("next").disabled = current === PAIRS.length - 1;
@@ -139,22 +144,25 @@ function render() {
     cell.setAttribute("aria-current", String(index === current));
   });
   $("finished").hidden = count < PAIRS.length;
-  $("picks-text").value = JSON.stringify(picks);
+  $("picks-text").value = JSON.stringify(plainPicks());
+}
+
+async function save(pair) {
+  try {
+    await collection.doc(`pair-${pair}`).set({ pair: Number(pair), ...picks[pair] });
+    $("warning").hidden = true;
+  } catch {
+    $("warning").textContent = "That pick didn't reach the record. It is kept on this device and will be sent when you reload, or back up your picks below.";
+    $("warning").hidden = false;
+  }
 }
 
 async function choose(pick) {
   const pair = PAIRS[current].pair;
-  picks[pair] = pick;
+  picks[pair] = { pick, at: Date.now() };
   writeDraft();
   render();
-  if (!collection) return;
-  try {
-    await collection.doc(`pair-${pair}`).set({ pair, pick });
-    $("warning").hidden = true;
-  } catch {
-    $("warning").textContent = "That pick didn't reach the record. It is kept on this device, so back up your picks below before you close the page.";
-    $("warning").hidden = false;
-  }
+  if (collection) await save(pair);
 }
 
 PAIRS.forEach((pair, index) => {
@@ -187,8 +195,18 @@ render();
   collection = db.collection("picks");
   try {
     const stored = await collection.get();
-    stored.docs.forEach((doc) => { const row = doc.data(); if (row) picks[row.pair] = row.pick; });
+    const stale = new Set(Object.keys(picks));
+    stored.docs.forEach((doc) => {
+      const row = doc.data();
+      if (!row) return;
+      const local = picks[row.pair];
+      if (!local || (row.at || 0) >= local.at) {
+        picks[row.pair] = { pick: row.pick, at: row.at || 0 };
+        stale.delete(String(row.pair));
+      }
+    });
     writeDraft();
+    await Promise.all([...stale].map(save));
     const first = PAIRS.findIndex((pair) => !picks[pair.pair]);
     if (first >= 0) current = first;
     render();

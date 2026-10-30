@@ -13,7 +13,8 @@ downloaded. `scripts/bridge_pilot.py` writes only under the ignored `data/`.
 
 `eval/bridge_pilot.json` holds the 30 tracks, their alternates, the seed, the
 bar and how they were chosen. It was committed before any fetch or match ran.
-Each track's `genre` is the catalog top genre it would have, set by hand.
+Each track's `genre` is the catalog top genre it would have, set by hand. It
+isn't used to choose anything, only to report how often a pick left it.
 
 ## Fetching records
 
@@ -62,9 +63,13 @@ Every column has equal weight, and nothing was tuned.
 
 ## Pairs and blinding
 
-Each pair holds the bridge's pick and a random catalog track from the **known
-track's own genre**. That control stands for the genre stand-in the bridge has to
-beat. The same seed, from `eval/bridge_pilot.json`, drives the control, the A/B
+Each pair holds the bridge's pick and a random catalog track from the **pick's
+own genre**. The archive's pages show a track's genre, so a control from another
+genre would give the pair away, and criterion 4 of the issue rules that out. This
+means a pick from the wrong genre isn't penalized by the pair itself, so the
+listening check measures closeness within a genre. `unblind` reports how many
+picks left the known track's hand-set genre, which is the other half of the
+answer. The same seed, from `eval/bridge_pilot.json`, drives the control, the A/B
 slot and the listening order.
 
 No track appears twice, because a link seen in two pairs would give away the
@@ -75,18 +80,13 @@ The page shows the song and two links, A and B, with no role anywhere in it. The
 key is `data/bridge-pilot/sealed/key.json`. `prepare` prints only counts and the
 key's SHA-256, and refuses to run twice.
 
-One leak remains. The archive's page shows a track's genre, so a pick from
-another genre could be told from the control by someone who reads the page. The
-page asks the listener to judge by ear and ignore those labels, and `unblind`
-reports how many picks were off-genre.
-
 ## Dead links
 
 The first sealed kit, `listen.html` and `sealed/key.json`, follows the issue
 as written: a pair with a gone page is recorded as unplayable. A link check after
-sealing found 14 of its 60 links gone, in 13 pairs, mostly because the whole
-artist has left the archive. That caps the bridge at 17 wins, so it could not
-reach the bar whatever the listener heard.
+sealing found about a quarter of its links gone, mostly because the whole artist
+has left the archive. That leaves too few playable pairs for the bridge to reach
+the bar whatever the listener heard.
 
 `prepare --live-links` builds a second sealed kit, `listen-live.html` and
 `sealed/key-live.json`, from the same tracks, match and seed. A track whose page

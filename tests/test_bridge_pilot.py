@@ -260,16 +260,28 @@ def test_no_track_appears_twice_even_when_tracks_share_a_nearest_neighbor():
     assert sorted(e["bridge_neighbor_rank"] for e in key) == [0, 1, 2, 3]
 
 
-def test_control_comes_from_the_known_tracks_genre():
-    key, frame = build_key()
+def test_control_shares_the_picks_genre_even_when_the_pick_is_off_genre():
+    frame = catalog()
+    # Every track's nearest neighbors are Rock, so the Pop tracks' picks are off-genre.
+    order = np.tile(np.arange(len(frame)), (4, 1))
+    key = pilot.build_pairs(known_tracks(4), frame, order, 7)
     genres = dict(zip(frame["track_id"], frame["genre_top"], strict=True))
-    assert all(genres[e["control_track_id"]] == e["genre"] for e in key)
-    assert all(genres[e["bridge_track_id"]] == e["bridge_genre"] for e in key)
+    assert {e["genre"] for e in key} == {"Rock", "Pop"}
+    assert {genres[e["bridge_track_id"]] for e in key} == {"Rock"}
+    assert all(
+        genres[e["control_track_id"]]
+        == genres[e["bridge_track_id"]]
+        == e["bridge_genre"]
+        for e in key
+    )
 
 
 def test_pairs_repeat_for_a_seed_and_change_with_it():
-    assert build_key(7)[0] == build_key(7)[0]
-    assert build_key(7)[0] != build_key(8)[0]
+    first, _ = build_key(7)
+    again, _ = build_key(7)
+    other, _ = build_key(8)
+    assert first == again
+    assert first != other
 
 
 def test_slots_and_order_do_not_follow_the_role_or_the_list():
@@ -357,7 +369,7 @@ def test_prepare_needs_fetch_and_every_pair(tmp_path):
 
 
 def test_playable_rules_out_picks_and_controls_alike():
-    frame = catalog()
+    frame = catalog(tracks_per_genre=16)
     order = np.tile(np.arange(len(frame)), (4, 1))
     dead = {100, 101, 108, 109, 110}
     tracks = known_tracks(4)

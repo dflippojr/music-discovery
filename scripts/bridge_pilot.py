@@ -436,10 +436,10 @@ def build_pairs(
     seed: int,
     playable: Callable[[int], bool] = lambda _: True,
 ) -> list[dict]:
-    """Pair each track's bridge pick with a random track of the track's genre.
+    """Pair each track's bridge pick with a random track of the pick's genre.
 
-    The genre is the known track's own: the control stands for a genre stand-in,
-    which is what the bridge has to beat. A pick already used falls to the next
+    The archive's pages show a track's genre, so a control from any other genre
+    would tell the two apart. A pick already used falls to the next
     nearest track, and no track appears twice, because a link seen in two pairs
     would give away the bridge's. `playable` rules a track out the same way for
     picks and controls. Returns the full key, in listening order.
@@ -460,13 +460,13 @@ def build_pairs(
         picks.append((pick, rank))
     entries = []
     for track, (pick, rank) in zip(tracks, picks, strict=True):
-        pool = frame.loc[frame["genre_top"] == track["genre"], "track_id"].to_numpy(
+        pool = frame.loc[frame["genre_top"] == genres[pick], "track_id"].to_numpy(
             dtype=int
         )
         pool = np.sort(pool[~np.isin(pool, list(used))])
         while True:
             if not len(pool):
-                raise PilotError(f"no control left in genre {track['genre']}")
+                raise PilotError(f"no control left in genre {genres[pick]}")
             control = int(rng.choice(pool))
             if playable(control):
                 break
