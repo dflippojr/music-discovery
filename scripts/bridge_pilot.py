@@ -40,15 +40,16 @@ MUSICBRAINZ = "https://musicbrainz.org/ws/2/recording"
 ACOUSTICBRAINZ = "https://acousticbrainz.org/api/v1"
 REQUEST_GAP_SECONDS = 1.1  # MusicBrainz allows about one request per second
 ATTEMPTS = 4
-SEARCH_LIMIT = 50
+SEARCH_LIMIT = 100
 COUNT_BATCH = 25  # AcousticBrainz takes at most 25 ids per bulk call
-MAX_RECORDS_TRIED = 5
+MAX_RECORDS_TRIED = 15
 LENGTH_TOLERANCE_SECONDS = 15.0
+USUAL_LENGTH_TOLERANCE = 0.35  # share of the median length of a song's recordings
 
 # Words that mark a recording as something other than the known studio version.
 _NOT_THE_ORIGINAL = re.compile(
     r"\b(live|remix|mix|edit|karaoke|cover|demo|instrumental|acoustic|tribute|"
-    r"medley|reprise|session|rehearsal|sped|slowed)\b"
+    r"medley|reprise|session|rehearsal|sped|slowed|\d{4})\b"  # a date marks a concert
 )
 
 STATISTICS = ("mean", "median", "std")
@@ -161,13 +162,20 @@ def rank_candidates(track: dict, recordings: list[dict]) -> list[dict]:
 
 
 def _search(client: Client, track: dict) -> list[dict]:
+    """Search two pages, because one page's hits vary from run to run."""
     query = (
         f'recording:"{track["title"]}" AND artist:"{track["artist"]}" AND video:false'
     )
-    params = urllib.parse.urlencode(
-        {"query": query, "limit": SEARCH_LIMIT, "fmt": "json"}
-    )
-    return (client.get(f"{MUSICBRAINZ}?{params}") or {}).get("recordings", [])
+    seen: dict[str, dict] = {}
+    for offset in (0, SEARCH_LIMIT):
+        params = urllib.parse.urlencode(
+            {"query": query, "limit": SEARCH_LIMIT, "offset": offset, "fmt": "json"}
+        )
+        for recording in (client.get(f"{MUSICBRAINZ}?{params}") or {}).get(
+            "recordings", []
+        ):
+            seen.setdefault(recording["id"], recording)
+    return list(seen.values())
 
 
 def _with_data(client: Client, ids: list[str]) -> set[str]:
@@ -179,30 +187,63 @@ def _with_data(client: Client, ids: list[str]) -> set[str]:
     return found
 
 
-def _usable(record: dict | None, length_ms: int | None) -> bool:
-    """A record the matcher can read, about as long as the recording it claims."""
+def _same_artist(wanted: str, tagged: str) -> bool:
+    """True when one name holds the other as whole words, ignoring a leading "the"."""
+    wanted, tagged = (
+        f" {_normalized(n).removeprefix('the ')} " for n in (wanted, tagged)
+    )
+    return wanted in tagged or tagged in wanted
+
+
+def _tag(record: dict, name: str) -> str:
+    values = record["metadata"]["tags"].get(name) or [""]
+    return values[0]
+
+
+def _usable(
+    record: dict | None, track: dict, length_ms: int | None, usual_ms: float | None
+) -> bool:
+    """A readable record that says it is this song, about the song's usual length.
+
+    Submitters' files can be attached to the wrong recording, so the record's own
+    tags have to agree, and "Song (Live)" doesn't count as "Song".
+    """
     if not record:
         return False
     try:
         vector_from_record(record)
         seconds = float(record["metadata"]["audio_properties"]["length"])
+        title, artist = _tag(record, "title"), _tag(record, "artist")
     except (KeyError, IndexError, TypeError, ValueError):
         return False
-    return not length_ms or abs(seconds - length_ms / 1000) <= LENGTH_TOLERANCE_SECONDS
+    if _normalized(title) != _normalized(track["title"]):
+        return False
+    if not _same_artist(track["artist"], artist):
+        return False
+    if length_ms and abs(seconds - length_ms / 1000) > LENGTH_TOLERANCE_SECONDS:
+        return False
+    usual = (usual_ms or 0) / 1000
+    return not usual or abs(seconds - usual) <= usual * USUAL_LENGTH_TOLERANCE
+
+
+def _usual_length(candidates: list[dict]) -> float | None:
+    """The median length of a song's recordings; live and extended cuts sit far off."""
+    lengths = [c["length"] for c in candidates if c.get("length")]
+    return float(np.median(lengths)) if lengths else None
 
 
 def resolve_track(client: Client, track: dict) -> dict | None:
     """Find the first usable record of this song, or None when it has none."""
     candidates = rank_candidates(track, _search(client, track))
-    ids = [candidate["id"] for candidate in candidates]
-    available = _with_data(client, ids)
+    usual_ms = _usual_length(candidates)
+    available = _with_data(client, [candidate["id"] for candidate in candidates])
     tried = 0
     for position, candidate in enumerate(candidates):
         if candidate["id"] not in available or tried == MAX_RECORDS_TRIED:
             continue
         tried += 1
         record = client.get(f"{ACOUSTICBRAINZ}/{candidate['id']}/low-level")
-        if _usable(record, candidate.get("length")):
+        if _usable(record, track, candidate.get("length"), usual_ms):
             return {
                 **track,
                 "mbid": candidate["id"],

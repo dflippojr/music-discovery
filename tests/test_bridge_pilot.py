@@ -18,10 +18,15 @@ import bridge_pilot as pilot  # noqa: E402
 PLAN = pilot.load_plan()
 
 
-def record(base: float = 1.0, length: float = 200.0) -> dict:
+def record(
+    base: float = 1.0, length: float = 200.0, artist: str = "A", title: str = "S"
+) -> dict:
     scalar = {"mean": base, "median": base + 0.1, "var": base + 0.2}
     return {
-        "metadata": {"audio_properties": {"length": length}},
+        "metadata": {
+            "audio_properties": {"length": length},
+            "tags": {"artist": [artist], "title": [title]},
+        },
         "lowlevel": {
             "mfcc": {
                 "mean": [base + i for i in range(13)],
@@ -106,7 +111,10 @@ def test_rank_candidates_keeps_this_song_and_prefers_the_plain_recording():
         track,
         [
             hit("live", "Bohemian Rhapsody", "Queen", disambiguation="live at Wembley"),
-            hit("note", "Bohemian Rhapsody", "Queen", disambiguation="1975 pressing"),
+            hit("note", "Bohemian Rhapsody", "Queen", disambiguation="mono"),
+            hit(
+                "date", "Bohemian Rhapsody", "Queen", disambiguation="1973-01-22: Hall"
+            ),
             hit("cover", "Bohemian Rhapsody", "Queensryche"),
             hit("other", "Another One", "Queen"),
             hit("duet", "Bohemian Rhapsody", "Queen & Friends"),
@@ -134,6 +142,42 @@ def test_resolve_rejects_a_record_much_shorter_than_its_recording():
     assert pilot.resolve_track(client, track) is None
 
 
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"artist": "Devo", "title": "S"},
+        {"artist": "A", "title": "S (Live)"},
+    ],
+)
+def test_resolve_rejects_a_record_tagged_as_something_else(tags):
+    track = {"artist": "A", "title": "S", "genre": "Rock"}
+    client = FakeClient({"S": [hit("wrong", "S", "A")]}, {"wrong": record(**tags)})
+    assert pilot.resolve_track(client, track) is None
+
+
+def test_resolve_accepts_a_tag_that_only_drops_the_leading_the():
+    track = {"artist": "The Dave Brubeck Quartet", "title": "S", "genre": "Rock"}
+    tagged = record(artist="Dave Brubeck Quartet")
+    client = FakeClient(
+        {"S": [hit("ok", "S", "The Dave Brubeck Quartet")]}, {"ok": tagged}
+    )
+    assert pilot.resolve_track(client, track)["mbid"] == "ok"
+
+
+def test_resolve_skips_a_cut_far_from_the_songs_usual_length():
+    track = {"artist": "A", "title": "S", "genre": "Rock"}
+    recordings = [
+        hit("long", "S", "A", length=300_000),
+        hit("usual", "S", "A", length=200_000),
+        hit("usual2", "S", "A", length=200_000),
+    ]
+    client = FakeClient(
+        {"S": recordings},
+        {"long": record(length=300.0), "usual": record(length=200.0)},
+    )
+    assert pilot.resolve_track(client, track)["mbid"] == "usual"
+
+
 def test_resolve_skips_a_record_missing_a_feature():
     track = {"artist": "A", "title": "S", "genre": "Rock"}
     broken = record()
@@ -150,7 +194,10 @@ def test_fetch_replaces_a_track_with_no_data_from_the_same_genres_alternate(tmp_
             {"artist": "P", "title": "Spare", "genre": "Pop"},
         ],
     }
-    client = FakeClient({"Spare": [hit("spare", "Spare", "P")]}, {"spare": record()})
+    client = FakeClient(
+        {"Spare": [hit("spare", "Spare", "P")]},
+        {"spare": record(artist="P", title="Spare")},
+    )
     manifest = pilot.fetch(client, plan, tmp_path)
     assert [t["title"] for t in manifest["tracks"]] == ["Spare"]
     assert manifest["replaced"][0]["track"]["title"] == "Lost"

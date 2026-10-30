@@ -20,10 +20,17 @@ Each track's `genre` is the catalog top genre it would have, set by hand.
 `bridge_pilot.py fetch` searches MusicBrainz for each song and keeps recordings
 with the same title and artist, dropping any whose comment marks a live, remix,
 cover or similar version. It takes the first with an AcousticBrainz low-level
-record that has every feature and is within 15 s of the recording's length.
+record that has every feature, whose own tags name the same song and artist, and
+that is within 15 s of its recording's length and 35% of the median length of the
+song's recordings. The tag and median checks were added after a first fetch, before any match ran, because that
+fetch found files attached to the wrong recording (for example a Devo cover under
+the Rolling Stones) and live cuts.
 `resolved.json` says which tracks needed a recording other than the first. A
 track with no usable record is replaced by the next alternate of its genre,
 before any match runs.
+
+MusicBrainz's search hits vary between runs, so `resolved.json` from the one
+fetch that fed the match is the record, not a fresh run.
 
 Requests send a contact User-Agent, leave 1.1 s between calls, and wait out any
 `X-RateLimit` or 429 answer.
