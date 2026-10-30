@@ -135,7 +135,7 @@ def _described(error: Exception) -> str:
 
 
 def _test_tone(samples: int) -> np.ndarray:
-    """A plain tone as long as the clip the encoder just failed on."""
+    """A plain tone, to tell whether the encoder still works at this length."""
     seconds = np.arange(samples) / SAMPLE_RATE
     return (0.1 * np.sin(2 * np.pi * TEST_TONE_HZ * seconds)).astype(np.float32)
 
@@ -254,9 +254,12 @@ def embed_archive(
 
     A batch the encoder fails on is retried one clip at a time. A clip that
     fails alone is recorded as a failure only if the encoder can still encode a
-    test tone of the same length. If it cannot, the encoder is at fault, not the
-    clip: the clip stays unrecorded for the next run and this raises
-    `AudioEmbeddingError`. Both paths must be inside the working directory.
+    test tone. The tone is as long as the clip, but no longer than the longest
+    clip the encoder has handled (one second before it has handled any), so a
+    clip over a length limit is the clip's fault and running out of memory for a
+    length it has handled is not. If the tone fails, the encoder is at fault: the
+    clip stays unrecorded for the next run and this raises `AudioEmbeddingError`.
+    Both paths must be inside the working directory.
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
@@ -290,12 +293,12 @@ def embed_archive(
     rows = dict(zip(store.track_ids.tolist(), store.vectors, strict=True))
     failures = store.failures
     resumed_with = len(rows)
+    longest = store.meta.get("longest_clip")
 
     def save() -> None:
         stacked = np.stack(list(rows.values())) if rows else np.zeros((0, 0))
-        VectorStore(np.array(list(rows)), stacked, {**meta, "failures": failures}).save(
-            out
-        )
+        saved = {**meta, "failures": failures, "longest_clip": longest}
+        VectorStore(np.array(list(rows)), stacked, saved).save(out)
 
     def encode(clips: list[np.ndarray]) -> np.ndarray:
         """Unit vectors for the clips, refusing output the cache could not hold."""
@@ -309,12 +312,18 @@ def embed_archive(
             raise ValueError("encoder output has non-finite values")
         return _unit(encoded)
 
+    def keep(track_ids: list[int], clips: list[np.ndarray]) -> None:
+        nonlocal longest
+        rows.update(zip(track_ids, encode(clips), strict=True))
+        longest = max(longest or 0, *(len(clip) for clip in clips))
+
     def encode_alone(track_id: int, clip: np.ndarray) -> None:
         try:
-            rows[track_id] = encode([clip])[0]
+            keep([track_id], [clip])
         except Exception as error:  # noqa: BLE001 - any encoder error
             try:
-                encode([_test_tone(len(clip))])
+                proven = longest or int(MIN_SECONDS * SAMPLE_RATE)
+                encode([_test_tone(min(len(clip), proven))])
             except Exception as tone_error:  # noqa: BLE001 - any encoder error
                 raise AudioEmbeddingError(
                     f"the encoder fails even on a test tone "
@@ -348,7 +357,7 @@ def embed_archive(
                     clips.append(np.asarray(clip, dtype=np.float32))
                 if clips:
                     try:
-                        rows.update(zip(batch_ids, encode(clips), strict=True))
+                        keep(batch_ids, clips)
                     except Exception:  # noqa: BLE001 - find the clip that fails
                         for track_id, clip in zip(batch_ids, clips, strict=True):
                             encode_alone(track_id, clip)
@@ -360,7 +369,11 @@ def embed_archive(
                         f"embedded {len(rows)} of {len(wanted)}, {len(failures)} failed"
                     )
         finally:
-            save()
+            try:
+                save()
+            except KeyboardInterrupt:  # finish the save this Ctrl+C cut short
+                save()
+                raise
     return EmbedResult(
         embedded=len(rows) - resumed_with,
         failed=sum(1 for t in todo if str(t) in failures),

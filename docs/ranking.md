@@ -370,8 +370,10 @@ instead. Neither audio nor vectors are committed.
 
 When the encoder fails on a batch, the job retries that batch one clip at a
 time and records a clip that fails alone as `cannot encode: <error type>`, so a
-later run gets past it. It first tries a test tone of the same length. If the
-tone fails too, the encoder is at fault, not the clip: the job prints one
+later run gets past it. It first tries a test tone as long as the clip, but no
+longer than the longest clip the encoder has handled, so a clip over a length
+limit is recorded and running out of memory for a length it has handled is not.
+If the tone fails too, the encoder is at fault, not the clip: the job prints one
 `embed-audio:` line, exits 1 and leaves the clip for the next run.
 
 On the full catalog, 7,989 of 7,995 clips were embedded. The six that failed
