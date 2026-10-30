@@ -89,12 +89,32 @@ def _normalized(text: str) -> str:
 class Client:
     """Fetch JSON with a gap between requests, honoring AcousticBrainz's limit."""
 
-    def __init__(self, opener=urllib.request.urlopen, sleep=time.sleep):
+    def __init__(
+        self,
+        opener=urllib.request.urlopen,
+        sleep=time.sleep,
+        cache_dir: Path | None = None,
+    ):
         self._opener = opener
         self._sleep = sleep
+        self._cache_dir = cache_dir
 
     def get(self, url: str):
-        """Return the decoded body, or None for a 404."""
+        """Return the decoded body, or None for a 404. Answers stay in the cache.
+
+        So a run stopped by throttling resumes, and its earlier answers hold still.
+        """
+        if self._cache_dir is None:
+            return self._fetch(url)
+        cached = self._cache_dir / f"{hashlib.sha256(url.encode()).hexdigest()}.json"
+        if cached.exists():
+            return json.loads(cached.read_text(encoding="utf-8"))
+        answer = self._fetch(url)
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        cached.write_text(json.dumps(answer), encoding="utf-8")
+        return answer
+
+    def _fetch(self, url: str):
         request = urllib.request.Request(
             url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
         )
@@ -535,7 +555,8 @@ def main(argv: list[str] | None = None) -> int:
     plan = load_plan()
     try:
         if args.command == "fetch":
-            fetch(Client(), plan, pilot_dir(args.data_dir))
+            out_dir = pilot_dir(args.data_dir)
+            fetch(Client(cache_dir=out_dir / "cache"), plan, out_dir)
         elif args.command == "prepare":
             prepare(plan, args.data_dir)
         else:

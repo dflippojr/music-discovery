@@ -29,8 +29,9 @@ the Rolling Stones) and live cuts.
 track with no usable record is replaced by the next alternate of its genre,
 before any match runs.
 
-MusicBrainz's search hits vary between runs, so `resolved.json` from the one
-fetch that fed the match is the record, not a fresh run.
+MusicBrainz's search hits vary between runs, so answers are cached under
+`data/bridge-pilot/cache/`. A throttled run resumes from there. `resolved.json`
+from the fetch that fed the match is the record, not a fresh run.
 
 Requests send a contact User-Agent, leave 1.5 s between calls, and wait out any
 `X-RateLimit` or 429 answer.

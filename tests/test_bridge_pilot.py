@@ -444,6 +444,19 @@ def test_client_waits_out_the_rate_limit_and_retries():
     assert slept == [pilot.REQUEST_GAP_SECONDS, 10.0, pilot.REQUEST_GAP_SECONDS, 6.0]
 
 
+def test_client_cache_answers_a_second_time_without_asking(tmp_path):
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return FakeResponse(b'{"ok": 1}', {})
+
+    client = pilot.Client(opener, lambda _: None, cache_dir=tmp_path / "cache")
+    assert client.get("http://x") == {"ok": 1}
+    assert client.get("http://x") == {"ok": 1}
+    assert calls == ["http://x"]
+
+
 def test_client_treats_404_as_no_data_and_other_errors_as_failure():
     def opener_for(error):
         def opener(request, timeout):
