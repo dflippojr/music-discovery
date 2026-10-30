@@ -413,7 +413,8 @@ def embed_archive(
             if unjudged and longest is None:
                 failures.update({str(t): reason for t, reason in unjudged.items()})
                 log(
-                    "no clip encoded; while the cache has no vectors, a later run tries them again"
+                    "no clip encoded; while the cache has no vectors, "
+                    "a later run tries them again"
                 )
             elif unjudged:
                 for track_id in unjudged:
