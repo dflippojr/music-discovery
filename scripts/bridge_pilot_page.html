@@ -113,6 +113,7 @@ let current = 0;
 let collection = null;
 let writes = Promise.resolve(); // one at a time, so an older pick never lands last
 const unsaved = new Set();
+let pending = 0;
 const $ = (id) => document.getElementById(id);
 
 function readDraft() {
@@ -144,7 +145,7 @@ function render() {
     cell.classList.toggle("picked", Boolean(picks[PAIRS[index].pair]));
     cell.setAttribute("aria-current", String(index === current));
   });
-  $("finished").hidden = count < PAIRS.length;
+  $("finished").hidden = count < PAIRS.length || !collection || pending > 0 || unsaved.size > 0;
   $("picks-text").value = JSON.stringify(plainPicks());
 }
 
@@ -173,7 +174,10 @@ async function save(pair) {
 }
 
 function send(pairs) {
-  for (const pair of pairs) writes = writes.then(() => save(pair));
+  for (const pair of pairs) {
+    pending += 1;
+    writes = writes.then(() => save(pair)).then(() => { pending -= 1; render(); });
+  }
   return writes;
 }
 
@@ -181,8 +185,9 @@ function choose(pick) {
   const pair = PAIRS[current].pair;
   picks[pair] = { pick, at: Date.now() };
   writeDraft();
+  const sent = collection ? send(new Set([String(pair), ...unsaved])) : undefined;
   render();
-  return collection ? send(new Set([String(pair), ...unsaved])) : undefined;
+  return sent;
 }
 
 PAIRS.forEach((pair, index) => {
@@ -206,7 +211,8 @@ Object.assign(picks, readDraft());
 render();
 
 (async () => {
-  const db = window.claude ? await window.claude.use("db") : null;
+  let db = null;
+  try { db = window.claude ? await window.claude.use("db") : null; } catch { /* warned below */ }
   if (!db) {
     $("warning").textContent = "This view can't reach the record, so picks stay on this device. Open the page signed in to claude.ai, or back up your picks below.";
     $("warning").hidden = false;

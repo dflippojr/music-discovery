@@ -2,7 +2,6 @@
 
 import io
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -615,10 +614,7 @@ def test_main_reports_errors_in_one_line(tmp_path, capsys):
 def page_scenarios(tmp_path_factory):
     """The page's real script, run in node on a stubbed DOM and store."""
     node = shutil.which("node")
-    if node is None:
-        if os.environ.get("CI"):
-            pytest.fail("the page scenarios need node on PATH")
-        pytest.skip("node is not on PATH")
+    assert node, "the page scenarios need node on PATH"
     pairs = [
         {
             "pair": n,
@@ -664,6 +660,16 @@ def test_page_does_not_overwrite_a_newer_stored_pick(page_scenarios):
 
 def test_page_writes_one_at_a_time_so_the_last_pick_lands_last(page_scenarios):
     assert page_scenarios[0]["last_of_two_quick_picks_lands"] == {"stored": "B"}
+
+
+def test_page_shows_the_finish_card_only_when_every_pick_is_stored(page_scenarios):
+    result = page_scenarios[0]["finish_waits_for_every_pick_to_reach_the_store"]
+    assert result == {"allSaved": True, "whileWriting": False, "afterFailure": False}
+
+
+def test_page_warns_when_the_store_fails_to_start(page_scenarios):
+    result = page_scenarios[0]["store_that_fails_to_start_warns"]
+    assert result == {"warned": True, "finished": False, "local": "A"}
 
 
 def test_page_keeps_picks_in_a_collection_of_its_own_kit(page_scenarios):

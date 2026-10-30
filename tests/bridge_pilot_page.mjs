@@ -38,7 +38,10 @@ function load(device, store) {
     getItem: (key) => device.storage[key] ?? null,
     setItem: (key, value) => { device.storage[key] = value; },
   };
-  const window = { scrollTo() {}, claude: { use: async () => store.api } };
+  const window = { scrollTo() {}, claude: { use: async () => {
+    if (store.noDb) throw new Error("refused");
+    return store.api;
+  } } };
   vm.runInNewContext(script, {
     document, window, localStorage, navigator: {}, console,
     Date: { now: () => ++store.clock },
@@ -161,6 +164,41 @@ const scenarios = {
     release();
     await settle();
     return { stored: firstPick(store) };
+  },
+  async finish_waits_for_every_pick_to_reach_the_store() {
+    const store = newStore();
+    const view = load(device(), store);
+    await settle();
+    for (let index = 0; index < 3; index += 1) {
+      view.get("sheet").children[index].click();
+      await view.pick("A");
+    }
+    await settle();
+    const allSaved = view.get("finished").hidden === false;
+    let release;
+    store.hold = new Promise((resolve) => { release = resolve; });
+    view.pick("B");
+    await settle();
+    const whileWriting = view.get("finished").hidden === false;
+    release();
+    await settle();
+    store.failing = true;
+    view.pick("A");
+    await settle();
+    return { allSaved, whileWriting, afterFailure: view.get("finished").hidden === false };
+  },
+  async store_that_fails_to_start_warns() {
+    const store = newStore();
+    store.noDb = true;
+    const view = load(device(), store);
+    await settle();
+    await view.pick("A");
+    await settle();
+    return {
+      warned: view.get("warning").hidden === false,
+      finished: view.get("finished").hidden === false,
+      local: view.picks()["1"],
+    };
   },
   async picks_live_in_a_collection_of_this_kit() {
     const store = newStore();
