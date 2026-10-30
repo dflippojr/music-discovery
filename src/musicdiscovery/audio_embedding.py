@@ -294,6 +294,7 @@ def embed_archive(
     failures = store.failures
     resumed_with = len(rows)
     longest = store.meta.get("longest_clip")
+    one_second = int(MIN_SECONDS * SAMPLE_RATE)
 
     def save() -> None:
         stacked = np.stack(list(rows.values())) if rows else np.zeros((0, 0))
@@ -322,7 +323,8 @@ def embed_archive(
             keep([track_id], [clip])
         except Exception as error:  # noqa: BLE001 - any encoder error
             try:
-                proven = longest or int(MIN_SECONDS * SAMPLE_RATE)
+                # A cache from before `longest_clip` holds clips of unknown length.
+                proven = longest or (len(clip) if rows else one_second)
                 encode([_test_tone(min(len(clip), proven))])
             except Exception as tone_error:  # noqa: BLE001 - any encoder error
                 raise AudioEmbeddingError(
