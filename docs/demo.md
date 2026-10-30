@@ -52,6 +52,8 @@ or `paths` hold untracked files, `sha` ends in `-dirty`. `export-demo --release`
 refuses to export from such a work tree. Export from an editable install
 (`pip install -e .`) in a checkout of this repository: `export-demo` fails unless
 the package it imports is that checkout's tracked `src/musicdiscovery`.
+A refused export changes nothing in the output directory, so an existing bundle
+keeps its catalog, parity data and `SOURCE.json` together.
 
 ## What is in `catalog.json`
 

@@ -179,6 +179,9 @@ def _run_embed_audio(args: argparse.Namespace) -> int:
     except (AudioEmbeddingError, CatalogError, OSError) as error:
         print(f"embed-audio: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("embed-audio: interrupted; run it again to resume", file=sys.stderr)
+        return 130
     print(
         f"embed-audio: embedded {result.embedded} of {result.total} tracks, "
         f"{result.failed} failed, {result.skipped} already done; wrote {args.vectors}"

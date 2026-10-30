@@ -15,6 +15,7 @@ from musicdiscovery.evaluation import (
     load_profiles,
 )
 from musicdiscovery.ingest import CATALOG_NAME
+from musicdiscovery.preference import PreferenceError
 from musicdiscovery.profile_ranker import (
     FEATURES,
     MODEL_NAME,
@@ -22,7 +23,7 @@ from musicdiscovery.profile_ranker import (
     ProfileRanker,
     ProfileRankerError,
 )
-from musicdiscovery.profiles import WEAK_SIGNAL_THRESHOLD, Profile
+from musicdiscovery.profiles import WEAK_SIGNAL_THRESHOLD, Profile, ProfileError
 
 TRAINING_SEED = 20261013
 NEGATIVES_PER_PROFILE = 50
@@ -130,7 +131,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         model = train(catalog, profiles)
         if args.write:
             confined(MODEL_PATH).write_text(model.dump(), encoding="utf-8")
-    except (CatalogError, EvaluationError, ProfileRankerError, OSError) as error:
+    except (
+        CatalogError,
+        EvaluationError,
+        OSError,
+        PreferenceError,
+        ProfileError,
+        ProfileRankerError,
+    ) as error:
         print(f"train: {error}", file=sys.stderr)
         return 1
     print(model.dump(), end="")
