@@ -903,6 +903,130 @@ def test_embed_audio_reports_ctrl_c_in_one_line(catalog, capsys, monkeypatch):
     assert len(VectorStore.load(Path("data/v.npz")).track_ids) == 8
 
 
+class LengthLimitEncoder(FakeEncoder):
+    """Rejects any clip longer than `limit` samples."""
+
+    def __init__(self, limit):
+        super().__init__()
+        self.limit = limit
+
+    def encode_audio(self, clips):
+        if any(len(clip) > self.limit for clip in clips):
+            raise RuntimeError("clip is too long")
+        return super().encode_audio(clips)
+
+
+def decode_with_long_tracks(long_tracks):
+    """Two-second clips, three seconds for the tracks in `long_tracks`."""
+
+    def decode(data):
+        clip = fake_decode(data)
+        seconds = 3 if int(clip[1]) in long_tracks else 2
+        return np.resize(clip, seconds * SAMPLE_RATE)
+
+    return decode
+
+
+@pytest.mark.parametrize("long_tracks", [{100}, {100, 101}, {130}])
+def test_a_clip_over_the_encoders_length_limit_does_not_block_the_run(
+    tmp_path, catalog, long_tracks
+):
+    # Track 100 is the first clip, so nothing has encoded yet when it fails.
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    result = embed_archive(
+        catalog,
+        archive,
+        out,
+        LengthLimitEncoder(2 * SAMPLE_RATE),
+        batch_size=2,
+        expected_sha1=None,
+        decode=decode_with_long_tracks(long_tracks),
+    )
+    assert result.embedded == 60 - len(long_tracks)
+    assert VectorStore.load(out).failures == {
+        str(track): "cannot encode: RuntimeError" for track in long_tracks
+    }
+
+
+def test_a_resume_gets_past_a_clip_over_the_length_limit(tmp_path, catalog):
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    first = select_tracks(catalog, 5, 0)
+    long_track = next(int(t) for t in catalog.track_ids if int(t) not in first)
+    decode = decode_with_long_tracks({long_track})
+    encoder = LengthLimitEncoder(2 * SAMPLE_RATE)
+    embed_archive(
+        catalog, archive, out, encoder, limit=5, expected_sha1=None, decode=decode
+    )
+    result = embed_archive(
+        catalog, archive, out, encoder, expected_sha1=None, decode=decode
+    )
+    assert (result.embedded, result.failed) == (54, 1)
+    assert VectorStore.load(out).failures == {
+        str(long_track): "cannot encode: RuntimeError"
+    }
+
+
+def test_running_out_of_memory_for_full_clips_blames_no_clip(tmp_path, catalog):
+    # Under memory pressure a short tone still encodes but no full clip does, on
+    # this run or on a resume. Neither may mark good clips as failed.
+    archive = write_bad_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    decode = decode_with_long_tracks(set())
+
+    class Pressured(LengthLimitEncoder):
+        def encode_audio(self, clips):
+            self.limit = 2 * SAMPLE_RATE if len(self.batches) < 2 else SAMPLE_RATE
+            return super().encode_audio(clips)
+
+    pressured = Pressured(0)
+    with pytest.raises(AudioEmbeddingError, match="test tone"):
+        embed_archive(
+            catalog, archive, out, pressured, expected_sha1=None, decode=decode
+        )
+    assert VectorStore.load(out).failures == {}
+    assert len(VectorStore.load(out).track_ids) == 8
+    with pytest.raises(AudioEmbeddingError, match="test tone"):
+        embed_archive(
+            catalog,
+            archive,
+            out,
+            LengthLimitEncoder(SAMPLE_RATE),
+            expected_sha1=None,
+            decode=decode,
+        )
+    assert VectorStore.load(out).failures == {}
+
+
+@pytest.mark.parametrize("clips_left", [1_000, 6], ids=["finished", "encoder-failed"])
+def test_ctrl_c_during_the_exit_save_still_saves(
+    tmp_path, catalog, monkeypatch, clips_left
+):
+    archive = write_archive(tmp_path / "a.zip", catalog)
+    out = tmp_path / "v.npz"
+    real_save = VectorStore.save
+    interrupts = [KeyboardInterrupt]
+
+    def save(self, path):
+        if interrupts:
+            raise interrupts.pop()
+        real_save(self, path)
+
+    monkeypatch.setattr(VectorStore, "save", save)
+    with pytest.raises(KeyboardInterrupt):
+        embed_archive(
+            catalog,
+            archive,
+            out,
+            DyingEncoder(clips_left),
+            batch_size=2,
+            expected_sha1=None,
+            decode=fake_decode,
+        )
+    assert len(VectorStore.load(out).track_ids) == min(clips_left, 60)
+
+
 # Class-level check for the escaped defect #204: no failure in the job's loop may
 # lose finished work, mark a good clip as failed, or stop a later run finishing.
 @given(
