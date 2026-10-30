@@ -98,6 +98,13 @@ def _run_recommend(args: argparse.Namespace) -> int:
                     f"({', '.join(str(t) for t in missing)}); nothing to rank on",
                     file=sys.stderr,
                 )
+            elif ranker.seeds_cancel_out(preference, catalog):
+                seeds = ", ".join(str(t) for t in preference.seeds)
+                print(
+                    f"recommend: the seeds' audio vectors ({seeds}) cancel out; "
+                    "nothing to rank on",
+                    file=sys.stderr,
+                )
     except (
         AudioEmbeddingError,
         CatalogError,
