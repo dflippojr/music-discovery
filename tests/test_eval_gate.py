@@ -9,6 +9,7 @@ import copy
 import io
 import json
 import math
+import re
 import runpy
 import sys
 import tempfile
@@ -700,3 +701,12 @@ def test_a_judged_value_that_is_not_a_finite_number_never_passes(slot, value):
         code, out, _ = gate_output(setup_files(Path(folder), baseline, run))
     assert code == 1
     assert "Verdict: all pass." not in written(out)
+
+
+def test_readme_names_only_the_report_the_baseline_points_at():
+    """The README's pointer moves with the gate's, so it can't go stale (#216)."""
+    pointer = json.loads((ROOT / "reports" / "baseline.json").read_text("utf-8"))
+    expected = f"reports/{Path(pointer['report']).stem}.md"
+    readme = (ROOT / "README.md").read_text("utf-8")
+    assert set(re.findall(r"reports/offline-[\w.-]+", readme)) == {expected}
+    assert (ROOT / expected).is_file()
