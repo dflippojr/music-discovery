@@ -163,11 +163,14 @@ def require_no_bundle_writer(bundle):
 
     A launcher killed in phase "starting" never recorded its fixture child, so
     only the child's argv (which holds the bundle path) can show it is gone.
-    The scan is read-only; a process that cannot be inspected also refuses.
+    The scan is read-only; a process that cannot be inspected also refuses. A
+    zombie is skipped: psutil gives it no command line, and it holds no bundle.
     """
     needle = str(bundle)
     try:
-        for process in psutil.process_iter(["cmdline"]):
+        for process in psutil.process_iter(["cmdline", "status"]):
+            if process.info.get("status") == psutil.STATUS_ZOMBIE:
+                continue
             cmdline = process.info.get("cmdline")
             if cmdline is None:
                 raise ValueError(
