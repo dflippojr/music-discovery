@@ -59,7 +59,7 @@ def positive_int(text: str) -> int:
 def _run_ingest(data_dir: Path) -> int:
     try:
         result = ingest(data_dir)
-    except IngestError as error:
+    except (IngestError, OSError) as error:
         print(f"ingest: {error}", file=sys.stderr)
         return 1
     if result.skipped:
@@ -109,6 +109,7 @@ def _run_recommend(args: argparse.Namespace) -> int:
         AudioEmbeddingError,
         CatalogError,
         HybridConfigError,
+        OSError,
         PreferenceError,
         ProfileRankerError,
     ) as error:
@@ -232,7 +233,7 @@ def _run_analyze_study(args: argparse.Namespace) -> int:
 def _run_feedback_report(args: argparse.Namespace) -> int:
     try:
         log = read_log(args.log)
-    except FeedbackError as error:
+    except (FeedbackError, OSError) as error:
         print(f"feedback-report: {error}", file=sys.stderr)
         return 1
     for problem in log.problems[:MAX_REPORTED_LINES]:
