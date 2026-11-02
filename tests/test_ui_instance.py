@@ -916,15 +916,20 @@ def test_recover_refuses_a_starting_handle_with_an_unreadable_command_line(
     assert_preserved(launcher, bundle)
 
 
-def scanned(pid, info, num_threads=1):
-    """A process_iter entry; num_threads is the count read after the scan's sample."""
+def scanned(pid, info, num_threads=1, status=None):
+    """A process_iter entry; the methods answer with values read after its sample."""
 
     def fresh_count():
         if num_threads is None:
             raise psutil.AccessDenied(pid)
         return num_threads
 
-    return SimpleNamespace(pid=pid, info=info, num_threads=fresh_count)
+    return SimpleNamespace(
+        pid=pid,
+        info=info,
+        num_threads=fresh_count,
+        status=lambda: status or info["status"],
+    )
 
 
 @pytest.mark.parametrize(
@@ -961,6 +966,19 @@ def test_scan_reads_a_zombie_thread_count_after_its_status(launcher, monkeypatch
         launcher.psutil,
         "process_iter",
         lambda attrs=None: iter([scanned(555, info, num_threads=2)]),
+    )
+    with pytest.raises(ValueError, match="PID 555"):
+        launcher.require_no_bundle_writer(Path("run-0000000000000000"))
+
+
+def test_scan_refuses_a_worker_that_replaced_the_exited_main_thread(
+    launcher, monkeypatch
+):
+    """A worker's execve() leaves one live thread on a PID sampled as a zombie."""
+    info = {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
+    replaced = scanned(555, info, num_threads=1, status=psutil.STATUS_SLEEPING)
+    monkeypatch.setattr(
+        launcher.psutil, "process_iter", lambda attrs=None: iter([replaced])
     )
     with pytest.raises(ValueError, match="PID 555"):
         launcher.require_no_bundle_writer(Path("run-0000000000000000"))
