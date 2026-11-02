@@ -735,6 +735,127 @@ describe("links to results", () => {
     await close(page, context);
   });
 
+  test("navigating an open tab to another link shows that link's seed, preferences and recommendations", async () => {
+    const seed = linkSeed();
+    const link = `#${LINK.replace("{seed}", seed)}`;
+    const fresh = await open({}, { path: link });
+    await fresh.page.locator(".md-result").first().waitFor();
+    const expected = await titles(fresh.page);
+
+    // Settings the link does not mention must not survive it.
+    const { context, page, problems } = await open();
+    await pickSeed(page, "Synthetic track 110");
+    const calmer = page.getByRole("button", { name: /^Calmer/ });
+    await calmer.click();
+    const before = await titles(page);
+    assert.notDeepEqual(before, expected);
+    await page.evaluate(() => { globalThis.sameDocument = true; });
+
+    await page.goto(base + link);
+    await page.waitForFunction(() => /^Synthetic track 107 /.test(document.querySelector("input[role=combobox]").value));
+    assert.equal(await page.evaluate(() => globalThis.sameDocument), true);
+    assert.deepEqual(await titles(page), expected);
+    assert.match(await folkChip(page).textContent(), /, liked$/);
+    assert.match(await page.getByRole("button", { name: /^More energetic/ }).textContent(), /, disliked$/);
+    assert.equal(await calmer.getAttribute("data-state"), "neutral");
+    assert.equal(await page.getByRole("radio", { name: /Baseline/ }).isChecked(), true);
+    assert.equal(await page.getByRole("checkbox", { name: "Exclude the seed artist" }).isChecked(), true);
+    assert.equal(await page.locator(".md-status").textContent(), await fresh.page.locator(".md-status").textContent());
+    assert.equal(await page.evaluate(() => location.hash), await fresh.page.evaluate(() => location.hash));
+
+    // Omitted keys mean the defaults, as they do on a fresh load.
+    await page.goto(`${base}#seed=${seed}`);
+    await page.waitForFunction(() => document.querySelector(".md-chip[data-state=like]") === null);
+    assert.equal(await page.getByRole("radio", { name: /Hybrid/ }).isChecked(), true);
+    assert.equal(await page.getByRole("checkbox", { name: "Exclude the seed artist" }).isChecked(), false);
+    assert.equal(await folkChip(page).getAttribute("data-state"), "neutral");
+    assert.equal(await page.getByRole("button", { name: /^More energetic/ }).getAttribute("data-state"), "neutral");
+
+    // Back returns to the previous link, not to the settings left over from this one.
+    await page.goBack();
+    await folkChip(page).and(page.locator("[data-state=like]")).waitFor();
+    assert.deepEqual(await titles(page), expected);
+    assert.equal(await page.evaluate(() => globalThis.sameDocument), true);
+    assert.deepEqual([...problems, ...fresh.problems], []);
+    await close(fresh.page, fresh.context);
+    await close(page, context);
+  });
+
+  test("navigating an open tab to a fragment with invalid settings behaves as a fresh load of it", async () => {
+    const seed = linkSeed();
+    const bad = "seed=999999999&like=genre%3ANo%20such%20genre&like=genre%3AFolk&dislike=less%3Atempo&ranker=random&exclude=1";
+    const { context, page, problems } = await open();
+    await pickSeed(page, "Synthetic track 110");
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    await page.getByRole("radio", { name: /Baseline/ }).check();
+
+    await page.goto(`${base}#${bad}`);
+    await page.waitForFunction((sentence) => document.querySelector(".md-status").textContent.endsWith(sentence), IGNORED);
+    assert.equal(await page.locator(".md-status").textContent(), `Pick a seed track to see recommendations. ${IGNORED}`);
+    assert.equal(await page.locator(".md-result").count(), 0);
+    assert.equal(await page.getByRole("combobox").inputValue(), "");
+    assert.match(await folkChip(page).textContent(), /, liked$/);
+    assert.equal(await page.getByRole("button", { name: /^Calmer/ }).getAttribute("data-state"), "neutral");
+    assert.equal(await page.getByRole("radio", { name: /Hybrid/ }).isChecked(), true);
+    assert.equal(await page.getByRole("checkbox", { name: "Exclude the seed artist" }).isChecked(), true);
+    assert.equal(await page.evaluate(() => location.hash), `#${bad}`);
+
+    // A usable seed with a bad setting: results, the sentence, and a fragment rewritten to what applied.
+    await page.goto(`${base}#seed=${seed}&like=tag%3Anope&ranker=hybrid`);
+    await page.locator(".md-result").first().waitFor();
+    const status = await page.locator(".md-status").textContent();
+    assert.ok(status.startsWith("10 recommendations from the hybrid ranker for ") && status.endsWith(` ${IGNORED}`), status);
+    assert.deepEqual([...(await linkParams(page)).keys()], ["seed", "ranker"]);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("navigating an open tab to an in-page anchor keeps the results; to no fragment clears them", async () => {
+    const { context, page, problems } = await open();
+    await pickSeed(page, "Synthetic track 110");
+    await page.getByRole("button", { name: /^Calmer/ }).click();
+    const before = await titles(page);
+
+    await page.goto(`${base}#music-discovery-demo`);
+    await page.waitForFunction(() => location.hash === "#music-discovery-demo");
+    assert.deepEqual(await titles(page), before);
+    assert.equal(await page.getByRole("button", { name: /^Calmer/ }).getAttribute("data-state"), "like");
+    assert.equal(await page.evaluate(() => location.hash), "#music-discovery-demo");
+
+    // The fragment no longer holds the demo's state, so clearing the seed leaves the anchor alone.
+    await page.getByRole("combobox").fill("Synthetic");
+    assert.equal(await page.evaluate(() => location.hash), "#music-discovery-demo");
+
+    await pickSeed(page, "Synthetic track 110");
+    await page.evaluate(() => { location.hash = ""; });
+    await page.locator(".md-result").first().waitFor({ state: "detached" });
+    assert.equal(await page.locator(".md-status").textContent(), "Pick a seed track to see recommendations.");
+    assert.equal(await page.getByRole("combobox").inputValue(), "");
+    assert.equal(await page.getByRole("button", { name: /^Calmer/ }).getAttribute("data-state"), "neutral");
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
+  test("an in-page rating survives navigating to another link and back", async () => {
+    const seed = linkSeed();
+    const { context, page, problems } = await open();
+    await pickSeed(page, "Synthetic track 110");
+    const firstUp = page.getByRole("button", { name: /^Thumbs up/ }).first();
+    await firstUp.click();
+    const rated = await page.evaluate(() => location.hash);
+
+    await page.goto(`${base}#seed=${seed}`);
+    await page.waitForFunction(() => /^Synthetic track 107 /.test(document.querySelector("input[role=combobox]").value));
+    assert.equal(await firstUp.getAttribute("aria-pressed"), "false");
+    assert.equal(await page.getByRole("button", { name: "Export my ratings" }).isDisabled(), false);
+
+    await page.goto(base + rated);
+    await page.waitForFunction(() => /^Synthetic track 110 /.test(document.querySelector("input[role=combobox]").value));
+    assert.equal(await firstUp.getAttribute("aria-pressed"), "true");
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   test("Copy link puts the address on the clipboard, or shows it in a selected field when that fails", async () => {
     const { context, page, problems } = await open({ permissions: ["clipboard-read", "clipboard-write"] });
     await pickSeed(page);
@@ -785,6 +906,12 @@ describe("links to results", () => {
     await first.getByRole("button", { name: "Pick a random track" }).click();
     await first.locator(".md-result").first().waitFor();
     assert.equal(await page.evaluate(() => location.hash), hash);
+    const picked = await first.getByRole("combobox").inputValue();
+    await page.evaluate(() => { location.hash = "#seed=100"; });
+    await page.waitForFunction(() => location.hash === "#seed=100");
+    await page.evaluate(() => new Promise((done) => { requestAnimationFrame(done); }));
+    assert.equal(await first.getByRole("combobox").inputValue(), picked);
+    assert.equal(await page.evaluate(() => location.hash), "#seed=100");
     await close(page, context);
   });
 });

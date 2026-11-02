@@ -67,12 +67,40 @@ class Demo {
     this.linkable = document.querySelectorAll("[data-music-discovery]").length === 1;
     this.linked = false; // whether the fragment currently holds this demo's state
     this.build();
+    this.showLink();
+    if (this.linkable) globalThis.addEventListener("hashchange", () => this.followLink());
+  }
+
+  // --- links to results -----------------------------------------------------
+
+  /** Whether the current fragment names any of this demo's settings. */
+  fragmentIsLink() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    return LINK_KEYS.some((key) => params.has(key));
+  }
+
+  /** Render what the fragment asks for, saying so if part of it could not be applied. */
+  showLink() {
     const ignored = this.linkable && this.restoreLink();
     this.render();
     if (ignored) this.status.textContent = `${this.status.textContent} ${IGNORED_LINK}`;
   }
 
-  // --- links to results -----------------------------------------------------
+  /**
+   * The open tab went to another fragment. replaceState never fires hashchange, so this is
+   * always someone else's navigation. A link or an empty fragment shows what a fresh load
+   * would; an ordinary in-page anchor only scrolls, so the results stay.
+   */
+  followLink() {
+    this.linked = false;
+    if (location.hash && !this.fragmentIsLink()) return;
+    this.seed.clear();
+    this.picker.clear();
+    this.ranker = "hybrid";
+    this.rankerInputs.hybrid.checked = true;
+    this.excludeSeedArtist.checked = false;
+    this.showLink();
+  }
 
   /**
    * Apply the settings a `#seed=…&like=…` fragment names that this page can show, without
@@ -80,8 +108,8 @@ class Demo {
    * such as an ordinary in-page anchor, are left alone.
    */
   restoreLink() {
+    if (!this.fragmentIsLink()) return false;
     const params = new URLSearchParams(location.hash.slice(1));
-    if (!LINK_KEYS.some((key) => params.has(key))) return false;
     let ignored = false;
     const seeds = params.getAll("seed");
     const row = seeds.length === 1 ? this.data.ids.findIndex((id) => String(id) === seeds[0]) : -1;
