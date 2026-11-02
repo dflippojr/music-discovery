@@ -56,6 +56,7 @@ body.md-demo-page h1 {
   margin: 1rem 0 0.5rem;
   font-size: 1.6rem;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 @media (prefers-color-scheme: dark) {
