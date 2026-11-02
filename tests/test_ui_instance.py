@@ -520,6 +520,7 @@ def stale(launcher, monkeypatch):
             NoSuchProcess=psutil.NoSuchProcess,
             AccessDenied=psutil.AccessDenied,
             Error=psutil.Error,
+            STATUS_ZOMBIE=psutil.STATUS_ZOMBIE,
             process_iter=lambda attrs=None: iter(()),
         ),
     )
@@ -644,6 +645,7 @@ FIELD_BYTES = WIRE_BYTES.filter(lambda raw: not set(raw) & set(b"\r\n"))
 ESCAPED_BYTES = WIRE_BYTES.map(
     lambda raw: "".join(f"%{byte:02x}" for byte in raw).encode()
 )
+CHILD_STOP_TIMEOUT = 10
 FUZZ_SETTINGS = settings(
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture]
 )
@@ -912,6 +914,131 @@ def test_recover_refuses_a_starting_handle_with_an_unreadable_command_line(
     with pytest.raises(ValueError, match="555"):
         launcher.recover()
     assert_preserved(launcher, bundle)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING, psutil.STATUS_STOPPED, None],
+)
+def test_recover_refuses_a_live_process_with_an_unreadable_command_line(
+    launcher, monkeypatch, stale, status
+):
+    """Only a zombie is excused; None means the status could not be read either."""
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+    unreadable = SimpleNamespace(pid=555, info={"cmdline": None, "status": status})
+    monkeypatch.setattr(
+        launcher.psutil, "process_iter", lambda attrs=None: iter([unreadable])
+    )
+    with pytest.raises(ValueError, match="Cannot read the command line of PID 555"):
+        launcher.recover()
+    assert_preserved(launcher, bundle)
+
+
+needs_fork = pytest.mark.skipif(os.name == "nt", reason="fork")
+
+
+@pytest.fixture
+def zombie():
+    """The PID of a real child that has exited and has not been reaped."""
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    try:
+        # A child still exiting is not a zombie yet, and the tests would prove nothing.
+        deadline = time.monotonic() + 10
+        while psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
+            assert time.monotonic() < deadline, "the child did not become a zombie"
+            time.sleep(0.01)
+        yield pid
+    finally:
+        os.waitpid(pid, 0)
+
+
+@needs_fork
+def test_zombie_does_not_block_bundle_scan(launcher, tmp_path, zombie):
+    launcher.require_no_bundle_writer(tmp_path / "run-0000000000000000")
+
+
+@needs_fork
+def test_recover_clears_a_starting_handle_while_a_real_zombie_exists(
+    launcher, monkeypatch, stale, capsys, zombie
+):
+    metadata, bundle = stale
+    starting_handle(launcher, metadata)
+    monkeypatch.setattr(launcher.psutil, "process_iter", psutil.process_iter)
+    launcher.recover()
+    assert not launcher.HANDLE.exists()
+    assert not bundle.exists()
+    assert f"Recovered {metadata['instance']}" in capsys.readouterr().out
+
+
+@needs_fork
+def test_psutil_reports_a_real_zombie_as_the_scan_expects(zombie):
+    """The mocked process tables in this file copy this shape from real psutil."""
+    table = {p.pid: p.info for p in psutil.process_iter(["cmdline", "status"])}
+    assert table[zombie] == {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
+
+
+@needs_fork
+def test_real_process_holding_the_bundle_refuses_with_a_zombie_present(
+    launcher, tmp_path, zombie
+):
+    bundle = tmp_path / "run-0000000000000000"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()", str(bundle)],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        with pytest.raises(ValueError, match=f"PID {holder.pid} still holds"):
+            launcher.require_no_bundle_writer(bundle)
+    finally:
+        holder.communicate(timeout=CHILD_STOP_TIMEOUT)
+
+
+SCAN_BUNDLE = Path("run-0000000000000000")
+EVERY_STATUS = sorted(
+    value for name, value in vars(psutil).items() if name.startswith("STATUS_")
+)
+SCAN_ENTRIES = st.lists(
+    st.fixed_dictionaries(
+        {
+            "status": st.sampled_from([*EVERY_STATUS, None]),
+            "cmdline": st.one_of(
+                st.none(),
+                st.lists(st.sampled_from(["python", "other.py", str(SCAN_BUNDLE)])),
+            ),
+        }
+    ),
+    max_size=6,
+)
+
+
+@FUZZ_SETTINGS
+@given(entries=SCAN_ENTRIES)
+def test_bundle_scan_refuses_exactly_for_a_process_that_may_hold_the_bundle(
+    launcher, monkeypatch, entries
+):
+    """Class check for #214: having no command line to read is not being unreadable.
+
+    Whatever the process table holds, a zombie never blocks recovery, and any other
+    process blocks it when it names the bundle or its command line can't be read.
+    """
+    table = [
+        SimpleNamespace(pid=pid, info=info) for pid, info in enumerate(entries, 1000)
+    ]
+    monkeypatch.setattr(launcher.psutil, "process_iter", lambda attrs=None: iter(table))
+    blockers = [
+        entry.pid
+        for entry in table
+        if entry.info["status"] != psutil.STATUS_ZOMBIE
+        and (entry.info["cmdline"] is None or str(SCAN_BUNDLE) in entry.info["cmdline"])
+    ]
+    if blockers:
+        with pytest.raises(ValueError, match=f"PID {blockers[0]}"):
+            launcher.require_no_bundle_writer(SCAN_BUNDLE)
+    else:
+        launcher.require_no_bundle_writer(SCAN_BUNDLE)
 
 
 def test_recover_ignores_a_process_with_an_empty_command_line(
