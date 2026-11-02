@@ -323,6 +323,14 @@ export class SeedPicker {
     this.suggestions = [];
     this.closeList();
   }
+
+  /** Back to no seed and an empty search box, without firing `onChange`. */
+  clear() {
+    this.row = -1;
+    this.input.value = "";
+    this.suggestions = [];
+    this.closeList();
+  }
 }
 
 /** Quality chips: each cycles not selected, liked, disliked. `qualities` holds the chosen ones. */
@@ -389,6 +397,11 @@ export class QualityPicker {
     if (!set) return false;
     set(state);
     return true;
+  }
+
+  /** Set every chip back to not selected, without firing `onChange`. */
+  clear() {
+    for (const set of this.setters.values()) set("neutral");
   }
 }
 
