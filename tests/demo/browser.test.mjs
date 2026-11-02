@@ -559,6 +559,28 @@ describe("demo page", () => {
     });
   }
 
+  test("clearing says so when the browser will not remove the stored log (#229)", async () => {
+    const { context, page, problems } = await open();
+    const status = page.locator(".md-log-status");
+    await pickSeed(page);
+    await page.locator(".md-result").nth(0).getByRole("button", { name: /Thumbs up/ }).click();
+    assert.equal(await status.textContent(), "1 entry in this browser's feedback log.");
+    await page.evaluate(() => {
+      Storage.prototype.removeItem = () => {
+        throw new DOMException("Synthetic denial", "SecurityError");
+      };
+    });
+    await page.getByRole("button", { name: "Clear feedback log" }).click();
+    await page.getByRole("button", { name: "Yes, clear the log" }).click();
+    assert.equal(
+      await status.textContent(),
+      "Could not clear the feedback log: this browser would not remove the entries it stored, so they may return after a reload.",
+    );
+    assert.equal(await status.evaluate((el) => el === document.activeElement), true);
+    assert.deepEqual(problems, []);
+    await close(page, context);
+  });
+
   test("on a full storage quota the page keeps every event, says what a reload keeps and downloads them all (#152)", async () => {
     const context = await browser.newContext({ acceptDownloads: true });
     const page = await context.newPage();
