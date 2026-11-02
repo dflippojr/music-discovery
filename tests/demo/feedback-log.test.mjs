@@ -302,6 +302,8 @@ test("property: storage failures never take events out of the page's log", () =>
       if (roll < 0.05) {
         log.clear();
         expected = [];
+        // The stored copy goes too, even after failed saves (#229).
+        assert.equal(storage.items.has(LOG_KEY), false, `seed ${seed} step ${step} clear`);
       } else if (roll < 0.1) {
         storage.limit = Math.floor(random() * 400);
       } else {

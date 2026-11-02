@@ -115,14 +115,20 @@ export class FeedbackLog {
     return false;
   }
 
+  /**
+   * Empty the page's log and the stored copy. Removal is tried even after saving has
+   * failed, since the stored copy can still hold older events. Returns false when the
+   * removal throws; saving is then off for this page.
+   */
   clear() {
     this.memory = [];
     this.stored = 0;
-    if (!this.persistent) return;
     try {
       this.store().removeItem(this.key);
+      return true;
     } catch {
       this.persistent = false;
+      return false;
     }
   }
 

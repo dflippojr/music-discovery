@@ -374,10 +374,12 @@ class Demo {
   }
 
   clearLog() {
-    this.log.clear();
+    const cleared = this.log.clear();
     this.confirmBox.hidden = true;
     this.paintLog();
-    this.logStatus.textContent = "Feedback log cleared.";
+    this.logStatus.textContent = cleared
+      ? "Feedback log cleared."
+      : "Could not clear the feedback log: this browser would not remove the entries it stored, so they may return after a reload.";
     this.logStatus.focus();
   }
 
