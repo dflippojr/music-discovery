@@ -917,16 +917,24 @@ def test_recover_refuses_a_starting_handle_with_an_unreadable_command_line(
 
 
 @pytest.mark.parametrize(
-    "status",
-    [psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING, psutil.STATUS_STOPPED, None],
+    ("status", "num_threads"),
+    [
+        (psutil.STATUS_RUNNING, 1),
+        (psutil.STATUS_SLEEPING, 1),
+        (psutil.STATUS_STOPPED, 1),
+        (None, None),
+        (psutil.STATUS_ZOMBIE, 2),
+        (psutil.STATUS_ZOMBIE, None),
+    ],
 )
 def test_recover_refuses_a_live_process_with_an_unreadable_command_line(
-    launcher, monkeypatch, stale, status
+    launcher, monkeypatch, stale, status, num_threads
 ):
-    """Only a zombie is excused; None means the status could not be read either."""
+    """Only a zombie with no other thread is excused; None means unreadable too."""
     metadata, bundle = stale
     starting_handle(launcher, metadata)
-    unreadable = SimpleNamespace(pid=555, info={"cmdline": None, "status": status})
+    info = {"cmdline": None, "status": status, "num_threads": num_threads}
+    unreadable = SimpleNamespace(pid=555, info=info)
     monkeypatch.setattr(
         launcher.psutil, "process_iter", lambda attrs=None: iter([unreadable])
     )
@@ -974,8 +982,13 @@ def test_recover_clears_a_starting_handle_while_a_real_zombie_exists(
 @needs_zombies
 def test_psutil_reports_a_real_zombie_as_the_scan_expects(zombie):
     """The mocked process tables in this file copy this shape from real psutil."""
-    table = {p.pid: p.info for p in psutil.process_iter(["cmdline", "status"])}
-    assert table[zombie] == {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
+    attrs = ["cmdline", "status", "num_threads"]
+    table = {p.pid: p.info for p in psutil.process_iter(attrs)}
+    assert table[zombie] == {
+        "cmdline": None,
+        "status": psutil.STATUS_ZOMBIE,
+        "num_threads": 1,
+    }
 
 
 @needs_zombies
@@ -994,6 +1007,30 @@ def test_real_process_holding_the_bundle_refuses_with_a_zombie_present(
         holder.communicate(timeout=CHILD_STOP_TIMEOUT)
 
 
+@needs_zombies
+def test_exited_main_thread_with_a_live_worker_refuses(launcher, tmp_path):
+    """psutil reports such a process as a zombie, yet its worker can still write."""
+    bundle = tmp_path / "run-0000000000000000"
+    code = (
+        "import ctypes, sys, threading\n"
+        "threading.Thread(target=sys.stdin.read).start()\n"
+        "ctypes.CDLL(None).pthread_exit(None)\n"
+    )
+    leader = subprocess.Popen(
+        [sys.executable, "-c", code, str(bundle)], stdin=subprocess.PIPE
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while psutil.Process(leader.pid).status() != psutil.STATUS_ZOMBIE:
+            assert time.monotonic() < deadline, "the main thread did not exit"
+            time.sleep(0.01)
+        assert psutil.Process(leader.pid).num_threads() > 1
+        with pytest.raises(ValueError, match=f"PID {leader.pid}"):
+            launcher.require_no_bundle_writer(bundle)
+    finally:
+        leader.communicate(timeout=CHILD_STOP_TIMEOUT)
+
+
 SCAN_BUNDLE = Path("run-0000000000000000")
 EVERY_STATUS = sorted(
     value for name, value in vars(psutil).items() if name.startswith("STATUS_")
@@ -1002,6 +1039,7 @@ SCAN_ENTRIES = st.lists(
     st.fixed_dictionaries(
         {
             "status": st.sampled_from([*EVERY_STATUS, None]),
+            "num_threads": st.sampled_from([1, 2, None]),
             "cmdline": st.one_of(
                 st.none(),
                 st.lists(st.sampled_from(["python", "other.py", str(SCAN_BUNDLE)])),
@@ -1019,8 +1057,9 @@ def test_bundle_scan_refuses_exactly_for_a_process_that_may_hold_the_bundle(
 ):
     """Class check for #214: having no command line to read is not being unreadable.
 
-    Whatever the process table holds, a zombie never blocks recovery, and any other
-    process blocks it when it names the bundle or its command line can't be read.
+    Whatever the process table holds, a zombie with no other thread never blocks
+    recovery, and any other process blocks it when it names the bundle or its command
+    line can't be read.
     """
     table = [
         SimpleNamespace(pid=pid, info=info) for pid, info in enumerate(entries, 1000)
@@ -1029,7 +1068,8 @@ def test_bundle_scan_refuses_exactly_for_a_process_that_may_hold_the_bundle(
     blockers = [
         entry.pid
         for entry in table
-        if entry.info["status"] != psutil.STATUS_ZOMBIE
+        if (entry.info["status"], entry.info["num_threads"])
+        != (psutil.STATUS_ZOMBIE, 1)
         and (entry.info["cmdline"] is None or str(SCAN_BUNDLE) in entry.info["cmdline"])
     ]
     if blockers:
