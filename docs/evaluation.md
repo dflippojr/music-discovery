@@ -118,9 +118,9 @@ A ranker change that improves the numbers does not need a new baseline: the
 gate only fails on a drop. To make the new level the floor, or to accept a
 deliberate drop, run `musicdiscovery evaluate` with the five gate rankers on a
 fresh `ingest`, commit the new `reports/offline-<date>.md` and `.json` in the
-same pull request as the ranker change, and point `reports/baseline.json` at
-it. The same applies after a change to `eval/queries.json` or a new archive.
-Changing the baseline changes the gate, so the pull request needs the owner's
+same pull request as the ranker change, point `reports/baseline.json` at it,
+and name the new report in the README's sentence on results. The same applies
+after a change to `eval/queries.json` or a new archive. Changing the baseline changes the gate, so the pull request needs the owner's
 `gate-change-approved` label and an entry under "Gate changes" in its body.
 
 ## Held-out tags

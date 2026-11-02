@@ -23,7 +23,7 @@ Remaining:
 
 - Run the listener pilot and publish the blind comparison: [#8](https://github.com/dflippojr/music-discovery/issues/8)
 
-Results are in the reports, not restated here; the latest is [reports/offline-2026-10-13-profile-diverse.md](reports/offline-2026-10-13-profile-diverse.md).
+Results are in the reports, not restated here; start with [reports/offline-2026-10-22.md](reports/offline-2026-10-22.md), the report the evaluation gate judges against, as named in [reports/baseline.json](reports/baseline.json).
 
 ## Where things are
 
