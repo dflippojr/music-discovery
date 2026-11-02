@@ -229,6 +229,29 @@ def test_the_latest_action_wins_within_a_list():
     assert feedback.latest_ratings([event(100, 1), event(100, 0)]) == {}
 
 
+@pytest.mark.parametrize("field", ["likes", "dislikes"])
+def test_the_order_of_qualities_does_not_split_a_list(field):
+    qualities = ["genre:Folk", "tag:punk", "more:energy"]
+    first = event(100, 1, **{field: qualities})
+    moved = {field: [*qualities[1:], qualities[0]]}
+    assert len(feedback.latest_ratings([first, event(101, -1, **moved)])) == 1
+    summary = feedback.summarise([first, event(101, -1, **moved)])
+    assert summary.rankers["hybrid"].lists == 1
+    # A rating taken back after a chip moved takes back that same rating.
+    assert feedback.latest_ratings([first, event(100, 0, **moved)]) == {}
+
+
+def test_different_qualities_are_still_different_lists():
+    plain = event(100, 1, likes=["genre:Folk", "tag:punk"], dislikes=[])
+    fewer = event(100, 1, likes=["genre:Folk"], dislikes=["tag:punk"])
+    assert len(feedback.latest_ratings([plain, fewer])) == 2
+
+
+def test_the_order_of_shown_tracks_still_splits_a_list():
+    other = event(100, 1, shown=[101, 100, 102, 103])
+    assert len(feedback.latest_ratings([event(100, 1), other])) == 2
+
+
 def test_shown_ranks_must_be_in_order(tmp_path):
     bad = event(100, 1)
     bad["shown"][1]["rank"] = 5
