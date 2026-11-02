@@ -158,19 +158,27 @@ def require_exited(identity):
     raise ValueError("Recorded process is still live; preserve handle and bundle")
 
 
+def read_proc_stat(pid):
+    return Path(f"/proc/{pid}/stat").read_bytes()
+
+
 def has_finished_exiting(process):
     """Whether a scanned process is a zombie with no thread left that could write.
 
-    Linux also reports a process as a zombie when only its main thread has exited.
-    The sampled status may predate that exit, so the thread count is read afresh. A
-    worker's execve() can still replace the main thread before that read, so the
-    status is read again after it: one thread that is still a zombie can't come back.
+    Linux also reports a process as a zombie when only its main thread has exited,
+    and a worker can start threads or execve() between separate reads. So the state
+    and thread count come from one read of the stat file, which psutil doesn't offer.
+    Without that file (not Linux, or the process has gone) the process is not excused.
     """
-    return (
-        process.info.get("status") == psutil.STATUS_ZOMBIE
-        and process.num_threads() == 1
-        and process.status() == psutil.STATUS_ZOMBIE
-    )
+    if process.info.get("status") != psutil.STATUS_ZOMBIE:
+        return False
+    try:
+        raw = read_proc_stat(process.pid)
+    except OSError:
+        return False
+    # The command name can hold anything, so fields count from its last ")".
+    fields = raw.rpartition(b")")[2].split()
+    return fields[0] == b"Z" and fields[17] == b"1"
 
 
 def require_no_bundle_writer(bundle):
