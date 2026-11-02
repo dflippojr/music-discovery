@@ -165,13 +165,18 @@ def require_no_bundle_writer(bundle):
     only the child's argv (which holds the bundle path) can show it is gone.
     The scan is read-only; a process that cannot be inspected also refuses. A
     zombie is skipped: psutil gives it no command line, and it holds no bundle.
+    Linux also reports a process as a zombie when only its main thread has
+    exited, so one with any other thread is treated as unreadable and refuses.
     """
     needle = str(bundle)
     try:
-        for process in psutil.process_iter(["cmdline", "status"]):
-            if process.info.get("status") == psutil.STATUS_ZOMBIE:
+        for process in psutil.process_iter(["cmdline", "status", "num_threads"]):
+            info = process.info
+            if info.get("status") == psutil.STATUS_ZOMBIE and (
+                info.get("num_threads") == 1
+            ):
                 continue
-            cmdline = process.info.get("cmdline")
+            cmdline = info.get("cmdline")
             if cmdline is None:
                 raise ValueError(
                     f"Cannot read the command line of PID {process.pid}; "

@@ -181,7 +181,8 @@ killed in phase `starting`, before the child identity is saved, is recovered
 once a read-only psutil scan finds no process whose command line contains the
 run directory's path. A match, or a process whose command line cannot be read,
 refuses and names the PID. Zombies are skipped, since they have no command line
-and hold no files.
+and hold no files. A process reported as a zombie that still has other threads
+running (its main thread exited, its workers did not) is not skipped and refuses.
 Older handles without process creation times cannot be recovered automatically.
 Their ready, owned servers can still be stopped with npm run ui:stop.
 
