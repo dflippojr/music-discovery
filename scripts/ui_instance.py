@@ -162,12 +162,14 @@ def has_finished_exiting(process):
     """Whether a scanned process is a zombie with no thread left that could write.
 
     Linux also reports a process as a zombie when only its main thread has exited.
-    The count is read here, after the status: a count sampled with it could predate
-    that exit, but once the main thread is gone a count of 1 can't grow.
+    The sampled status may predate that exit, so the thread count is read afresh. A
+    worker's execve() can still replace the main thread before that read, so the
+    status is read again after it: one thread that is still a zombie can't come back.
     """
     return (
         process.info.get("status") == psutil.STATUS_ZOMBIE
         and process.num_threads() == 1
+        and process.status() == psutil.STATUS_ZOMBIE
     )
 
 
