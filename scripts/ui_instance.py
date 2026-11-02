@@ -158,6 +158,19 @@ def require_exited(identity):
     raise ValueError("Recorded process is still live; preserve handle and bundle")
 
 
+def has_finished_exiting(process):
+    """Whether a scanned process is a zombie with no thread left that could write.
+
+    Linux also reports a process as a zombie when only its main thread has exited.
+    The count is read here, after the status: a count sampled with it could predate
+    that exit, but once the main thread is gone a count of 1 can't grow.
+    """
+    return (
+        process.info.get("status") == psutil.STATUS_ZOMBIE
+        and process.num_threads() == 1
+    )
+
+
 def require_no_bundle_writer(bundle):
     """Refuse while any process has the bundle path in its command line.
 
@@ -165,19 +178,14 @@ def require_no_bundle_writer(bundle):
     only the child's argv (which holds the bundle path) can show it is gone.
     The scan is read-only; a process that cannot be inspected also refuses. A
     zombie is skipped: psutil gives it no command line, and it holds no bundle.
-    Linux also reports a process as a zombie when only its main thread has
-    exited, so one with any other thread is treated as unreadable and refuses.
     """
     needle = str(bundle)
     try:
-        for process in psutil.process_iter(["cmdline", "status", "num_threads"]):
-            info = process.info
-            if info.get("status") == psutil.STATUS_ZOMBIE and (
-                info.get("num_threads") == 1
-            ):
-                continue
-            cmdline = info.get("cmdline")
+        for process in psutil.process_iter(["cmdline", "status"]):
+            cmdline = process.info.get("cmdline")
             if cmdline is None:
+                if has_finished_exiting(process):
+                    continue
                 raise ValueError(
                     f"Cannot read the command line of PID {process.pid}; "
                     "preserve handle for investigation"
