@@ -10,6 +10,10 @@ async function results(page, path, again = false) {
   await expect(page.locator(".md-result")).toHaveCount(10);
 }
 
+function setTextSize(page, size) {
+  return page.evaluate(size => { document.styleSheets[0].insertRule(":root { font-size: " + size + "%; }"); }, size);
+}
+
 async function expectTargets(locator) {
   const boxes = await locator.evaluateAll(elements => elements.map(element => {
     const { x, y, width, height } = element.getBoundingClientRect();
@@ -89,13 +93,24 @@ for (const path of ["/", "/study.html"]) {
     }
   });
 
-  test("#231: " + path + " keeps results reflowed and targets sized at enlarged text", async ({ page, browserName }) => {
+  for (const size of [225, 250, 270, 275]) {
+    test("#235: " + path + " does not overflow at 320 px and " + size + "% text", async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 667 });
+      await results(page, path);
+      await setTextSize(page, size);
+      // Numeric: WebKit reports 270% as 43.200001px.
+      await expect.poll(() => page.locator("html").evaluate(html => parseFloat(getComputedStyle(html).fontSize))).toBeCloseTo(16 * size / 100, 3);
+      await expectNoOverflow(page, 320);
+    });
+  }
+
+  test("#231: " + path + " keeps results reflowed and targets sized at enlarged text", async ({ page }) => {
     const study = path === "/study.html";
     const open = async (width, size) => {
       await page.setViewportSize({ width, height: 667 });
       await ready(page, path);
       if (study) await page.getByRole("button", { name: "I agree, start" }).click();
-      await page.evaluate(size => { document.styleSheets[0].insertRule(":root { font-size: " + size + "%; }"); }, size);
+      await setTextSize(page, size);
       await expect(page.locator("html")).toHaveCSS("font-size", 16 * size / 100 + "px");
     };
     const show = async () => {
@@ -106,10 +121,8 @@ for (const path of ["/", "/study.html"]) {
     const firstTitle = page.locator(".md-title").first();
     const setTitle = text => firstTitle.evaluate((title, text) => { title.textContent = text; }, text);
 
-    // 275% is where a rating button must put its icon over its label to fit. WebKit's wider
-    // text overflows this page above 200% (4 px at 225%), so only Chromium goes that far.
-    const sizes = [[320, 200], [375, 200], ...(browserName === "chromium" ? [[320, 275]] : [])];
-    for (const [width, size] of sizes) {
+    // 275% is where a rating button must put its icon over its label to fit.
+    for (const [width, size] of [[320, 200], [375, 200], [320, 275]]) {
       await open(width, size);
       await page.getByRole("combobox").fill("Synthetic track 10");
       await expect(page.getByRole("option")).toHaveCount(8);
