@@ -935,32 +935,30 @@ def test_recover_refuses_a_live_process_with_an_unreadable_command_line(
     assert_preserved(launcher, bundle)
 
 
-needs_fork = pytest.mark.skipif(os.name == "nt", reason="fork")
+needs_zombies = pytest.mark.skipif(os.name == "nt", reason="POSIX only")
 
 
 @pytest.fixture
 def zombie():
     """The PID of a real child that has exited and has not been reaped."""
-    pid = os.fork()
-    if pid == 0:
-        os._exit(0)
+    child = subprocess.Popen([sys.executable, "-c", ""])
     try:
         # A child still exiting is not a zombie yet, and the tests would prove nothing.
         deadline = time.monotonic() + 10
-        while psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
+        while psutil.Process(child.pid).status() != psutil.STATUS_ZOMBIE:
             assert time.monotonic() < deadline, "the child did not become a zombie"
             time.sleep(0.01)
-        yield pid
+        yield child.pid
     finally:
-        os.waitpid(pid, 0)
+        child.wait(timeout=CHILD_STOP_TIMEOUT)
 
 
-@needs_fork
+@needs_zombies
 def test_zombie_does_not_block_bundle_scan(launcher, tmp_path, zombie):
     launcher.require_no_bundle_writer(tmp_path / "run-0000000000000000")
 
 
-@needs_fork
+@needs_zombies
 def test_recover_clears_a_starting_handle_while_a_real_zombie_exists(
     launcher, monkeypatch, stale, capsys, zombie
 ):
@@ -973,14 +971,14 @@ def test_recover_clears_a_starting_handle_while_a_real_zombie_exists(
     assert f"Recovered {metadata['instance']}" in capsys.readouterr().out
 
 
-@needs_fork
+@needs_zombies
 def test_psutil_reports_a_real_zombie_as_the_scan_expects(zombie):
     """The mocked process tables in this file copy this shape from real psutil."""
     table = {p.pid: p.info for p in psutil.process_iter(["cmdline", "status"])}
     assert table[zombie] == {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
 
 
-@needs_fork
+@needs_zombies
 def test_real_process_holding_the_bundle_refuses_with_a_zombie_present(
     launcher, tmp_path, zombie
 ):
