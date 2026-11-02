@@ -65,7 +65,7 @@ def test_flat_fixture_builds_without_shape_helpers(tmp_path):
 class Launcher:
     """One `ui_instance.py start` process and the lines it prints."""
 
-    def __init__(self, tree, port):
+    def __init__(self, tree, port, script="scripts/ui_instance.py"):
         self.tree = tree
         self.handle = tree / "data" / "ui-testing" / "instance.json"
         self.errors = tree / "launcher.err"
@@ -73,7 +73,7 @@ class Launcher:
             self.process = subprocess.Popen(
                 [
                     sys.executable,
-                    "scripts/ui_instance.py",
+                    script,
                     "start",
                     "--port",
                     str(port),
@@ -121,8 +121,11 @@ class Launcher:
 def launchers(tmp_path):
     started = []
 
-    def launch(name, port):
-        launcher = Launcher(checkout(tmp_path, name), port)
+    def launch(name, port, prepare=None, **options):
+        tree = checkout(tmp_path, name)
+        if prepare is not None:
+            prepare(tree)
+        launcher = Launcher(tree, port, **options)
         started.append(launcher)
         return launcher
 
@@ -135,6 +138,49 @@ def free_port():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+# Runs the real launcher but raises SIGTERM inside its second ready line, which
+# fixes a timing that a signal from outside hits too rarely to test (#213).
+SIGNAL_IN_READY_LINE = """\
+import builtins, importlib.util, signal, sys
+spec = importlib.util.spec_from_file_location("ui_instance", "scripts/ui_instance.py")
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+
+
+def signalling_print(*args, **kwargs):
+    builtins.print(*args, **kwargs)
+    if args and str(args[0]).startswith("UI_INSTANCE="):
+        signal.raise_signal(signal.SIGTERM)  # os.kill would end a Windows process
+
+
+launcher.print = signalling_print
+sys.exit(launcher.main())
+"""
+
+
+def test_sigterm_between_ready_lines_and_serving_exits_and_cleans_up(launchers):
+    port = free_port()
+
+    def prepare(tree):
+        (tree / "signal_in_ready_line.py").write_text(
+            SIGNAL_IN_READY_LINE, encoding="utf-8"
+        )
+
+    launcher = launchers(
+        "signalled", port, prepare=prepare, script="signal_in_ready_line.py"
+    )
+    assert launcher.wait_ready() == f"http://127.0.0.1:{port}/", launcher.stderr()
+    instance = launcher.lines.get(timeout=STARTUP_TIMEOUT)
+    assert instance.startswith("UI_INSTANCE="), launcher.stderr()
+
+    # Before #213's fix this timed out with /__ui_health still answering.
+    assert launcher.process.wait(timeout=EXIT_TIMEOUT) == 0, launcher.stderr()
+    assert not launcher.handle.exists()
+    assert not list((launcher.tree / "data" / "ui-testing").glob("run-*"))
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", port), timeout=5).close()
 
 
 def test_second_launcher_refuses_a_served_port_and_stop_frees_it(launchers):

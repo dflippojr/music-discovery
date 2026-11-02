@@ -372,6 +372,95 @@ def test_signal_after_the_fixture_cancels_before_ready(
     assert_cleaned(launcher, children, ports)
 
 
+def start_tracing_lines(launcher, on_line):
+    """Run start(0), calling on_line before each launcher line on this thread."""
+
+    def local(frame, event, _arg):
+        if event == "line":
+            on_line(frame.f_lineno)
+        return local
+
+    def enter(frame, _event, _arg):
+        return local if frame.f_code.co_filename == launcher.__file__ else None
+
+    previous = sys.gettrace()  # coverage's tracer, when it runs one
+    sys.settrace(enter)
+    try:
+        launcher.start(0)
+    finally:
+        sys.settrace(previous)
+
+
+@pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
+def test_signal_at_any_startup_line_stops_the_launcher(
+    launcher, monkeypatch, seeding, cancel
+):
+    """Class check for #213: no line between the handlers and serving loses a signal.
+
+    It finds the lines by running start(), so a line added later is covered too.
+    """
+    seed, children, ports = seeding
+    seed()
+    previous_handler = signal.getsignal(cancel)
+    original_serve = ThreadingHTTPServer.serve_forever
+    lines = {}
+    served = []
+
+    def handlers_installed():
+        return signal.getsignal(cancel) != previous_handler
+
+    def record(line):
+        if handlers_installed() and not served:
+            lines[line] = True
+
+    monkeypatch.setattr(
+        ThreadingHTTPServer, "serve_forever", lambda *_, **__: served.append(True)
+    )
+    start_tracing_lines(launcher, record)
+    source = Path(launcher.__file__).read_text(encoding="utf-8").splitlines()
+    reached = [source[line - 1] for line in lines]
+    assert any("UI_URL=" in text for text in reached)
+    assert any("UI_INSTANCE=" in text for text in reached)
+    assert any("serve_forever" in text for text in reached)
+
+    overran = []
+
+    def serve(server, **kwargs):
+        def expired():
+            overran.append(True)
+            server.shutdown()
+
+        # Bound the run when the signal was lost, as the launcher would serve on.
+        watchdog = threading.Timer(5, expired)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            original_serve(server, **kwargs)
+        finally:
+            watchdog.cancel()
+
+    def signal_at(target):
+        fired = []
+
+        def fire(line):
+            # A helper's line also runs before the handlers, where the signal would
+            # end pytest.
+            if line == target and handlers_installed() and not fired:
+                fired.append(line)
+                signal.raise_signal(cancel)
+
+        overran.clear()
+        start_tracing_lines(launcher, fire)
+        assert fired, f"Line {target} was not reached"
+        assert_cleaned(launcher, children, ports)
+        return bool(overran)
+
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", serve)
+    lost = [f"{line}: {source[line - 1].strip()}" for line in lines if signal_at(line)]
+    assert not lost, "A signal at these lines was lost:\n" + "\n".join(lost)
+    assert signal.getsignal(cancel) == previous_handler
+
+
 def cancel_after_changing_handle(launcher, monkeypatch, change):
     def cancelled(child, stopping):
         change()

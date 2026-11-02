@@ -52,8 +52,9 @@ exit. After the child exits, it closes the socket and removes only its flat
 bundle and handle, within Playwright's 10-second graceful-shutdown window.
 The stop command requires a ready health endpoint; cancel seeding with SIGTERM
 or Ctrl+C in the owned launcher terminal.
-SIGTERM, Ctrl+C or the stop command triggers cleanup. Register teardown in a
-finally/trap before launching. Never use the handle's token in evidence.
+SIGTERM, Ctrl+C or the stop command triggers cleanup, including a signal that
+arrives just after the ready lines and before serving starts. Register teardown
+in a finally/trap before launching. Never use the handle's token in evidence.
 
 ## Seed and sign-in
 

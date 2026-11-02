@@ -419,6 +419,10 @@ def start(port):
             flush=True,
         )
         serving.set()
+        # A signal before serving.set() only set the flag. shutdown() is safe
+        # before serve_forever starts: the loop then exits at once.
+        if stopping.is_set():
+            request_shutdown()
         server.serve_forever(poll_interval=0.1)
     finally:
         try:
