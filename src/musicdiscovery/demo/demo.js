@@ -51,6 +51,24 @@ function entries(count) {
   return `${count.toLocaleString("en")} entr${count === 1 ? "y" : "ies"}`;
 }
 
+/** Code-unit order, as `Array.sort` without a comparator: no two different qualities tie. */
+function byCodeUnit(a, b) {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/**
+ * What makes two shown lists the same list for ratings. Qualities are sorted, because
+ * toggling a chip off and on moves it to the end. feedback.py sorts its list key the same way.
+ */
+function ratingContext(ranker, preference) {
+  return JSON.stringify([ranker, {
+    ...preference,
+    likes: [...preference.likes].sort(byCodeUnit),
+    dislikes: [...preference.dislikes].sort(byCodeUnit),
+  }]);
+}
+
 class Demo {
   constructor(root, data) {
     this.root = root;
@@ -294,7 +312,7 @@ class Demo {
     preference.excludeSeedArtist = this.excludeSeedArtist.checked;
     this.writeLink(preference);
     const picks = this.rankers.rank(this.ranker, preference, 10);
-    const context = JSON.stringify([this.ranker, preference]);
+    const context = ratingContext(this.ranker, preference);
     this.status.textContent = picks.length
       ? `${picks.length} recommendations from the ${RANKER_LABELS[this.ranker].toLowerCase()} ranker for ${this.seed.labels[this.seed.row]}.`
       : "No recommendations available with these preferences. Try unchecking Exclude the seed artist or picking another seed track.";

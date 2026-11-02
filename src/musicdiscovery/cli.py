@@ -194,7 +194,13 @@ def _run_export_demo(args: argparse.Namespace) -> int:
     try:
         catalog = Catalog.load(args.data_dir / "catalog" / CATALOG_NAME)
         size = export_demo(catalog, args.out_dir, release=args.release)
-    except (CatalogError, DemoError, EvaluationError, OSError) as error:
+    except (
+        CatalogError,
+        DemoError,
+        EvaluationError,
+        OSError,
+        PreferenceError,
+    ) as error:
         print(f"export-demo: {error}", file=sys.stderr)
         return 1
     for name, (raw, packed) in size.files.items():
