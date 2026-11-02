@@ -329,3 +329,30 @@ test("a failing clear still empties the page's copy", () => {
   assert.equal(log.size, 0);
   assert.equal(log.persistent, false);
 });
+
+test("clearing removes stored entries left behind after both quota-limited writes failed (#229)", () => {
+  const storage = memoryStorage();
+  const log = new FeedbackLog(storage);
+  log.append(sample(1));
+  log.append(sample(2));
+  storage.setItem = () => {
+    throw new Error("QuotaExceededError");
+  };
+  assert.equal(log.append(sample(3)), false);
+  assert.equal(log.persistent, false);
+  assert.deepEqual(stored(storage), [sample(1), sample(2)]);
+  const cleared = log.clear();
+  // After a reload nothing comes back.
+  assert.equal(storage.items.has(LOG_KEY), false);
+  assert.equal(new FeedbackLog(storage).size, 0);
+  assert.equal(cleared, true);
+});
+
+test("a clear whose removal throws reports failure and still empties the page's copy (#229)", () => {
+  const storage = memoryStorage(["removeItem"]);
+  const log = new FeedbackLog(storage);
+  log.append(sample(1));
+  const cleared = log.clear();
+  assert.equal(log.size, 0);
+  assert.equal(cleared, false);
+});
