@@ -248,6 +248,20 @@ def test_cli_reports_a_missing_catalog(tmp_path, capsys):
     assert "export-demo:" in capsys.readouterr().err
 
 
+def test_cli_reports_a_tag_the_query_parser_cannot_read_back(
+    tmp_path, capsys, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data" / "catalog"
+    data.mkdir(parents=True)
+    frame = make_frame(per_genre=60)
+    frame["tags"] = [[" spaced "] for _ in range(len(frame))]
+    frame.to_parquet(data / "catalog.parquet", index=False)
+    argv = ["export-demo", str(tmp_path / "o"), "--data-dir", str(tmp_path / "data")]
+    assert main(argv) == 1
+    assert "export-demo: unknown tag 'spaced'" in capsys.readouterr().err
+
+
 def test_cli_fails_when_over_the_size_target(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
     data = tmp_path / "data" / "catalog"

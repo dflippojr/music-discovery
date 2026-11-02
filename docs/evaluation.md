@@ -280,8 +280,8 @@ not at its rank in the shown list is reported on stderr with its line number and
 skipped. The command fails only when the file cannot be read or no line is valid.
 A UTF-8 byte-order mark, which Windows PowerShell 5.1 writes when it saves a
 merged log with `-Encoding utf8`, is accepted and ignored.
-Within one shown list (same ranker, seeds, qualities, exclusion and track order)
-the action with the latest `time` on a track counts, whatever the order of the
+Within one shown list (same ranker, seeds, qualities in any order, exclusion and
+track order) the action with the latest `time` on a track counts, whatever the order of the
 lines in the file, so logs merged newest file first give the same report. When
 two actions on a track have the same `time` (it has a resolution of one second),
 the later line wins. A `rating` of 0 means that rating was taken back, but only

@@ -104,11 +104,13 @@ def read_log(path: Path) -> LogRead:
 
 
 def _list_key(event: dict) -> tuple:
+    # Qualities are sorted: toggling a chip off and on moves it to the end, and
+    # that is still the same list. demo.js sorts its rating key the same way.
     return (
         event["ranker"],
         tuple(event["seed_track_ids"]),
-        tuple(event["likes"]),
-        tuple(event["dislikes"]),
+        tuple(sorted(event["likes"])),
+        tuple(sorted(event["dislikes"])),
         event["exclude_seed_artist"],
         tuple(item["track_id"] for item in event["shown"]),
     )

@@ -389,6 +389,36 @@ describe("demo page", () => {
     await close(page, context);
   });
 
+  for (const [state, clicks, param] of [["liked", 1, "like"], ["disliked", 2, "dislike"]]) {
+    test(`the same list with its ${state} qualities in another order keeps its rating (#217)`, async () => {
+      const { context, page, problems } = await open();
+      await pickSeed(page);
+      const calmer = page.getByRole("button", { name: /^Calmer/ });
+      const folk = folkChip(page);
+      const press = async (chip, times) => { for (let i = 0; i < times; i += 1) await chip.click(); };
+      await press(calmer, clicks);
+      await press(folk, clicks);
+      const shown = await titles(page);
+      const item = page.locator(".md-result").first();
+      const up = item.getByRole("button", { name: /Thumbs up/ });
+      await up.click();
+      assert.equal(await up.getAttribute("aria-pressed"), "true");
+      const before = (await linkParams(page)).getAll(param);
+
+      await press(calmer, 3); // Round the cycle: off, then back on at the end of the order.
+
+      const after = (await linkParams(page)).getAll(param);
+      assert.deepEqual(after, [...before].reverse(), "the chip should have moved in the order");
+      assert.deepEqual(await titles(page), shown);
+      assert.equal(await up.getAttribute("aria-pressed"), "true");
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export my ratings" }).click()]);
+      const body = JSON.parse(readFileSync(await download.path(), "utf8"));
+      assert.equal(body.ratings.length, 1);
+      assert.deepEqual(problems, []);
+      await close(page, context);
+    });
+  }
+
   test("each result can expand, from the keyboard, to show every score term with its signed contribution", async () => {
     const { context, page, problems } = await open();
     await pickSeed(page);
