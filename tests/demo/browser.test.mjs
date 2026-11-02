@@ -1477,6 +1477,64 @@ describe("deferred source recovery", () => {
       assert.deepEqual(errors, []);
       await close(page, context);
     });
+
+    // The deadline tests fake fetch and the tests above answer with an HTTP status. Here the
+    // browser's own fetch sees the first download stall mid-body or lose its connection.
+    for (const failure of ["stalled body", "dropped connection"]) {
+      test(`${path || "demo"}: a ${failure} recovers on retry with ratings intact`, async () => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        const errors = [];
+        page.on("pageerror", (error) => errors.push(String(error)));
+        await page.coverage.startJSCoverage();
+        await deadlineProbe(page);
+        await page.route(base + path, (route) => {
+          const html = readFileSync(join(bundle, path || "index.html"), "utf8");
+          const marker = isStudy ? "data-music-discovery-study" : "data-music-discovery";
+          return route.fulfill({ contentType: "text/html", headers: { "content-security-policy": CSP },
+            body: html.replace(marker, `${marker} data-sources="flaky-sources.json"`) });
+        });
+        let requests = 0;
+        await page.route("**/flaky-sources.json", (route) => {
+          requests += 1;
+          if (requests > 1) return route.fulfill({ path: join(bundle, "sources.json") });
+          if (failure === "stalled body") return route.continue({ url: base + "stalled-body.json" });
+          return route.abort("connectionreset");
+        });
+        const headers = failure === "stalled body" ? page.waitForResponse((r) => r.url() === base + "stalled-body.json") : null;
+        await setup(page);
+        const up = page.getByRole("button", { name: /Thumbs up/ }).first();
+        await up.click();
+        const retry = page.getByRole("button", { name: "Retry source links" });
+        if (headers) {
+          assert.equal((await headers).status(), 200); // Only the body is missing.
+          assert.match(await page.locator(".md-source-status").textContent(), /Loading/);
+          assert.equal(await retry.isVisible(), false);
+          await page.evaluate(() => deadlineProbe.expire());
+        }
+        await retry.waitFor();
+        assert.match(await page.locator(".md-source-status").textContent(), /unavailable/);
+        assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), 0);
+        assert.equal(requests, 1); // No automatic retry.
+        const state = () => page.evaluate((root) => {
+          const app = document.querySelector(root)[root.includes("study") ? "study" : "demo"];
+          return { session: app.session ?? null, task: app.current?.task ?? null, ratings: app.ratings ? [...app.ratings] : null,
+            titles: [...document.querySelectorAll(".md-result .md-title")].map((el) => el.textContent) };
+        }, root);
+        const rated = await state();
+        assert.ok(isStudy ? rated.task.lists.some((list) => list.results.some((r) => r.rating === 1))
+          : rated.ratings.some(([, r]) => r.rating === 1));
+        await retry.click();
+        await page.waitForFunction(() => document.querySelector(".md-source-status").textContent === "Source links recovered.");
+        assert.equal(requests, 2);
+        assert.equal(await retry.isVisible(), false);
+        assert.equal(await up.getAttribute("aria-pressed"), "true");
+        assert.deepEqual(await state(), rated);
+        assert.equal(await page.getByRole("link", { name: /Source page/ }).count(), rated.titles.length);
+        assert.deepEqual(errors, []);
+        await close(page, context);
+      });
+    }
   }
 });
 

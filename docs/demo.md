@@ -99,7 +99,7 @@ That is a sample, not a proof, for the reason given above:
 ```sh
 python scripts/build_demo_fixture.py .demo-fixture   # synthetic catalog, no dataset
 npm ci && npx playwright install chromium
-npm run test:parity    # Node: JavaScript vs Python top 10
+npm run test:parity    # Node: JavaScript vs Python top 10, and the rankers' edge cases on hand-built catalogs
 npm run test:study     # Node: study list order, session id, export shape and the feedback log
 npm run test:browser   # Chromium: CSP, console errors, toggle, axe-core, 320 px, ratings, score detail, log
 ```
