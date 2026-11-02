@@ -218,8 +218,12 @@ in a selected field to copy by hand.
 - **Same catalog only.** Ranking is deterministic, so a link reproduces a list
   exactly only while the catalog it was made with is published. A rebuilt or
   different `catalog.json` can give a different list, or drop the seed track.
-- **Read once.** The fragment is read when the catalog loads. Editing it by hand
-  afterwards (`hashchange`) is ignored; reload the page to apply it.
+- **Followed in an open tab.** The fragment is read when the catalog loads and again
+  on every `hashchange`, so following a link, editing the address or pressing Back
+  to another link in an open tab shows what a fresh load of that address would:
+  settings it omits go back to their defaults and invalid ones are handled as above.
+  An empty fragment clears the page. An in-page anchor only scrolls, so the results
+  stay. In-page ratings and the feedback log are kept.
 - **Not the study.** `study.html` never reads or writes the fragment, so a link
   cannot unblind it. Ratings, the feedback log and its schema do not record links.
 
