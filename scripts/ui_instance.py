@@ -158,18 +158,44 @@ def require_exited(identity):
     raise ValueError("Recorded process is still live; preserve handle and bundle")
 
 
+def read_proc_stat(pid):
+    return Path(f"/proc/{pid}/stat").read_bytes()
+
+
+def has_finished_exiting(process):
+    """Whether a scanned process is a zombie with no thread left that could write.
+
+    Linux also reports a process as a zombie when only its main thread has exited,
+    and a worker can start threads or execve() between separate reads. So the state
+    and thread count come from one read of the stat file, which psutil doesn't offer.
+    Without that file (not Linux, or the process has gone) the process is not excused.
+    """
+    if process.info.get("status") != psutil.STATUS_ZOMBIE:
+        return False
+    try:
+        raw = read_proc_stat(process.pid)
+    except OSError:
+        return False
+    # The command name can hold anything, so fields count from its last ")".
+    fields = raw.rpartition(b")")[2].split()
+    return fields[0] == b"Z" and fields[17] == b"1"
+
+
 def require_no_bundle_writer(bundle):
     """Refuse while any process has the bundle path in its command line.
 
     A launcher killed in phase "starting" never recorded its fixture child, so
     only the child's argv (which holds the bundle path) can show it is gone.
-    The scan is read-only; a process that cannot be inspected also refuses.
+    The scan is read-only; a process that cannot be inspected also refuses. A
+    zombie is skipped: psutil gives it no command line, and it holds no bundle.
     """
     needle = str(bundle)
     try:
-        for process in psutil.process_iter(["cmdline"]):
+        for process in psutil.process_iter(["cmdline", "status"]):
             cmdline = process.info.get("cmdline")
             if cmdline is None:
+                if has_finished_exiting(process):
+                    continue
                 raise ValueError(
                     f"Cannot read the command line of PID {process.pid}; "
                     "preserve handle for investigation"
