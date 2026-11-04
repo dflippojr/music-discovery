@@ -72,9 +72,12 @@ workflows use Dependabot secrets, rather than Actions secrets, through the same
 When the token is absent, the job emits a notice and summary and skips analysis;
 a green job in this state is not evidence of analysis or a passing quality gate.
 
-After configuring the secrets and landing the workflow, verify a `main` push,
-an ordinary same-repository PR, and a real Dependabot PR. Attach workflow-run and
-SonarCloud PR/head-commit result links to [#31](https://github.com/dflippojr/music-discovery/issues/31).
+Both secrets were configured and the workflow was verified on a `main` push, an
+ordinary same-repository PR and a real Dependabot PR
+([#31](https://github.com/dflippojr/music-discovery/issues/31)). The Dependabot
+case is [#162](https://github.com/dflippojr/music-discovery/pull/162), whose
+[`sonar` run](https://github.com/dflippojr/music-discovery/actions/runs/40154235258)
+passed the quality gate.
 
 The ruleset for `main` requires two status checks, both from GitHub Actions:
 `gate` from `ci.yml`, and `gate-guard`, the check run that
