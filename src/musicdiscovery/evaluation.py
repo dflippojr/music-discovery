@@ -916,7 +916,11 @@ def _sha256(path: Path) -> str:
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(Path.cwd().resolve()).as_posix()
+    """The path as report text. At an ASCII locale with UTF-8 mode off, Python
+    decodes a non-ASCII argument to lone surrogates that no codec can write, so
+    recover its bytes and read them as UTF-8 (#208)."""
+    text = path.relative_to(Path.cwd().resolve()).as_posix()
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
 def run(
