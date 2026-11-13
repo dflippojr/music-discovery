@@ -22,6 +22,7 @@ from musicdiscovery.evaluation import (
     Query,
     RandomRanker,
     _bare,
+    _relative,
     catalog_version,
     evaluate,
     evaluate_profiles,
@@ -548,6 +549,15 @@ def test_a_utf8_file_for_another_catalog_is_not_replaced(
     with pytest.raises(EvaluationError, match="remove it"):
         write_queries(path, queries, catalog)
     assert json.loads(path.read_bytes())["catalog_tracks"] == 99_999
+
+
+@pytest.mark.parametrize("name", ["クエリ", "électro", "plain"])
+def test_report_paths_are_text_even_when_argv_was_not_decodable(name):
+    # At an ASCII locale with UTF-8 mode off, Python decodes the bytes of a
+    # non-ASCII argument to lone surrogates, which no codec can write.
+    escaped = name.encode("utf-8").decode("ascii", "surrogateescape")
+    assert _relative(Path.cwd() / escaped / "q.json") == f"{name}/q.json"
+    assert _relative(Path.cwd() / name / "q.json") == f"{name}/q.json"
 
 
 # --- held-out tags -----------------------------------------------------------
