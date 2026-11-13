@@ -1,5 +1,6 @@
 """Offline evaluation on a synthetic catalog with planted structure."""
 
+import io
 import json
 from datetime import date
 from pathlib import Path
@@ -21,6 +22,7 @@ from musicdiscovery.evaluation import (
     Query,
     RandomRanker,
     _bare,
+    _relative,
     catalog_version,
     evaluate,
     evaluate_profiles,
@@ -489,6 +491,73 @@ def test_paths_outside_working_directory_are_refused(
         write_queries(outside, queries, catalog)
     with pytest.raises(EvaluationError, match="outside the working directory"):
         load_queries(Path("..") / "q.json", catalog)
+
+
+# --- file encoding (#208) ----------------------------------------------------
+
+
+@pytest.fixture
+def cp1252_locale(monkeypatch):
+    """Make text files opened without an encoding use cp1252, as a Windows
+    console does, so these tests fail on every CI leg when one is missed."""
+    real = io.text_encoding
+
+    def text_encoding(encoding, stacklevel=2):
+        return "cp1252" if encoding is None else real(encoding, stacklevel)
+
+    monkeypatch.setattr(io, "text_encoding", text_encoding)
+
+
+def test_report_names_a_path_the_locale_cannot_encode(data_dir, capsys, cp1252_locale):
+    Path("クエリ").mkdir()
+    base = ["evaluate", "--data-dir", str(data_dir), "--queries", "クエリ/q.json"]
+    assert main([*base, "--generate-queries"]) == 0
+    argv = [*base, "--out-dir", "rloc", "--ranker", "random", "--date", "2026-01-01"]
+    assert main(argv) == 0, capsys.readouterr().err
+    text = Path("rloc/offline-2026-01-01.md").read_bytes().decode("utf-8")
+    assert "`クエリ/q.json`" in text
+    numbers = json.loads(Path("rloc/offline-2026-01-01.json").read_bytes())
+    assert set(numbers["rankers"]) == {"random"}
+
+
+def test_hand_edited_utf8_files_are_read_as_utf8(
+    tmp_path, catalog, queries, profiles, cp1252_locale
+):
+    path = tmp_path / "q.json"
+    write_queries(path, queries, catalog)
+    payload = json.loads(path.read_bytes())
+    payload["queries"][0]["likes"] = ["tag:électro"]
+    path.write_bytes(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    assert load_queries(path, catalog)[0].likes == ("tag:électro",)
+
+    path = tmp_path / "p.json"
+    write_profiles(path, profiles, catalog)
+    payload = json.loads(path.read_bytes())
+    payload["profiles"][0]["taste"]["tags"] = ["électro"]
+    path.write_bytes(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    assert load_profiles(path, catalog)[0].tags == ("électro",)
+
+
+def test_a_utf8_file_for_another_catalog_is_not_replaced(
+    tmp_path, catalog, queries, cp1252_locale
+):
+    # The UTF-8 bytes of "Ý" (C3 9D) do not decode at cp1252, so reading the
+    # file at the locale encoding would lose its size and replace it.
+    path = tmp_path / "q.json"
+    body = {"catalog_tracks": 99_999, "queries": [], "note": "Ý"}
+    path.write_bytes(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+    with pytest.raises(EvaluationError, match="remove it"):
+        write_queries(path, queries, catalog)
+    assert json.loads(path.read_bytes())["catalog_tracks"] == 99_999
+
+
+@pytest.mark.parametrize("name", ["クエリ", "électro", "plain"])
+def test_report_paths_are_text_even_when_argv_was_not_decodable(name):
+    # At an ASCII locale with UTF-8 mode off, Python decodes the bytes of a
+    # non-ASCII argument to lone surrogates, which no codec can write.
+    escaped = name.encode("utf-8").decode("ascii", "surrogateescape")
+    assert _relative(Path.cwd() / escaped / "q.json") == f"{name}/q.json"
+    assert _relative(Path.cwd() / name / "q.json") == f"{name}/q.json"
 
 
 # --- held-out tags -----------------------------------------------------------

@@ -176,7 +176,7 @@ def generate_queries(
 
 def _recorded_size(path: Path) -> int | None:
     try:
-        return json.loads(path.read_text()).get("catalog_tracks")
+        return json.loads(path.read_text(encoding="utf-8")).get("catalog_tracks")
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -202,7 +202,7 @@ def write_queries(path: Path, queries: Sequence[Query], catalog: Catalog) -> Non
         "queries": [asdict(q) for q in queries],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=1) + "\n")
+    path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
 
 
 def _likes(query: dict, path: Path) -> tuple[str, ...]:
@@ -223,7 +223,7 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
             "--generate-queries`"
         )
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding="utf-8"))
         queries = [
             Query(int(q["id"]), str(q["split"]), int(q["seed"]), _likes(q, path))
             for q in payload["queries"]
@@ -267,7 +267,7 @@ def write_profiles(path: Path, profiles: Sequence[Profile], catalog: Catalog) ->
         ],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=1) + "\n")
+    path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
 
 
 def _profile(record: dict) -> Profile:
@@ -292,7 +292,7 @@ def load_profiles(path: Path, catalog: Catalog) -> list[Profile]:
             "--generate-profiles`"
         )
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding="utf-8"))
         profiles = [_profile(record) for record in payload["profiles"]]
         expected = payload["catalog_tracks"]
     except (ValueError, KeyError, TypeError, OverflowError) as error:
@@ -916,7 +916,11 @@ def _sha256(path: Path) -> str:
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(Path.cwd().resolve()).as_posix()
+    """The path as report text. At an ASCII locale with UTF-8 mode off, Python
+    decodes a non-ASCII argument to lone surrogates that no codec can write, so
+    recover its bytes and read them as UTF-8 (#208)."""
+    text = path.relative_to(Path.cwd().resolve()).as_posix()
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
 def run(
@@ -965,6 +969,8 @@ def run(
     stem = f"offline-{report_date.isoformat()}"
     json_path = out_dir / f"{stem}.json"
     md_path = out_dir / f"{stem}.md"
-    json_path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
-    md_path.write_text(text)
+    json_path.write_text(
+        json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    md_path.write_text(text, encoding="utf-8")
     return md_path, json_path
