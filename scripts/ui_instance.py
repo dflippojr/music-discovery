@@ -281,8 +281,12 @@ def build_bundle(bundle):
     builder.build_fixture(bundle, shape=False, synthetic_source=True)
 
 
+class StartupCancelled(Exception):
+    """A stop signal arrived before the launcher was ready; main() exits 1."""
+
+
 def build_until_stopped(bundle, stopping):
-    """Build the bundle on a worker thread; False when a stop signal came first.
+    """Build the bundle on a worker thread; raise StartupCancelled on a stop signal.
 
     Signal handlers run on the main thread, so it waits here, watching the stop
     flag and the deadline. On a stop or a timeout it still waits for the build to
@@ -313,12 +317,11 @@ def build_until_stopped(bundle, stopping):
             worker.join(timeout=min(POLL_INTERVAL, remaining))
         if stopping.is_set():
             print("UI startup cancelled during fixture generation", file=sys.stderr)
-            return False
+            raise StartupCancelled
     finally:
         worker.join()
     if failure:
         raise RuntimeError(f"Fixture generation failed: {failure[0]}") from failure[0]
-    return True
 
 
 def start(port):
@@ -358,8 +361,7 @@ def start(port):
         # identity: once this launcher has exited, recover may remove the bundle.
         with HANDLE.open("x", encoding="utf-8") as handle:
             json.dump(metadata, handle)
-        if not build_until_stopped(bundle, stopping):
-            return
+        build_until_stopped(bundle, stopping)
         catalog_path = bundle / "catalog.json"
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         catalog["licenses"] = ["/synthetic/license"] * len(catalog["licenses"])
@@ -370,7 +372,7 @@ def start(port):
         source_path.write_text(json.dumps(sources), encoding="utf-8")
         if stopping.is_set():
             print("UI startup cancelled", file=sys.stderr)
-            return
+            raise StartupCancelled
         # The socket is bound and every file exists before announcing readiness.
         print(f"UI_URL=http://127.0.0.1:{server.server_port}/", flush=True)
         print(
@@ -440,6 +442,8 @@ def main():
     ) as error:
         print(f"UI instance failed: {error}", file=sys.stderr)
         return 1
+    except StartupCancelled:
+        return 1  # the diagnostic is already printed; cleanup has run
     return 0
 
 
