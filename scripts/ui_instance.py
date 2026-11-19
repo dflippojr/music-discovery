@@ -282,7 +282,7 @@ def build_bundle(bundle):
 
 
 class StartupCancelled(Exception):
-    """A stop signal arrived before the launcher was ready; main() exits 1."""
+    """A stop signal came before the readiness commit in start(); main() exits 1."""
 
 
 def build_until_stopped(bundle, stopping):
@@ -370,7 +370,12 @@ def start(port):
         sources = json.loads(source_path.read_text(encoding="utf-8"))
         sources["sources"] = [f"/synthetic/track/{track}" for track in catalog["ids"]]
         source_path.write_text(json.dumps(sources), encoding="utf-8")
-        if stopping.is_set():
+        # The readiness commit (#254): a stop seen here or earlier cancels startup
+        # with exit 1. After this check the launcher is committed to being ready:
+        # a later signal still lets it print both ready lines, then stops it as
+        # when serving, with exit 0. No check placement could close that window,
+        # since a signal can land between any check and any print.
+        if stopping.is_set():  # readiness commit
             print("UI startup cancelled", file=sys.stderr)
             raise StartupCancelled
         # The socket is bound and every file exists before announcing readiness.
