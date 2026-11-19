@@ -232,6 +232,28 @@ def test_partial_seed_failure_closes_port_and_removes_owned_files(launcher, buil
     assert list(launcher.DATA.iterdir()) == [launcher.DATA / "run-unrelated"]
 
 
+def test_the_real_build_starts_no_process(launcher, monkeypatch, tmp_path):
+    """The build waits on nothing outside the launcher, so a stop stays bounded.
+
+    The export once stamped the bundle with git; a slow or stuck git (or a hook
+    it starts that holds the pipe) kept the launcher past its stop window (#254).
+    """
+    spawned = []
+
+    def refuse(*args, **kwargs):
+        spawned.append(args[:1])
+        raise AssertionError(f"the build started a process: {args[:1]}")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    monkeypatch.setattr(os, "system", refuse)
+    bundle = tmp_path / "bundle"
+    launcher.build_bundle(bundle)
+    assert spawned == []
+    source = json.loads((bundle / "SOURCE.json").read_text(encoding="utf-8"))
+    assert source["sha"] == "synthetic"
+    assert json.loads((bundle / "catalog.json").read_text())["count"] == 450
+
+
 def test_seed_timeout_waits_for_the_build_is_nonzero_and_allows_restart(
     launcher, monkeypatch, building, capsys
 ):
