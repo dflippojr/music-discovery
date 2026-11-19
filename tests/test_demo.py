@@ -2,9 +2,11 @@
 
 import base64
 import json
+import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -78,6 +80,40 @@ def test_stamp_needs_a_git_checkout(monkeypatch):
     monkeypatch.setattr(demo.subprocess, "run", no_git)
     with pytest.raises(demo.DemoError, match="git checkout"):
         demo.build_source()
+
+
+def test_every_git_call_is_bounded(monkeypatch):
+    # The UI launcher builds the bundle in its own process and waits for the build
+    # before it cleans up, so a stalled git must not stall it forever (#254).
+    calls = []
+
+    def stalled(*args, **kwargs):
+        calls.append(kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+
+    monkeypatch.setattr(demo.subprocess, "run", stalled)
+    with pytest.raises(demo.DemoError, match="timed out"):
+        demo.build_source()
+    assert calls == [demo.GIT_TIMEOUT]
+    assert 0 < demo.GIT_TIMEOUT <= 5  # leaves room in a 10 s shutdown window
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in git is a POSIX script")
+def test_a_hung_git_is_killed_and_reported(tmp_path, monkeypatch):
+    marker = tmp_path / "git.pid"
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/sh\necho $$ > "{marker}"\nexec sleep 60\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(demo, "GIT_TIMEOUT", 0.5)
+    started = time.monotonic()
+    with pytest.raises(demo.DemoError, match="timed out after 0.5 seconds"):
+        demo.build_source()
+    assert time.monotonic() - started < 10
+    pid = int(marker.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # killed and reaped, not left running
 
 
 def git(repo: Path, *args: str) -> str:

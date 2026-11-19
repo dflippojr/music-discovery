@@ -285,8 +285,9 @@ def build_until_stopped(bundle, stopping):
 
     Signal handlers run on the main thread, so it waits here, watching the stop
     flag and the deadline. On a stop or a timeout it still waits for the build to
-    return before the caller removes any file. The build is CPU-bound with no
-    network or other blocking wait, so it returns.
+    return before the caller removes any file. The build makes no network request,
+    and its only waits are git commands that musicdiscovery.demo bounds with
+    GIT_TIMEOUT, so it returns.
     """
     failure = []
 

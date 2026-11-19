@@ -68,7 +68,7 @@ def test_flat_fixture_builds_without_shape_helpers(tmp_path):
 class Launcher:
     """One `ui_instance.py start` process and the lines it prints."""
 
-    def __init__(self, tree, port, script="scripts/ui_instance.py"):
+    def __init__(self, tree, port, script="scripts/ui_instance.py", env=None):
         self.tree = tree
         self.handle = tree / "data" / "ui-testing" / "instance.json"
         self.errors = tree / "launcher.err"
@@ -82,7 +82,7 @@ class Launcher:
                     str(port),
                 ],
                 cwd=tree,
-                env=clean_environment(),
+                env=env or clean_environment(),
                 stdout=subprocess.PIPE,
                 stderr=errors,
                 text=True,
@@ -246,6 +246,60 @@ def test_sigkill_during_the_build_leaves_a_handle_that_recover_clears(launchers)
     assert f"Recovered {handle['instance']}" in recovered.stdout
     assert not launcher.handle.exists()
     assert not bundle.exists()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", port))
+
+
+# Runs the real launcher with a one-second bound on each git call the export makes.
+SHORT_GIT_TIMEOUT = """\
+import importlib.util, sys
+from musicdiscovery import demo
+demo.GIT_TIMEOUT = 1
+spec = importlib.util.spec_from_file_location("ui_instance", "scripts/ui_instance.py")
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+sys.exit(launcher.main())
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in git is a POSIX script")
+def test_sigterm_while_git_hangs_in_the_build_exits_and_cleans_up(launchers, tmp_path):
+    """The build runs in the launcher, which waits for it: a hung git must not hang.
+
+    The export stamps the bundle with git. A stalled git (a lock or a hook) once
+    could keep the launcher, its socket and its handle alive after a stop (#254).
+    """
+    port = free_port()
+    marker = tmp_path / "git.pid"
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/sh\necho $$ > "{marker}"\nexec sleep 60\n')
+    fake.chmod(0o755)
+    env = clean_environment()
+    env["PATH"] = f"{fake.parent}{os.pathsep}{env['PATH']}"
+
+    def prepare(tree):
+        (tree / "short_git_timeout.py").write_text(SHORT_GIT_TIMEOUT, encoding="utf-8")
+
+    launcher = launchers(
+        "hung-git", port, prepare=prepare, script="short_git_timeout.py", env=env
+    )
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    while not marker.exists():
+        assert launcher.process.poll() is None, launcher.stderr()
+        assert time.monotonic() < deadline, "the build never ran git"
+        time.sleep(0.05)
+    assert launcher.handle.exists()
+
+    started = time.monotonic()
+    launcher.process.terminate()  # SIGTERM while git hangs
+    assert launcher.process.wait(timeout=EXIT_TIMEOUT) == 0, launcher.stderr()
+    assert time.monotonic() - started < EXIT_TIMEOUT
+    assert "UI startup cancelled during fixture generation" in launcher.stderr()
+    assert not launcher.handle.exists()
+    assert not list((launcher.tree / "data" / "ui-testing").glob("run-*"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)  # the hung git was killed and reaped
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", port))
 

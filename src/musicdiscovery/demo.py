@@ -36,6 +36,9 @@ PACKAGE_PATH = "src/musicdiscovery"  # where a checkout tracks the package
 # Repository paths the bundle is built from; a site compares these with main.
 SOURCE_PATHS = (PACKAGE_PATH, "scripts/vendor-into-site")
 DIRTY_SUFFIX = "-dirty"
+# Seconds each git call may take. The UI launcher waits for the export before it
+# cleans up, so a stalled git (a lock, a hook) must fail the export, not hang it.
+GIT_TIMEOUT = 5
 DEFERRED_FILES = (SOURCES_FILE,)
 STATIC_FILES = (
     "index.html",
@@ -252,7 +255,13 @@ def _git(*args: str, cwd: Path | None = None) -> str:
             capture_output=True,
             text=True,
             check=True,
+            timeout=GIT_TIMEOUT,  # run() kills and reaps git when it expires
         )
+    except subprocess.TimeoutExpired as error:
+        raise DemoError(
+            f"cannot read the source commit: git {args[0]} timed out after "
+            f"{GIT_TIMEOUT} seconds"
+        ) from error
     except (OSError, subprocess.CalledProcessError) as error:
         raise DemoError(
             "cannot read the source commit; export from a git checkout of "
