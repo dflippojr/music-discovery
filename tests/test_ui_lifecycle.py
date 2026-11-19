@@ -311,7 +311,7 @@ def test_sigterm_during_the_build_never_waits_on_git(launchers, tmp_path):
         assert time.monotonic() < deadline, launcher.stderr()
         time.sleep(0.05)
     (launcher.tree / "go.txt").write_text("", encoding="utf-8")  # the real build
-    assert launcher.process.wait(timeout=EXIT_TIMEOUT) == 0, launcher.stderr()
+    assert launcher.process.wait(timeout=EXIT_TIMEOUT) == 1, launcher.stderr()
     assert time.monotonic() - started < EXIT_TIMEOUT
     assert not marker.exists(), "the build started git"
     assert not launcher.handle.exists()

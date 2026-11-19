@@ -246,6 +246,7 @@ def test_the_real_build_starts_no_process(launcher, monkeypatch, tmp_path):
 
     monkeypatch.setattr(subprocess, "Popen", refuse)
     monkeypatch.setattr(os, "system", refuse)
+    monkeypatch.chdir(tmp_path)  # the export writes only inside the working directory
     bundle = tmp_path / "bundle"
     launcher.build_bundle(bundle)
     assert spawned == []
@@ -273,7 +274,7 @@ def test_seed_timeout_waits_for_the_build_is_nonzero_and_allows_restart(
 
 
 @pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
-def test_signal_during_the_build_cancels_and_allows_restart(
+def test_signal_during_the_build_cancels_is_nonzero_and_allows_restart(
     launcher, monkeypatch, building, capsys, cancel
 ):
     seed, bundles, ports = building
@@ -290,8 +291,10 @@ def test_signal_during_the_build_cancels_and_allows_restart(
 
     monkeypatch.setattr(launcher, "print", recording_print, raising=False)
     seed(hold=0.5, cancel=cancel)
+    port = str(free_port())
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", port])
     started = time.monotonic()
-    launcher.start(0)
+    assert launcher.main() == 1  # #254: a stop or a timeout exits non-zero
     assert time.monotonic() - started < 5
     assert signal.getsignal(cancel) == previous_handler
     assert "UI startup cancelled during fixture generation" in capsys.readouterr().err
@@ -373,7 +376,8 @@ def test_signal_after_the_fixture_cancels_before_ready(
 
     monkeypatch.setattr(launcher, "build_until_stopped", finished_then_signalled)
     monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", served)
-    launcher.start(0)
+    with pytest.raises(launcher.StartupCancelled):
+        launcher.start(0)
     captured = capsys.readouterr()
     assert "UI startup cancelled\n" in captured.err
     assert "UI_URL=" not in captured.out
@@ -395,6 +399,8 @@ def start_tracing_lines(launcher, on_line):
     sys.settrace(enter)
     try:
         launcher.start(0)
+    except launcher.StartupCancelled:
+        pass  # a signal before the ready lines cancels startup (exit 1 from main)
     finally:
         sys.settrace(previous)
 
@@ -475,7 +481,7 @@ def cancel_after_changing_handle(launcher, monkeypatch, change):
     def cancelled(bundle, stopping):
         original_build(bundle, stopping)
         change()
-        return False
+        raise launcher.StartupCancelled
 
     monkeypatch.setattr(launcher, "build_until_stopped", cancelled)
 
@@ -496,7 +502,8 @@ def test_start_leaves_another_instances_handle(launcher, monkeypatch, building):
     cancel_after_changing_handle(
         launcher, monkeypatch, lambda: launcher.HANDLE.write_bytes(foreign)
     )
-    launcher.start(0)
+    with pytest.raises(launcher.StartupCancelled):
+        launcher.start(0)
     assert launcher.HANDLE.read_bytes() == foreign
     launcher.HANDLE.unlink()  # assert_cleaned checks everything else start() owns
     assert_cleaned(launcher, bundles, ports)
@@ -506,7 +513,8 @@ def test_start_exits_cleanly_when_its_handle_is_gone(launcher, monkeypatch, buil
     seed, bundles, ports = building
     seed()
     cancel_after_changing_handle(launcher, monkeypatch, launcher.HANDLE.unlink)
-    launcher.start(0)
+    with pytest.raises(launcher.StartupCancelled):
+        launcher.start(0)
     assert_cleaned(launcher, bundles, ports)
 
 
