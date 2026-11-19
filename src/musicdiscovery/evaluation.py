@@ -1,4 +1,9 @@
-"""Offline evaluation: reference rankers, stored queries, metrics and the report."""
+"""Offline evaluation: stored queries, metrics and the report.
+
+The rankers it scores, the reference rankers included, are in
+`musicdiscovery.rankers`; `RANKERS`, `make_ranker` and `EvaluationError` are
+re-exported here so older imports keep working.
+"""
 
 import hashlib
 import json
@@ -11,11 +16,8 @@ import numpy as np
 import pandas as pd
 
 from musicdiscovery import paths
-from musicdiscovery.audio_embedding import AudioEmbeddingRanker
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, Quality
-from musicdiscovery.profile_ranker import ProfileDiverseRanker, ProfileRanker
 from musicdiscovery.profiles import (
     PROFILE_SEED,
     SPLITS,
@@ -26,13 +28,12 @@ from musicdiscovery.profiles import (
     ndcg,
     reciprocal_rank,
 )
-from musicdiscovery.ranking import (
-    BaselineRanker,
-    Ranker,
-    Recommendation,
-    allowed_rows,
-    display_title,
-)
+from musicdiscovery.rankers import RANKERS as RANKERS
+from musicdiscovery.rankers import EvaluationError as EvaluationError
+from musicdiscovery.rankers import PopularRanker as PopularRanker
+from musicdiscovery.rankers import RandomRanker as RandomRanker
+from musicdiscovery.rankers import make_ranker as make_ranker
+from musicdiscovery.ranking import Recommendation
 
 K = 10
 QUERY_SEED = 20261005
@@ -46,74 +47,6 @@ DEFAULT_QUERIES = Path("eval") / "queries.json"
 DEFAULT_PROFILES = Path("eval") / "profiles.json"
 BENCHMARKS = ("queries", "profiles", "all")
 DEFAULT_REPORT_DIR = Path("reports")
-
-
-class EvaluationError(Exception):
-    """Raised when queries or rankers cannot be used."""
-
-
-# --- reference rankers -------------------------------------------------------
-
-
-def _bare(catalog: Catalog, rows: Sequence[int]) -> list[Recommendation]:
-    frame = catalog.frame
-    return [
-        Recommendation(
-            track_id=int(catalog.track_ids[row]),
-            title=display_title(frame, row, int(catalog.track_ids[row])),
-            artist=str(frame["artist"].iloc[row]),
-            score=0.0,
-            terms=(),
-            explanations=(),
-        )
-        for row in rows
-    ]
-
-
-class RandomRanker:
-    """Uniformly random tracks; the same preference always gives the same list."""
-
-    def __init__(self, seed: int = 0):
-        self.seed = seed
-
-    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
-        preference.validate(catalog)
-        rng = np.random.default_rng([self.seed, *preference.seeds])
-        candidates = np.flatnonzero(allowed_rows(preference, catalog))
-        picked = rng.permutation(candidates)[: preference.k]
-        return _bare(catalog, picked.tolist())
-
-
-class PopularRanker:
-    """The most listened-to tracks in the first seed's top genre."""
-
-    def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
-        preference.validate(catalog)
-        allowed = allowed_rows(preference, catalog)
-        genre = catalog.frame["genre_top"].iloc[catalog.position[preference.seeds[0]]]
-        if isinstance(genre, str):
-            allowed &= catalog.has_genre(genre)
-        candidates = np.flatnonzero(allowed)
-        listens = catalog.frame["listens"].to_numpy(dtype=np.float64)[candidates]
-        order = np.lexsort((catalog.track_ids[candidates], -listens))
-        return _bare(catalog, candidates[order[: preference.k]].tolist())
-
-
-RANKERS: dict[str, Callable[[], Ranker]] = {
-    "baseline": BaselineRanker,
-    "hybrid": HybridRanker,
-    "profile": ProfileRanker,
-    "profile-diverse": ProfileDiverseRanker,
-    "random": RandomRanker,
-    "popular": PopularRanker,
-    "audio-embedding": AudioEmbeddingRanker,
-}
-
-
-def make_ranker(name: str) -> Ranker:
-    if name not in RANKERS:
-        raise EvaluationError(f"unknown ranker {name!r}; choose from {sorted(RANKERS)}")
-    return RANKERS[name]()
 
 
 # --- queries -----------------------------------------------------------------

@@ -47,7 +47,10 @@ to report.
 | `popular` | the most listened-to tracks in the seed's top genre |
 
 Any object with `rank(preference, catalog)` (the `Ranker` protocol) can be added
-to `RANKERS` in `musicdiscovery/evaluation.py`.
+as one entry of `RANKERS` in `musicdiscovery/rankers.py`. The entry says whether
+the ranker is an arm, which `recommend --ranker` offers, or a reference ranker
+for evaluation only, and whether `evaluate` scores it when no `--ranker` is
+named. `evaluate --ranker` accepts every entry.
 
 ## Metrics (k = 10)
 
@@ -79,7 +82,7 @@ must not do. Its logic is unit-tested on synthetic numbers in
 
 - **When it runs.** On every pull request, where it records "not applicable"
   within seconds unless the diff touches `src/musicdiscovery/rank*`, `hybrid*`,
-  `profile*`, `evaluation.py`, `eval_gate.py`, `ingest.py`, `catalog.py`,
+  `profile*`, `rankers.py`, `evaluation.py`, `eval_gate.py`, `ingest.py`, `catalog.py`,
   `preference.py`, `eval/`, `reports/baseline.json` or the gate's workflows. A
   pull request that changes any of those runs the full evaluation. It also runs
   nightly on `main` (`eval-nightly.yml`) and on demand (`workflow_dispatch`).

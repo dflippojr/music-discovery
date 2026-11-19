@@ -25,10 +25,8 @@ from musicdiscovery.evaluation import (
     DEFAULT_PROFILES,
     DEFAULT_QUERIES,
     DEFAULT_REPORT_DIR,
-    RANKERS,
     EvaluationError,
     generate_queries,
-    make_ranker,
     run,
     write_profiles,
     write_queries,
@@ -39,6 +37,7 @@ from musicdiscovery.ingest import CATALOG_NAME, MANIFEST_NAME, IngestError, inge
 from musicdiscovery.preference import DEFAULT_K, Preference, PreferenceError
 from musicdiscovery.profile_ranker import ProfileRankerError
 from musicdiscovery.profiles import generate_profiles
+from musicdiscovery.rankers import ARMS, EVALUATED, RANKERS, make_ranker
 from musicdiscovery.study import DEFAULT_RATINGS_DIR, StudyError
 from musicdiscovery.study import run as run_study
 
@@ -81,14 +80,11 @@ def _run_recommend(args: argparse.Namespace) -> int:
         )
         if args.describe is not None and args.ranker != "audio-embedding":
             raise PreferenceError("--describe needs --ranker audio-embedding")
-        if args.ranker == "audio-embedding":
-            description = None
-            if args.describe is not None:
-                encoder = SentenceTransformerEncoder(threads=args.threads)
-                description = describe_vector(args.describe, encoder)
-            ranker = AudioEmbeddingRanker(path=args.vectors, description=description)
-        else:
-            ranker = make_ranker(args.ranker)
+        description = None
+        if args.describe is not None:
+            encoder = SentenceTransformerEncoder(threads=args.threads)
+            description = describe_vector(args.describe, encoder)
+        ranker = make_ranker(args.ranker, vectors=args.vectors, description=description)
         results = ranker.rank(preference, catalog)
         if not results and isinstance(ranker, AudioEmbeddingRanker):
             missing = ranker.seeds_without_vector(preference, catalog)
@@ -140,7 +136,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         report, numbers = run(
             catalog,
             args.queries,
-            args.ranker or ["baseline", "hybrid", "profile", "random", "popular"],
+            args.ranker or list(EVALUATED),
             args.out_dir,
             report_date,
             catalog_dir / MANIFEST_NAME,
@@ -301,7 +297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recommend.add_argument(
         "--ranker",
-        choices=["baseline", "hybrid", "profile", "profile-diverse", "audio-embedding"],
+        choices=ARMS,
         default="baseline",
         help="ranker to use (default: baseline)",
     )

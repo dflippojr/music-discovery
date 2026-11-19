@@ -21,9 +21,10 @@ import pandas as pd
 
 from musicdiscovery import paths, ranking
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.evaluation import generate_queries, make_ranker
+from musicdiscovery.evaluation import generate_queries
 from musicdiscovery.hybrid import VARIETY_TEXT, HybridConfig, Metadata
 from musicdiscovery.preference import AXES, Preference
+from musicdiscovery.rankers import make_ranker
 
 FORMAT_VERSION = 1
 CATALOG_FILE = "catalog.json"

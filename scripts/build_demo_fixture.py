@@ -20,8 +20,8 @@ from test_evaluation import make_frame  # noqa: E402
 
 from musicdiscovery.catalog import Catalog  # noqa: E402
 from musicdiscovery.demo import build_catalog, export_demo, parity_queries  # noqa: E402
-from musicdiscovery.evaluation import make_ranker  # noqa: E402
 from musicdiscovery.preference import Preference  # noqa: E402
+from musicdiscovery.rankers import make_ranker  # noqa: E402
 
 
 def exclusion_cases(catalog: Catalog) -> dict:
