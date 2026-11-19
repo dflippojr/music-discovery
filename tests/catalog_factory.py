@@ -1,4 +1,8 @@
-"""Synthetic catalogs shaped like the real FMA catalog, from its aggregate profile.
+"""Synthetic catalogs for the tests and the demo fixture scripts.
+
+`make_frame` builds a small catalog with planted genre clusters, for tests that
+need a ranker to find structure. `from_shape` builds one shaped like the real
+FMA catalog, from its aggregate profile.
 
 `tests/fixtures/catalog_shape.json` is written by `scripts/profile_catalog.py`
 from a local ingest and holds shares, histograms and quantiles only. Every
@@ -40,6 +44,67 @@ ALPHABETS = {
     "emoji": "🎵🎶🔥🌙🌊🎸🥁🎹✨💜",
     "other": "".join(map(chr, range(0x0915, 0x0939))),  # Devanagari
 }
+
+
+GENRES = ["Folk", "Rock", "Jazz"]
+
+
+def make_frame(
+    per_genre: int = 60,
+    seed: int = 0,
+    *,
+    artists: int = 25,
+    features: int = 6,
+    first_feature: int = 0,
+    extra_features: int = 0,
+    varied_metadata: bool = True,
+) -> pd.DataFrame:
+    """A shuffled catalog of `per_genre` tracks for each of GENRES, ids from 100.
+
+    Each genre's tracks cluster around their own centre in six MFCC dimensions, so
+    a ranker that uses the features finds the genre. `features` of those
+    dimensions become columns, named from `mfcc_mean_<first_feature>`. With
+    `varied_metadata` some tracks have a second genre id or no tags and listens
+    are random; without it every track has one genre id and one tag, and listens
+    equal the track id. `extra_features` adds noise columns `x_0`, `x_1`, ...
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    track_id = 100
+    for g, genre in enumerate(GENRES):
+        centre = np.zeros(6)
+        centre[g] = 4.0
+        for i in range(per_genre):
+            vec = centre + rng.normal(size=6)
+            if varied_metadata:
+                genre_ids = [g + 1] if i % 2 else [g + 1, 9]
+                tags = [f"{genre}-tag", "loud"] if i % 3 else []
+                listens = int(rng.integers(1, 10_000))
+            else:
+                genre_ids = [g + 1]
+                tags = ["loud"] if i % 5 == 0 else ["quiet"]
+                listens = track_id
+            rows.append(
+                {
+                    "track_id": track_id,
+                    "title": f"t{track_id}",
+                    "artist": f"artist{track_id % artists}",
+                    "genre_top": genre,
+                    "genre_ids": genre_ids,
+                    "tags": tags,
+                    "listens": listens,
+                    **{
+                        f"mfcc_mean_{first_feature + j:02d}": vec[j]
+                        for j in range(features)
+                    },
+                    "rmse_mean_01": rng.normal(),
+                    "spectral_centroid_mean_01": rng.normal(),
+                    "zcr_mean_01": rng.normal(),
+                    **{f"x_{j}": rng.normal() for j in range(extra_features)},
+                }
+            )
+            track_id += 1
+    return pd.DataFrame(rows).sample(frac=1, random_state=1)
 
 
 def load_shape(path: Path = SHAPE_PATH) -> dict:

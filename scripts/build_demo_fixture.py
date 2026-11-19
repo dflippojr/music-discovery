@@ -2,7 +2,7 @@
 
 Usage: python scripts/build_demo_fixture.py [--no-shape] <out_dir>
 
-The catalog is made up (see tests/test_evaluation.py); no dataset is read.
+The catalog is made up (see make_frame in tests/catalog_factory.py); no dataset is read.
 A second catalog shaped like the real one (tests/catalog_factory.py) is
 exported to <out_dir>/shape and its exclusion cases go in exclusion.json, so the
 parity test also runs on missing genres, sparse tags and non-Latin titles.
@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from test_evaluation import make_frame  # noqa: E402
+from catalog_factory import make_frame  # noqa: E402
 
 from musicdiscovery.catalog import Catalog  # noqa: E402
 from musicdiscovery.demo import build_catalog, export_demo, parity_queries  # noqa: E402

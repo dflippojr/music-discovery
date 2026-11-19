@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from test_evaluation import make_frame
+from catalog_factory import make_frame
 
 from musicdiscovery import demo
 from musicdiscovery.catalog import Catalog

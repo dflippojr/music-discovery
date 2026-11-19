@@ -12,9 +12,9 @@ import json
 from pathlib import Path
 
 import pytest
+from catalog_factory import make_frame
 from hypothesis import given
 from hypothesis import strategies as st
-from test_evaluation import make_frame
 
 from musicdiscovery import profile_training, tuning
 from musicdiscovery.catalog import Catalog

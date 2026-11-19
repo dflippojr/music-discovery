@@ -5,10 +5,10 @@ from traceback import format_tb
 
 import pandas as pd
 import pytest
+from catalog_factory import make_frame
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 from pyarrow import ArrowException
-from test_evaluation import make_frame
 from test_ingest import _tracks_csv, _write_archive
 
 from musicdiscovery import cli

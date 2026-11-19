@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_evaluation import make_frame
+from catalog_factory import make_frame
 
 from musicdiscovery import cli
 

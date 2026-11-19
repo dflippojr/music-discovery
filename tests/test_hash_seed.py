@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_evaluation import make_frame
+from catalog_factory import make_frame
 
 from musicdiscovery.evaluation import RANKERS
 
@@ -62,7 +62,7 @@ def data_dir(tmp_path_factory) -> Path:
 
 def test_metadata_arrays_do_not_depend_on_hash_seed():
     code = (
-        "import hashlib; from test_evaluation import make_frame; "
+        "import hashlib; from catalog_factory import make_frame; "
         "from musicdiscovery.catalog import Catalog; "
         "from musicdiscovery.hybrid import Metadata; "
         "print(hashlib.sha1(Metadata(Catalog(make_frame())).columns.tobytes())"

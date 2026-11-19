@@ -10,9 +10,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from catalog_factory import GENRES, make_frame
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from test_evaluation import GENRES, make_frame
 
 from musicdiscovery import audio_embedding, cli
 from musicdiscovery.audio_embedding import (

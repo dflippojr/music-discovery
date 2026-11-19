@@ -4,7 +4,7 @@ import math
 from dataclasses import replace
 
 import pytest
-from test_evaluation import make_frame
+from catalog_factory import make_frame
 
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.evaluation import EvaluationError, generate_queries, write_queries

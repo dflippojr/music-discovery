@@ -20,7 +20,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ["scripts/ui_instance.py", "scripts/build_demo_fixture.py"]
-FILES += ["tests/test_evaluation.py"]  # build_demo_fixture imports make_frame
+FILES += ["tests/catalog_factory.py"]  # make_frame; the shape profile stays out
 STARTUP_TIMEOUT = 90
 EXIT_TIMEOUT = 15
 
