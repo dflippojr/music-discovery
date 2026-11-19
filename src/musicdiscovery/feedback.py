@@ -15,7 +15,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from musicdiscovery.evaluation import EvaluationError, confined
+from musicdiscovery import paths
 from musicdiscovery.jsonfiles import describe_schema_error, load_packaged_json
 from musicdiscovery.study import Interval, wilson
 
@@ -77,10 +77,10 @@ def read_log(path: Path) -> LogRead:
     """
     try:
         # newline="" stops a bare \r from ending a line; split("\n") below does that.
-        with confined(path).open(encoding="utf-8-sig", newline="") as handle:
+        with paths.confined(path, FeedbackError).open(
+            encoding="utf-8-sig", newline=""
+        ) as handle:
             text = handle.read()
-    except EvaluationError as error:
-        raise FeedbackError(str(error)) from error
     except (OSError, UnicodeDecodeError) as error:
         raise FeedbackError(f"cannot read {path} ({error})") from error
     validator = Draft202012Validator(_schema())

@@ -19,9 +19,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from musicdiscovery import ranking
+from musicdiscovery import paths, ranking
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.evaluation import confined, generate_queries, make_ranker
+from musicdiscovery.evaluation import generate_queries, make_ranker
 from musicdiscovery.hybrid import VARIETY_TEXT, HybridConfig, Metadata
 from musicdiscovery.preference import AXES, Preference
 
@@ -311,7 +311,7 @@ def export_demo(catalog: Catalog, out_dir: Path, release: bool = False) -> Bundl
     With `release`, refuse to export from a work tree with uncommitted changes.
     A refused export changes nothing in `out_dir`.
     """
-    out_dir = confined(out_dir)
+    out_dir = paths.confined(out_dir, DemoError)
     source_stamp = build_source(release)
     bundle = {  # built first: each of these can refuse the catalog
         CATALOG_FILE: build_catalog(catalog),

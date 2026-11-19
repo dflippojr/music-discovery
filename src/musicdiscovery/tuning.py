@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from musicdiscovery import paths
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.evaluation import (
     BOOTSTRAP_RESAMPLES,
@@ -14,7 +15,6 @@ from musicdiscovery.evaluation import (
     Context,
     EvaluationError,
     K,
-    confined,
     evaluate,
     load_queries,
     nanmean,
@@ -98,7 +98,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         queries = load_queries(args.queries, catalog)
         config, rows = tune(catalog, queries)
         if args.write:
-            confined(CONFIG_PATH).write_text(config.dump(), encoding="utf-8")
+            paths.confined(CONFIG_PATH, EvaluationError).write_text(
+                config.dump(), encoding="utf-8"
+            )
     except (
         CatalogError,
         EvaluationError,

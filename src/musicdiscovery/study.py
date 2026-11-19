@@ -16,7 +16,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from musicdiscovery.evaluation import confined
+from musicdiscovery import paths
 from musicdiscovery.jsonfiles import describe_schema_error, load_packaged_json
 
 DEFAULT_RATINGS_DIR = Path("ratings")
@@ -252,7 +252,7 @@ def render_report(result: Analysis, report_date: date) -> str:
 def run(ratings_dir: Path, out_dir: Path, report_date: date) -> Path:
     """Validate the files in `ratings_dir` and write the report; returns its path."""
     sessions = load_sessions(ratings_dir)
-    out_dir = confined(out_dir)
+    out_dir = paths.confined(out_dir, StudyError)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"listener-study-{report_date.isoformat()}.md"
     path.write_text(render_report(analyse(sessions), report_date), encoding="utf-8")

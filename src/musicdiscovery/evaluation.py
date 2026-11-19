@@ -52,11 +52,6 @@ class EvaluationError(Exception):
     """Raised when queries or rankers cannot be used."""
 
 
-def confined(path: Path) -> Path:
-    """Resolve a user-supplied path and keep it inside the working directory."""
-    return paths.confined(path, EvaluationError)
-
-
 # --- reference rankers -------------------------------------------------------
 
 
@@ -193,7 +188,7 @@ def _refuse_other_catalog(path: Path, catalog: Catalog, what: str) -> None:
 
 def write_queries(path: Path, queries: Sequence[Query], catalog: Catalog) -> None:
     """Write queries; refuse to replace a file made for a different catalog size."""
-    path = confined(path)
+    path = paths.confined(path, EvaluationError)
     _refuse_other_catalog(path, catalog, "queries")
     payload = {
         "query_seed": QUERY_SEED,
@@ -216,7 +211,7 @@ def _likes(query: dict, path: Path) -> tuple[str, ...]:
 
 
 def load_queries(path: Path, catalog: Catalog) -> list[Query]:
-    path = confined(path)
+    path = paths.confined(path, EvaluationError)
     if not path.exists():
         raise EvaluationError(
             f"no queries at {path}; create them with `musicdiscovery evaluate "
@@ -249,7 +244,7 @@ def load_queries(path: Path, catalog: Catalog) -> list[Query]:
 
 def write_profiles(path: Path, profiles: Sequence[Profile], catalog: Catalog) -> None:
     """Write profiles; refuse to replace a file made for a different catalog size."""
-    path = confined(path)
+    path = paths.confined(path, EvaluationError)
     _refuse_other_catalog(path, catalog, "profiles")
     payload = {
         "profile_seed": PROFILE_SEED,
@@ -285,7 +280,7 @@ def _profile(record: dict) -> Profile:
 
 def load_profiles(path: Path, catalog: Catalog) -> list[Profile]:
     """Read profiles and check that every interaction is a catalog track."""
-    path = confined(path)
+    path = paths.confined(path, EvaluationError)
     if not path.exists():
         raise EvaluationError(
             f"no profiles at {path}; create them with `musicdiscovery evaluate "
@@ -940,13 +935,13 @@ def run(
     """
     if benchmark not in BENCHMARKS:
         raise EvaluationError(f"unknown benchmark {benchmark!r}; choose {BENCHMARKS}")
-    out_dir = confined(out_dir)
+    out_dir = paths.confined(out_dir, EvaluationError)
     names = list(dict.fromkeys(ranker_names))
     version = catalog_version(manifest_path, catalog)
     results: dict = {}
     extra: list[str] = []
     if benchmark != "queries":
-        profiles_path = confined(profiles_path)
+        profiles_path = paths.confined(profiles_path, EvaluationError)
         profiles = load_profiles(profiles_path, catalog)
         section = evaluate_profiles(catalog, profiles, names)
         section["profiles_path"] = _relative(profiles_path)
@@ -957,7 +952,7 @@ def run(
         heading = [f"# Offline evaluation, {report_date.isoformat()}", ""]
         text = "\n".join([*heading, *_version_lines(version), *extra])
     else:
-        queries_path = confined(queries_path)
+        queries_path = paths.confined(queries_path, EvaluationError)
         queries = load_queries(queries_path, catalog)
         results.update(evaluate(catalog, queries, names))
         results["queries_sha256"] = _sha256(queries_path)

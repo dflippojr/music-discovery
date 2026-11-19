@@ -7,11 +7,11 @@ from pathlib import Path
 
 import numpy as np
 
+from musicdiscovery import paths
 from musicdiscovery.catalog import Catalog, CatalogError
 from musicdiscovery.evaluation import (
     DEFAULT_PROFILES,
     EvaluationError,
-    confined,
     load_profiles,
 )
 from musicdiscovery.ingest import CATALOG_NAME
@@ -130,7 +130,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         profiles = load_profiles(args.profiles, catalog)
         model = train(catalog, profiles)
         if args.write:
-            confined(MODEL_PATH).write_text(model.dump(), encoding="utf-8")
+            paths.confined(MODEL_PATH, EvaluationError).write_text(
+                model.dump(), encoding="utf-8"
+            )
     except (
         CatalogError,
         EvaluationError,

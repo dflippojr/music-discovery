@@ -124,11 +124,6 @@ def member_name(track_id: int) -> str:
     return f"fma_small/{name[:3]}/{name}.mp3"
 
 
-def confined(path: Path) -> Path:
-    """Resolve a user-supplied path and keep it inside the working directory."""
-    return paths.confined(path, AudioEmbeddingError)
-
-
 def _described(error: Exception) -> str:
     """The error's type and message on one line, for a one-line CLI report."""
     return f"{type(error).__name__}: {' '.join(str(error).split())}"
@@ -179,7 +174,7 @@ class VectorStore:
 
     def save(self, path: Path) -> None:
         """Write the cache atomically: a crash never leaves a half-written file."""
-        path = confined(path)
+        path = paths.confined(path, AudioEmbeddingError)
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         with part.open("wb") as handle:
@@ -193,7 +188,7 @@ class VectorStore:
 
     @classmethod
     def load(cls, path: Path) -> "VectorStore":
-        path = confined(path)
+        path = paths.confined(path, AudioEmbeddingError)
         if not path.exists():
             raise AudioEmbeddingError(
                 f"no audio vectors at {path}; run `musicdiscovery embed-audio`"
@@ -269,7 +264,8 @@ def embed_archive(
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
-    archive, out = confined(archive), confined(out)
+    archive = paths.confined(archive, AudioEmbeddingError)
+    out = paths.confined(out, AudioEmbeddingError)
     if not archive.exists():
         raise AudioEmbeddingError(f"no audio archive at {archive}")
     archive_sha1 = sha1_of(archive)
