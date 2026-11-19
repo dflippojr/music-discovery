@@ -21,7 +21,6 @@ from musicdiscovery.evaluation import (
     PopularRanker,
     Query,
     RandomRanker,
-    _relative,
     catalog_version,
     evaluate,
     evaluate_profiles,
@@ -37,6 +36,7 @@ from musicdiscovery.evaluation import (
     write_profiles,
     write_queries,
 )
+from musicdiscovery.evaluation.report import _relative
 from musicdiscovery.preference import Preference, PreferenceError
 from musicdiscovery.profiles import (
     INTERACTIONS_PER_PROFILE,
@@ -989,7 +989,7 @@ def test_unknown_benchmark_is_refused(tmp_path, catalog):
 def test_stored_file_hashes_ignore_the_checkout_line_endings(tmp_path):
     # eval/queries.json is CRLF on a Windows checkout and LF on Linux; the hash
     # in a report must not depend on which one wrote it (#105).
-    from musicdiscovery.evaluation import _sha256
+    from musicdiscovery.evaluation.report import _sha256
 
     lf = tmp_path / "lf.json"
     crlf = tmp_path / "crlf.json"

@@ -82,7 +82,7 @@ must not do. Its logic is unit-tested on synthetic numbers in
 
 - **When it runs.** On every pull request, where it records "not applicable"
   within seconds unless the diff touches `src/musicdiscovery/rank*`, `hybrid*`,
-  `profile*`, `rankers.py`, `evaluation.py`, `eval_gate.py`, `ingest.py`, `catalog.py`,
+  `profile*`, `rankers.py`, `evaluation/`, `eval_gate.py`, `ingest.py`, `catalog.py`,
   `preference.py`, `eval/`, `reports/baseline.json` or the gate's workflows. A
   pull request that changes any of those runs the full evaluation. It also runs
   nightly on `main` (`eval-nightly.yml`) and on demand (`workflow_dispatch`).
