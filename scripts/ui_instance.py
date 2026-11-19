@@ -1,6 +1,7 @@
 """Serve a fresh synthetic UI bundle on loopback; never reuse another server."""
 
 import argparse
+import importlib.util
 import json
 import math
 import os
@@ -8,7 +9,6 @@ import re
 import secrets
 import signal
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -25,7 +25,7 @@ DATA = ROOT / "data" / "ui-testing"
 HANDLE = DATA / "instance.json"
 DEFAULT_PORT = 4173
 FIXTURE_TIMEOUT = 30
-CHILD_EXIT_TIMEOUT = 2
+POLL_INTERVAL = 0.1
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
     "form-action 'none'; object-src 'none'"
@@ -158,75 +158,36 @@ def require_exited(identity):
     raise ValueError("Recorded process is still live; preserve handle and bundle")
 
 
-def read_proc_stat(pid):
-    return Path(f"/proc/{pid}/stat").read_bytes()
+def require_current_handle(metadata):
+    """Refuse a handle from the launcher that built the fixture in a child process.
 
-
-def has_finished_exiting(process):
-    """Whether a scanned process is a zombie with no thread left that could write.
-
-    Linux also reports a process as a zombie when only its main thread has exited,
-    and a worker can start threads or execve() between separate reads. So the state
-    and thread count come from one read of the stat file, which psutil doesn't offer.
-    Without that file (not Linux, or the process has gone) the process is not excused.
+    Its fixture child could outlive it and still be writing the bundle, so this
+    launcher's proof of exit does not cover it.
     """
-    if process.info.get("status") != psutil.STATUS_ZOMBIE:
-        return False
-    try:
-        raw = read_proc_stat(process.pid)
-    except OSError:
-        return False
-    # The command name can hold anything, so fields count from its last ")".
-    fields = raw.rpartition(b")")[2].split()
-    return fields[0] == b"Z" and fields[17] == b"1"
-
-
-def require_no_bundle_writer(bundle):
-    """Refuse while any process has the bundle path in its command line.
-
-    A launcher killed in phase "starting" never recorded its fixture child, so
-    only the child's argv (which holds the bundle path) can show it is gone.
-    The scan is read-only; a process that cannot be inspected also refuses. A
-    zombie is skipped: psutil gives it no command line, and it holds no bundle.
-    """
-    needle = str(bundle)
-    try:
-        for process in psutil.process_iter(["cmdline", "status"]):
-            cmdline = process.info.get("cmdline")
-            if cmdline is None:
-                if has_finished_exiting(process):
-                    continue
-                raise ValueError(
-                    f"Cannot read the command line of PID {process.pid}; "
-                    "preserve handle for investigation"
-                )
-            if any(needle in arg for arg in cmdline):
-                raise ValueError(
-                    f"PID {process.pid} still holds the bundle; "
-                    "preserve handle and bundle"
-                )
-    except psutil.Error as error:
-        pid = getattr(error, "pid", None)
-        where = f" at PID {pid}" if pid is not None else ""
+    old = [
+        f"{name} {json.dumps(metadata[name])}"
+        for name in ("phase", "fixture")
+        if name in metadata
+    ]
+    if old:
         raise ValueError(
-            f"Cannot complete the process scan{where}; "
-            "preserve handle for investigation"
-        ) from error
+            "Handle written by an older launcher that built the fixture in a child "
+            f"process ({', '.join(old)}); preserve handle for investigation"
+        )
 
 
 def recover():
-    """Remove stale files only with proof of exit and an exclusively free port."""
+    """Remove stale files only with proof of exit and an exclusively free port.
+
+    The launcher builds the bundle in its own process, so once the recorded
+    launcher has exited nothing else can still be writing it.
+    """
     if not HANDLE.exists() and not HANDLE.is_symlink():
         print("No owned UI instance remains")
         return
     metadata, raw = read_handle()
+    require_current_handle(metadata)
     require_exited(metadata)
-    if metadata.get("phase") == "seeding":
-        require_exited(metadata.get("fixture"))
-    elif metadata.get("phase") == "starting":
-        require_no_bundle_writer(DATA / metadata["instance"])
-    elif metadata.get("phase") != "ready":
-        raise ValueError("Fixture ownership unknown; preserve handle for investigation")
     with socket.socket() as probe:
         if os.name == "nt":
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -310,35 +271,52 @@ class Handler(SimpleHTTPRequestHandler):
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
 
-def terminate_fixture(child):
-    """Reap only our fixture child before its files can be removed."""
-    if child.poll() is None:
-        child.terminate()
+def build_bundle(bundle):
+    """Write the flat synthetic bundle with scripts/build_demo_fixture.py's builder."""
+    path = ROOT / "scripts" / "build_demo_fixture.py"
+    spec = importlib.util.spec_from_file_location("build_demo_fixture", path)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    builder.build_fixture(bundle, shape=False)  # flat, so remove_bundle can delete it
+
+
+def build_until_stopped(bundle, stopping):
+    """Build the bundle on a worker thread; False when a stop signal came first.
+
+    Signal handlers run on the main thread, so it waits here, watching the stop
+    flag and the deadline. On a stop or a timeout it still waits for the build to
+    return before the caller removes any file. The build is CPU-bound with no
+    network or other blocking wait, so it returns.
+    """
+    failure = []
+
+    def work():
         try:
-            child.wait(timeout=CHILD_EXIT_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait(timeout=CHILD_EXIT_TIMEOUT)
+            build_bundle(bundle)
+        except Exception as error:  # re-raised on the main thread below
+            failure.append(error)
 
-
-def wait_for_fixture(child, stopping):
+    worker = threading.Thread(target=work, name="ui-fixture-build")
+    worker.start()
     deadline = time.monotonic() + FIXTURE_TIMEOUT
-    while not stopping.is_set():
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError(
-                f"Fixture generation timed out after {FIXTURE_TIMEOUT} seconds"
-            )
-        try:
-            result = child.wait(timeout=min(0.1, remaining))
-        except subprocess.TimeoutExpired:
-            continue
+    try:
+        while worker.is_alive():
+            if stopping.is_set():
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Fixture generation timed out after {FIXTURE_TIMEOUT} seconds"
+                )
+            worker.join(timeout=min(POLL_INTERVAL, remaining))
         if stopping.is_set():
+            print("UI startup cancelled during fixture generation", file=sys.stderr)
             return False
-        if result:
-            raise subprocess.CalledProcessError(result, child.args)
-        return True
-    return False
+    finally:
+        worker.join()
+    if failure:
+        raise RuntimeError(f"Fixture generation failed: {failure[0]}") from failure[0]
+    return True
 
 
 def start(port):
@@ -362,7 +340,6 @@ def start(port):
         **identity,
         "port": server.server_port,
         "token": server.token,
-        "phase": "starting",
     }
     stopping = threading.Event()
     serving = threading.Event()
@@ -374,29 +351,12 @@ def start(port):
 
     previous_term = signal.signal(signal.SIGTERM, request_shutdown)
     previous_int = signal.signal(signal.SIGINT, request_shutdown)
-    child = None
     try:
+        # This process is the bundle's only writer, so the handle needs no other
+        # identity: once this launcher has exited, recover may remove the bundle.
         with HANDLE.open("x", encoding="utf-8") as handle:
             json.dump(metadata, handle)
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                str(ROOT / "scripts/build_demo_fixture.py"),
-                "--no-shape",  # keep the bundle flat so remove_bundle can delete it
-                str(bundle),
-            ],
-            cwd=ROOT,
-        )
-        try:
-            fixture = process_identity(child.pid)
-        except psutil.NoSuchProcess:
-            if child.poll() is None:
-                raise
-        else:
-            metadata.update(phase="seeding", fixture=fixture)
-            HANDLE.write_text(json.dumps(metadata), encoding="utf-8")
-        if not wait_for_fixture(child, stopping):
-            print("UI startup cancelled during fixture generation", file=sys.stderr)
+        if not build_until_stopped(bundle, stopping):
             return
         catalog_path = bundle / "catalog.json"
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -409,8 +369,6 @@ def start(port):
         if stopping.is_set():
             print("UI startup cancelled", file=sys.stderr)
             return
-        metadata["phase"] = "ready"
-        HANDLE.write_text(json.dumps(metadata), encoding="utf-8")
         # The socket is bound and every file exists before announcing readiness.
         print(f"UI_URL=http://127.0.0.1:{server.server_port}/", flush=True)
         print(
@@ -425,12 +383,8 @@ def start(port):
             request_shutdown()
         server.serve_forever(poll_interval=0.1)
     finally:
-        try:
-            if child is not None:
-                terminate_fixture(child)
-        finally:
-            signal.signal(signal.SIGTERM, previous_term)
-            signal.signal(signal.SIGINT, previous_int)
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
         server.server_close()
         remove_bundle(bundle)
         if HANDLE.exists():
@@ -478,8 +432,7 @@ def main():
     except (
         OSError,
         ValueError,
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
+        RuntimeError,
         URLError,
         psutil.Error,
     ) as error:

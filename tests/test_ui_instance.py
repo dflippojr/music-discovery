@@ -90,13 +90,16 @@ def test_reuse_address_server_on_port_creates_no_handle_or_bundle(launcher):
     assert not list(launcher.DATA.iterdir())
 
 
+BUILD_THREAD = "ui-fixture-build"
+
+
 @pytest.fixture
-def seeding(launcher, monkeypatch):
-    """Real owned children with a pipe handshake and no data dependencies."""
-    children = []
+def building(launcher, monkeypatch):
+    """A fake fixture build on the launcher's worker thread, with no data dependency."""
+    bundles = []
     ports = []
+    active = threading.Event()  # set while a build is still writing its bundle
     original_server = launcher.ExclusiveHTTPServer
-    original_popen = subprocess.Popen
     unrelated = launcher.DATA / "run-unrelated"
     unrelated.mkdir(parents=True, exist_ok=True)
     (unrelated / "keep.txt").write_text("keep")
@@ -106,77 +109,46 @@ def seeding(launcher, monkeypatch):
         ports.append(instance.server_port)
         return instance
 
-    def seed(*, block=False, exit_code=0, cancel=None, escalate=False):
-        def spawn(args, **kwargs):
-            script = (
-                "import json, sys\n"
-                "from pathlib import Path\n"
-                "bundle = Path(sys.argv[1])\n"
-                "bundle.mkdir()\n"
-                "(bundle / 'catalog.json').write_text("
-                "json.dumps({'ids': [100], 'licenses': ['synthetic']}))\n"
-                "(bundle / 'sources.json').write_text("
-                "json.dumps({'sources': ['synthetic']}))\n"
-                "print('ready', flush=True)\n"
-                + ("sys.stdin.read()\n" if block else "")
-                + f"sys.exit({exit_code})\n"
-            )
-            child = original_popen(
-                [sys.executable, "-c", script, args[-1]],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                text=True,
-                **kwargs,
-            )
-            children.append(child)
-            ready = threading.Event()
-
-            def read_ready():
-                if child.stdout.readline() == "ready\n":
-                    ready.set()
-
-            threading.Thread(target=read_ready, daemon=True).start()
-            assert ready.wait(5), "Synthetic child did not reach seeding handshake"
-            if escalate:
-                # Deterministically exercise kill even on Windows, whose
-                # terminate() cannot be ignored by a signal handler.
-                monkeypatch.setattr(child, "terminate", lambda: None)
-            if cancel is not None:
-                original_wait = child.wait
-
-                def interrupt_wait(*args, **kwargs):
-                    monkeypatch.setattr(child, "wait", original_wait)
+    def seed(*, fail=False, hold=0.0, cancel=None):
+        def build(bundle):
+            assert threading.current_thread().name == BUILD_THREAD
+            active.set()
+            try:
+                bundles.append(bundle)
+                bundle.mkdir()
+                if cancel is not None:
+                    # Python runs the handler on the main thread, as for a real signal.
                     signal.raise_signal(cancel)
-                    return original_wait(*args, **kwargs)
+                time.sleep(hold)  # stands in for CPU-bound work that cannot be cut
+                (bundle / "catalog.json").write_text(
+                    json.dumps({"ids": [100], "licenses": ["synthetic"]})
+                )
+                (bundle / "sources.json").write_text(
+                    json.dumps({"sources": ["synthetic"]})
+                )
+                if fail:
+                    raise ValueError("synthetic build failure")
+            finally:
+                active.clear()
 
-                monkeypatch.setattr(child, "wait", interrupt_wait)
-            return child
-
-        monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
+        monkeypatch.setattr(launcher, "build_bundle", build)
 
     monkeypatch.setattr(launcher, "ExclusiveHTTPServer", server)
-    # Check that cleanup cannot race a live child still writing the bundle.
+    # Check that cleanup cannot race a build still writing the bundle.
     original_remove = launcher.remove_bundle
 
     def remove(bundle):
-        if children:
-            assert children[-1].poll() is not None
+        assert not active.is_set(), "bundle removed while the build was writing it"
         original_remove(bundle)
 
     monkeypatch.setattr(launcher, "remove_bundle", remove)
-    yield seed, children, ports
-    for child in children:
-        if child.poll() is None:
-            child.kill()
-        child.wait(timeout=5)
-        child.stdin.close()
-        child.stdout.close()
+    yield seed, bundles, ports
 
 
-def assert_cleaned(launcher, children, ports):
-    assert children[-1].poll() is not None
+def assert_cleaned(launcher, bundles, ports):
+    assert not [t for t in threading.enumerate() if t.name == BUILD_THREAD]
     assert not launcher.HANDLE.exists()
-    assert not Path(children[-1].args[-1]).exists()
+    assert not bundles[-1].exists()
     assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
     with socket.socket() as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -184,8 +156,8 @@ def assert_cleaned(launcher, children, ports):
     launcher.stop()  # safe to repeat after interrupted startup
 
 
-def assert_restart(launcher, monkeypatch, seeding):
-    seed, children, ports = seeding
+def assert_restart(launcher, monkeypatch, building):
+    seed, bundles, ports = building
     seed()
     previous_port = ports[-1]
     serving = threading.Event()
@@ -248,56 +220,70 @@ def assert_restart(launcher, monkeypatch, seeding):
     assert observed["licenses"] == ["/synthetic/license"]
     assert observed["sources"] == ["/synthetic/track/100"]
     assert observed["stop_status"] == 204
-    assert_cleaned(launcher, children, ports)
+    assert_cleaned(launcher, bundles, ports)
 
 
-def test_partial_seed_failure_closes_port_and_removes_owned_files(launcher, seeding):
-    seed, children, ports = seeding
-    seed(exit_code=1)
-    with pytest.raises(subprocess.CalledProcessError):
+def test_partial_seed_failure_closes_port_and_removes_owned_files(launcher, building):
+    seed, bundles, ports = building
+    seed(fail=True)
+    with pytest.raises(RuntimeError, match="synthetic build failure"):
         launcher.start(0)
-    assert_cleaned(launcher, children, ports)
+    assert_cleaned(launcher, bundles, ports)
     assert list(launcher.DATA.iterdir()) == [launcher.DATA / "run-unrelated"]
 
 
-@pytest.mark.parametrize("escalate", [False, True])
-def test_seed_timeout_is_nonzero_and_allows_restart(
-    launcher, monkeypatch, seeding, capsys, escalate
+def test_seed_timeout_waits_for_the_build_is_nonzero_and_allows_restart(
+    launcher, monkeypatch, building, capsys
 ):
-    seed, children, ports = seeding
+    seed, bundles, ports = building
     assert launcher.FIXTURE_TIMEOUT == 30
     monkeypatch.setattr(launcher, "FIXTURE_TIMEOUT", 0.1)
-    monkeypatch.setattr(launcher, "CHILD_EXIT_TIMEOUT", 0.05)
     port = str(free_port())
     monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", port])
-    seed(block=True, escalate=escalate)
+    seed(hold=0.5)
     started = time.monotonic()
     assert launcher.main() == 1
-    assert time.monotonic() - started < 5
-    assert "Fixture generation timed out" in capsys.readouterr().err
-    assert_cleaned(launcher, children, ports)
-    assert_restart(launcher, monkeypatch, seeding)
+    # The timeout fires once the build returns: its files go only after that.
+    assert 0.5 <= time.monotonic() - started < 5
+    assert "Fixture generation timed out after 0.1 seconds" in capsys.readouterr().err
+    assert_cleaned(launcher, bundles, ports)
+    assert_restart(launcher, monkeypatch, building)
 
 
 @pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
-def test_signal_during_seeding_exits_child_and_allows_restart(
-    launcher, monkeypatch, seeding, capsys, cancel
+def test_signal_during_the_build_cancels_and_allows_restart(
+    launcher, monkeypatch, building, capsys, cancel
 ):
-    seed, children, ports = seeding
+    seed, bundles, ports = building
     previous_handler = signal.getsignal(cancel)
-    seed(block=True, cancel=cancel)
+    printed = []
+
+    def recording_print(*args, **kwargs):
+        # Whether the build was still running when the launcher announced the stop.
+        printed.append((args[0], building_now()))
+        print(*args, **kwargs)
+
+    def building_now():
+        return any(t.name == BUILD_THREAD for t in threading.enumerate())
+
+    monkeypatch.setattr(launcher, "print", recording_print, raising=False)
+    seed(hold=0.5, cancel=cancel)
     started = time.monotonic()
     launcher.start(0)
     assert time.monotonic() - started < 5
     assert signal.getsignal(cancel) == previous_handler
     assert "UI startup cancelled during fixture generation" in capsys.readouterr().err
-    assert_cleaned(launcher, children, ports)
-    assert_restart(launcher, monkeypatch, seeding)
+    # The stop is announced while the build runs; files go once it has returned.
+    assert printed == [("UI startup cancelled during fixture generation", True)]
+    assert_cleaned(launcher, bundles, ports)
+    assert_restart(launcher, monkeypatch, building)
 
 
 @pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
-def test_signal_while_serving_cleans_up(launcher, monkeypatch, seeding, capsys, cancel):
-    seed, children, ports = seeding
+def test_signal_while_serving_cleans_up(
+    launcher, monkeypatch, building, capsys, cancel
+):
+    seed, bundles, ports = building
     seed()
     previous_handler = signal.getsignal(cancel)
     original_serve = ThreadingHTTPServer.serve_forever
@@ -345,31 +331,31 @@ def test_signal_while_serving_cleans_up(launcher, monkeypatch, seeding, capsys, 
     assert observed["health"] == {"instance": observed["instance"]}
     assert signal.getsignal(cancel) == previous_handler
     assert f"UI_URL=http://127.0.0.1:{ports[-1]}/" in capsys.readouterr().out
-    assert_cleaned(launcher, children, ports)
+    assert_cleaned(launcher, bundles, ports)
 
 
 def test_signal_after_the_fixture_cancels_before_ready(
-    launcher, monkeypatch, seeding, capsys
+    launcher, monkeypatch, building, capsys
 ):
-    seed, children, ports = seeding
+    seed, bundles, ports = building
     seed()
-    original_wait = launcher.wait_for_fixture
+    original_build = launcher.build_until_stopped
 
-    def finished_then_signalled(child, stopping):
-        finished = original_wait(child, stopping)
+    def finished_then_signalled(bundle, stopping):
+        finished = original_build(bundle, stopping)
         signal.raise_signal(signal.SIGTERM)
         return finished
 
     def served(server, **kwargs):
         raise AssertionError("The server started after the cancellation")
 
-    monkeypatch.setattr(launcher, "wait_for_fixture", finished_then_signalled)
+    monkeypatch.setattr(launcher, "build_until_stopped", finished_then_signalled)
     monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", served)
     launcher.start(0)
     captured = capsys.readouterr()
     assert "UI startup cancelled\n" in captured.err
     assert "UI_URL=" not in captured.out
-    assert_cleaned(launcher, children, ports)
+    assert_cleaned(launcher, bundles, ports)
 
 
 def start_tracing_lines(launcher, on_line):
@@ -393,13 +379,13 @@ def start_tracing_lines(launcher, on_line):
 
 @pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
 def test_signal_at_any_startup_line_stops_the_launcher(
-    launcher, monkeypatch, seeding, cancel
+    launcher, monkeypatch, building, cancel
 ):
     """Class check for #213: no line between the handlers and serving loses a signal.
 
     It finds the lines by running start(), so a line added later is covered too.
     """
-    seed, children, ports = seeding
+    seed, bundles, ports = building
     seed()
     previous_handler = signal.getsignal(cancel)
     original_serve = ThreadingHTTPServer.serve_forever
@@ -452,7 +438,7 @@ def test_signal_at_any_startup_line_stops_the_launcher(
         overran.clear()
         start_tracing_lines(launcher, fire)
         assert fired, f"Line {target} was not reached"
-        assert_cleaned(launcher, children, ports)
+        assert_cleaned(launcher, bundles, ports)
         return bool(overran)
 
     monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", serve)
@@ -462,16 +448,19 @@ def test_signal_at_any_startup_line_stops_the_launcher(
 
 
 def cancel_after_changing_handle(launcher, monkeypatch, change):
-    def cancelled(child, stopping):
+    original_build = launcher.build_until_stopped
+
+    def cancelled(bundle, stopping):
+        original_build(bundle, stopping)
         change()
         return False
 
-    monkeypatch.setattr(launcher, "wait_for_fixture", cancelled)
+    monkeypatch.setattr(launcher, "build_until_stopped", cancelled)
 
 
-def test_start_leaves_another_instances_handle(launcher, monkeypatch, seeding):
-    seed, children, ports = seeding
-    seed(block=True)
+def test_start_leaves_another_instances_handle(launcher, monkeypatch, building):
+    seed, bundles, ports = building
+    seed()
     # Indented, so a rewrite in start()'s own json.dumps format would differ.
     foreign = json.dumps(
         {
@@ -488,15 +477,15 @@ def test_start_leaves_another_instances_handle(launcher, monkeypatch, seeding):
     launcher.start(0)
     assert launcher.HANDLE.read_bytes() == foreign
     launcher.HANDLE.unlink()  # assert_cleaned checks everything else start() owns
-    assert_cleaned(launcher, children, ports)
+    assert_cleaned(launcher, bundles, ports)
 
 
-def test_start_exits_cleanly_when_its_handle_is_gone(launcher, monkeypatch, seeding):
-    seed, children, ports = seeding
-    seed(block=True)
+def test_start_exits_cleanly_when_its_handle_is_gone(launcher, monkeypatch, building):
+    seed, bundles, ports = building
+    seed()
     cancel_after_changing_handle(launcher, monkeypatch, launcher.HANDLE.unlink)
     launcher.start(0)
-    assert_cleaned(launcher, children, ports)
+    assert_cleaned(launcher, bundles, ports)
 
 
 def test_cleanup_refuses_paths_outside_disposable_directory(launcher, tmp_path):
@@ -546,7 +535,6 @@ def test_stop_refuses_another_instance_on_the_same_port(launcher, monkeypatch, s
 def test_stop_accepts_authenticated_legacy_handle(launcher, monkeypatch, stale):
     metadata, bundle = stale
     del metadata["created"]
-    del metadata["phase"]
     launcher.HANDLE.write_text(json.dumps(metadata))
     requests = []
 
@@ -588,7 +576,6 @@ def stale(launcher, monkeypatch):
         "created": 123456.0,
         "port": port,
         "token": "synthetic-token-0123456789",
-        "phase": "ready",
     }
     launcher.HANDLE.write_text(json.dumps(metadata))
     bundle = launcher.DATA / metadata["instance"]
@@ -609,8 +596,6 @@ def stale(launcher, monkeypatch):
             NoSuchProcess=psutil.NoSuchProcess,
             AccessDenied=psutil.AccessDenied,
             Error=psutil.Error,
-            STATUS_ZOMBIE=psutil.STATUS_ZOMBIE,
-            process_iter=lambda attrs=None: iter(()),
         ),
     )
     return metadata, bundle
@@ -734,7 +719,6 @@ FIELD_BYTES = WIRE_BYTES.filter(lambda raw: not set(raw) & set(b"\r\n"))
 ESCAPED_BYTES = WIRE_BYTES.map(
     lambda raw: "".join(f"%{byte:02x}" for byte in raw).encode()
 )
-CHILD_STOP_TIMEOUT = 10
 FUZZ_SETTINGS = settings(
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture]
 )
@@ -826,23 +810,18 @@ def test_recover_dead_process_free_port_and_repeat(launcher, stale, capsys):
         probe.bind(("127.0.0.1", metadata["port"]))
 
 
-def test_recover_allows_normal_restart(launcher, monkeypatch, stale, seeding):
+def test_recover_allows_normal_restart(launcher, monkeypatch, stale, building):
     launcher.recover()
     monkeypatch.setattr(launcher, "psutil", psutil)
     metadata, _ = stale
-    # assert_restart expects a previous port in the seeding fixture ledger.
-    seed, children, ports = seeding
+    # assert_restart expects a previous port in the building fixture ledger.
+    seed, bundles, ports = building
     ports.append(metadata["port"])
-    assert_restart(launcher, monkeypatch, (seed, children, ports))
+    assert_restart(launcher, monkeypatch, (seed, bundles, ports))
 
 
-@pytest.mark.parametrize("phase", ["starting", "seeding", "ready"])
-def test_recover_refuses_live_process_even_before_health(
-    launcher, monkeypatch, stale, phase
-):
+def test_recover_refuses_live_process_even_before_health(launcher, monkeypatch, stale):
     metadata, bundle = stale
-    metadata["phase"] = phase
-    launcher.HANDLE.write_text(json.dumps(metadata))
     monkeypatch.setattr(
         launcher.psutil,
         "Process",
@@ -929,367 +908,30 @@ def test_recover_invalid_json_handle(launcher, stale, raw):
     assert_preserved(launcher, bundle)
 
 
-@pytest.mark.parametrize("phase", ["seeding", "bogus", None])
-def test_recover_unknown_fixture_identity(launcher, stale, phase):
-    metadata, bundle = stale
-    metadata["phase"] = phase
-    launcher.HANDLE.write_text(json.dumps(metadata))
-    with pytest.raises(ValueError, match="identity|ownership"):
-        launcher.recover()
-    assert_preserved(launcher, bundle)
-
-
-def starting_handle(launcher, metadata):
-    metadata["phase"] = "starting"
-    metadata.pop("fixture", None)
-    launcher.HANDLE.write_text(json.dumps(metadata))
-
-
-def test_recover_clears_a_starting_handle_after_the_launcher_died(
-    launcher, stale, capsys
-):
-    metadata, bundle = stale
-    starting_handle(launcher, metadata)
-    launcher.recover()
-    assert not launcher.HANDLE.exists()
-    assert not bundle.exists()
-    assert (launcher.DATA / "run-unrelated" / "keep.txt").read_text() == "keep"
-    assert f"Recovered {metadata['instance']}" in capsys.readouterr().out
-    launcher.recover()
-    assert "No owned UI instance remains" in capsys.readouterr().out
-
-
-def test_recover_refuses_a_starting_handle_with_a_live_launcher(
-    launcher, monkeypatch, stale
-):
-    metadata, bundle = stale
-    starting_handle(launcher, metadata)
-    monkeypatch.setattr(
-        launcher.psutil,
-        "Process",
-        lambda pid: SimpleNamespace(create_time=lambda: metadata["created"]),
-    )
-    with pytest.raises(ValueError, match="still live"):
-        launcher.recover()
-    assert_preserved(launcher, bundle)
-
-
-def test_recover_refuses_a_starting_handle_when_a_process_holds_the_bundle(
-    launcher, monkeypatch, stale
-):
-    metadata, bundle = stale
-    starting_handle(launcher, metadata)
-    writer = SimpleNamespace(
-        pid=424242, info={"cmdline": ["python", "build_demo_fixture.py", str(bundle)]}
-    )
-    other = SimpleNamespace(pid=7, info={"cmdline": ["python", "other.py"]})
-    monkeypatch.setattr(
-        launcher.psutil, "process_iter", lambda attrs=None: iter([other, writer])
-    )
-    with pytest.raises(ValueError, match="424242"):
-        launcher.recover()
-    assert_preserved(launcher, bundle)
-
-
-def test_recover_refuses_a_starting_handle_with_an_unreadable_command_line(
-    launcher, monkeypatch, stale
-):
-    metadata, bundle = stale
-    starting_handle(launcher, metadata)
-    unreadable = SimpleNamespace(pid=555, info={"cmdline": None})
-    monkeypatch.setattr(
-        launcher.psutil, "process_iter", lambda attrs=None: iter([unreadable])
-    )
-    with pytest.raises(ValueError, match="555"):
-        launcher.recover()
-    assert_preserved(launcher, bundle)
-
-
-def proc_stat(pid, state, num_threads, comm="python"):
-    """A /proc/<pid>/stat line; None for num_threads means the read fails."""
-    if num_threads is None:
-        raise OSError(f"cannot read /proc/{pid}/stat")
-    return f"{pid} ({comm}) {state} {'0 ' * 16}{num_threads} 0\n".encode()
-
-
-def scan_table(launcher, monkeypatch, entries, stat_lines):
-    """Serve process_iter entries, and the one read of each process's stat file."""
-
-    def read_stat(pid):
-        state, num_threads, *comm = stat_lines[pid]
-        return proc_stat(pid, state, num_threads, *comm)
-
-    table = [SimpleNamespace(pid=pid, info=info) for pid, info in entries.items()]
-    monkeypatch.setattr(launcher.psutil, "process_iter", lambda attrs=None: iter(table))
-    monkeypatch.setattr(launcher, "read_proc_stat", read_stat, raising=False)
-
-
 @pytest.mark.parametrize(
-    ("status", "stat_line"),
+    ("fields", "named"),
     [
-        (psutil.STATUS_RUNNING, ("R", 1)),
-        (psutil.STATUS_SLEEPING, ("S", 1)),
-        (psutil.STATUS_STOPPED, ("T", 1)),
-        (None, ("S", 1)),
-        (psutil.STATUS_ZOMBIE, ("Z", 2)),
-        (psutil.STATUS_ZOMBIE, ("Z", None)),
+        ({"phase": "starting"}, 'phase "starting"'),
+        (
+            {"phase": "ready", "fixture": {"pid": 54321, "created": 123456.0}},
+            'phase "ready", fixture {"pid": 54321',
+        ),
+        ({"fixture": None}, "fixture null"),
+        ({"phase": "bogus"}, 'phase "bogus"'),
+        ({"phase": None}, "phase null"),
     ],
 )
-def test_recover_refuses_a_live_process_with_an_unreadable_command_line(
-    launcher, monkeypatch, stale, status, stat_line
+def test_recover_refuses_a_handle_from_the_child_process_launcher(
+    launcher, stale, capsys, fields, named
 ):
-    """Only a zombie with no other thread is excused; None means unreadable too."""
+    """Its fixture child may outlive it, so the launcher's exit proves nothing."""
     metadata, bundle = stale
-    starting_handle(launcher, metadata)
-    info = {"cmdline": None, "status": status}
-    scan_table(launcher, monkeypatch, {555: info}, {555: stat_line})
-    with pytest.raises(ValueError, match="Cannot read the command line of PID 555"):
-        launcher.recover()
-    assert_preserved(launcher, bundle)
-
-
-@pytest.mark.parametrize(
-    "stat_line",
-    [
-        pytest.param(("Z", 2), id="main thread exited, worker live"),
-        pytest.param(("S", 1), id="worker execve replaced the main thread"),
-        pytest.param(("S", 1, "x) Z (y"), id="command name imitates a zombie"),
-    ],
-)
-def test_scan_judges_a_sampled_zombie_by_one_read_of_its_stat_file(
-    launcher, monkeypatch, stat_line
-):
-    """Separate reads of status and thread count can each be true at different times.
-
-    The psutil methods would report a finished zombie here, as they did when a worker
-    started another thread and the main thread exited between two of their reads.
-    """
-    info = {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
-    scan_table(launcher, monkeypatch, {555: info}, {555: stat_line})
-    table = [
-        SimpleNamespace(
-            pid=555,
-            info=info,
-            num_threads=lambda: 1,
-            status=lambda: psutil.STATUS_ZOMBIE,
-        )
-    ]
-    monkeypatch.setattr(launcher.psutil, "process_iter", lambda attrs=None: iter(table))
-    with pytest.raises(ValueError, match="PID 555"):
-        launcher.require_no_bundle_writer(Path("run-0000000000000000"))
-
-
-def test_scan_skips_a_zombie_whose_stat_file_shows_it_finished(launcher, monkeypatch):
-    info = {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
-    scan_table(launcher, monkeypatch, {555: info}, {555: ("Z", 1)})
-    launcher.require_no_bundle_writer(Path("run-0000000000000000"))
-
-
-def test_scan_refuses_a_command_line_naming_the_bundle_whatever_the_status(
-    launcher, monkeypatch
-):
-    bundle = Path("run-0000000000000000")
-    info = {"cmdline": ["python", str(bundle)], "status": psutil.STATUS_ZOMBIE}
-    scan_table(launcher, monkeypatch, {555: info}, {555: ("Z", 1)})
-    with pytest.raises(ValueError, match="PID 555 still holds"):
-        launcher.require_no_bundle_writer(bundle)
-
-
-needs_zombies = pytest.mark.skipif(os.name == "nt", reason="POSIX only")
-
-
-@pytest.fixture
-def zombie():
-    """The PID of a real child that has exited and has not been reaped."""
-    child = subprocess.Popen([sys.executable, "-c", ""])
-    try:
-        # A child still exiting is not a zombie yet, and the tests would prove nothing.
-        deadline = time.monotonic() + 10
-        while psutil.Process(child.pid).status() != psutil.STATUS_ZOMBIE:
-            assert time.monotonic() < deadline, "the child did not become a zombie"
-            time.sleep(0.01)
-        yield child.pid
-    finally:
-        child.wait(timeout=CHILD_STOP_TIMEOUT)
-
-
-@needs_zombies
-def test_zombie_does_not_block_bundle_scan(launcher, tmp_path, zombie):
-    launcher.require_no_bundle_writer(tmp_path / "run-0000000000000000")
-
-
-@needs_zombies
-def test_recover_clears_a_starting_handle_while_a_real_zombie_exists(
-    launcher, monkeypatch, stale, capsys, zombie
-):
-    metadata, bundle = stale
-    starting_handle(launcher, metadata)
-    monkeypatch.setattr(launcher.psutil, "process_iter", psutil.process_iter)
-    launcher.recover()
-    assert not launcher.HANDLE.exists()
-    assert not bundle.exists()
-    assert f"Recovered {metadata['instance']}" in capsys.readouterr().out
-
-
-@needs_zombies
-def test_psutil_reports_a_real_zombie_as_the_scan_expects(zombie):
-    """The mocked process tables in this file copy this shape from real psutil."""
-    table = {p.pid: p.info for p in psutil.process_iter(["cmdline", "status"])}
-    assert table[zombie] == {"cmdline": None, "status": psutil.STATUS_ZOMBIE}
-
-
-@needs_zombies
-def test_real_stat_file_reads_as_a_finished_zombie(launcher, zombie):
-    process = SimpleNamespace(pid=zombie, info={"status": psutil.STATUS_ZOMBIE})
-    assert launcher.has_finished_exiting(process)
-
-
-@needs_zombies
-def test_real_process_holding_the_bundle_refuses_with_a_zombie_present(
-    launcher, tmp_path, zombie
-):
-    bundle = tmp_path / "run-0000000000000000"
-    holder = subprocess.Popen(
-        [sys.executable, "-c", "import sys; sys.stdin.read()", str(bundle)],
-        stdin=subprocess.PIPE,
-    )
-    try:
-        with pytest.raises(ValueError, match=f"PID {holder.pid} still holds"):
-            launcher.require_no_bundle_writer(bundle)
-    finally:
-        holder.communicate(timeout=CHILD_STOP_TIMEOUT)
-
-
-@needs_zombies
-def test_exited_main_thread_with_a_live_worker_refuses(launcher, tmp_path):
-    """psutil reports such a process as a zombie, yet its worker can still write."""
-    bundle = tmp_path / "run-0000000000000000"
-    code = (
-        "import ctypes, sys, threading\n"
-        "threading.Thread(target=sys.stdin.read).start()\n"
-        "ctypes.CDLL(None).pthread_exit(None)\n"
-    )
-    leader = subprocess.Popen(
-        [sys.executable, "-c", code, str(bundle)], stdin=subprocess.PIPE
-    )
-    try:
-        deadline = time.monotonic() + 10
-        while psutil.Process(leader.pid).status() != psutil.STATUS_ZOMBIE:
-            assert time.monotonic() < deadline, "the main thread did not exit"
-            time.sleep(0.01)
-        assert psutil.Process(leader.pid).num_threads() > 1
-        with pytest.raises(ValueError, match=f"PID {leader.pid}"):
-            launcher.require_no_bundle_writer(bundle)
-    finally:
-        leader.communicate(timeout=CHILD_STOP_TIMEOUT)
-
-
-SCAN_BUNDLE = Path("run-0000000000000000")
-EVERY_STATUS = sorted(
-    value for name, value in vars(psutil).items() if name.startswith("STATUS_")
-)
-SCAN_ENTRIES = st.lists(
-    st.fixed_dictionaries(
-        {
-            "status": st.sampled_from([*EVERY_STATUS, None]),
-            "num_threads": st.sampled_from([1, 2, None]),
-            "cmdline": st.one_of(
-                st.none(),
-                st.lists(st.sampled_from(["python", "other.py", str(SCAN_BUNDLE)])),
-            ),
-        }
-    ),
-    max_size=6,
-)
-
-
-@FUZZ_SETTINGS
-@given(entries=SCAN_ENTRIES)
-def test_bundle_scan_refuses_exactly_for_a_process_that_may_hold_the_bundle(
-    launcher, monkeypatch, entries
-):
-    """Class check for #214: having no command line to read is not being unreadable.
-
-    Whatever the process table holds, any process blocks recovery when it names the
-    bundle, and so does one with no readable command line unless it is a zombie with
-    no other thread.
-    """
-    scan_table(
-        launcher,
-        monkeypatch,
-        {
-            pid: {"status": e["status"], "cmdline": e["cmdline"]}
-            for pid, e in enumerate(entries, 1000)
-        },
-        {
-            pid: ("Z" if e["status"] == psutil.STATUS_ZOMBIE else "S", e["num_threads"])
-            for pid, e in enumerate(entries, 1000)
-        },
-    )
-    blockers = [
-        e_pid
-        for e_pid, e in enumerate(entries, 1000)
-        if (
-            str(SCAN_BUNDLE) in e["cmdline"]
-            if e["cmdline"] is not None
-            else (e["status"], e["num_threads"]) != (psutil.STATUS_ZOMBIE, 1)
-        )
-    ]
-    if blockers:
-        with pytest.raises(ValueError, match=f"PID {blockers[0]}"):
-            launcher.require_no_bundle_writer(SCAN_BUNDLE)
-    else:
-        launcher.require_no_bundle_writer(SCAN_BUNDLE)
-
-
-def test_recover_ignores_a_process_with_an_empty_command_line(
-    launcher, monkeypatch, stale
-):
-    metadata, _ = stale
-    starting_handle(launcher, metadata)
-    kernel_thread = SimpleNamespace(pid=555, info={"cmdline": []})
-    monkeypatch.setattr(
-        launcher.psutil, "process_iter", lambda attrs=None: iter([kernel_thread])
-    )
-    launcher.recover()
-    assert not launcher.HANDLE.exists()
-
-
-def test_recover_refuses_a_starting_handle_when_the_scan_is_denied(
-    launcher, monkeypatch, stale
-):
-    metadata, bundle = stale
-    starting_handle(launcher, metadata)
-
-    def denied(attrs=None):
-        raise launcher.psutil.AccessDenied(77)
-
-    monkeypatch.setattr(launcher.psutil, "process_iter", denied)
-    with pytest.raises(ValueError, match="process scan at PID 77"):
-        launcher.recover()
-    assert_preserved(launcher, bundle)
-
-
-@pytest.mark.parametrize("live_child", [False, True])
-def test_recover_requires_fixture_child_exit(launcher, monkeypatch, stale, live_child):
-    metadata, bundle = stale
-    metadata.update(phase="seeding", fixture={"pid": 54321, "created": 123456.0})
+    metadata.update(fields)
     launcher.HANDLE.write_text(json.dumps(metadata))
-
-    def process(pid):
-        if live_child and pid == 54321:
-            return SimpleNamespace(create_time=lambda: 123456.0)
-        raise launcher.psutil.NoSuchProcess(pid)
-
-    monkeypatch.setattr(launcher.psutil, "Process", process)
-    if live_child:
-        with pytest.raises(ValueError, match="still live"):
-            launcher.recover()
-        assert_preserved(launcher, bundle)
-    else:
+    with pytest.raises(ValueError, match="older launcher") as refused:
         launcher.recover()
-        assert not launcher.HANDLE.exists()
-        assert not bundle.exists()
+    assert named in str(refused.value)
+    assert_preserved(launcher, bundle)
 
 
 def test_recover_preflights_all_bundle_entries(launcher, stale):
@@ -1443,9 +1085,9 @@ def test_start_cli_refuses_bad_ui_port_before_anything_starts(
     monkeypatch.setenv("UI_PORT", raw)
 
     def spawned(*args, **kwargs):
-        raise AssertionError("a process was spawned")
+        raise AssertionError("a fixture was built or a socket was bound")
 
-    monkeypatch.setattr(launcher.subprocess, "Popen", spawned)
+    monkeypatch.setattr(launcher, "build_bundle", spawned)
     monkeypatch.setattr(launcher, "ExclusiveHTTPServer", spawned)
     monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start"])
     assert launcher.main() == 1
@@ -1459,9 +1101,9 @@ def test_port_flag_refuses_what_ui_port_refuses_before_binding(
 ):
     # --port 0 used to bind a random port and --port 70000 crashed in bind (#154).
     def spawned(*args, **kwargs):
-        raise AssertionError("a process was spawned or a socket was bound")
+        raise AssertionError("a fixture was built or a socket was bound")
 
-    monkeypatch.setattr(launcher.subprocess, "Popen", spawned)
+    monkeypatch.setattr(launcher, "build_bundle", spawned)
     monkeypatch.setattr(launcher, "ExclusiveHTTPServer", spawned)
     monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", raw])
     with pytest.raises(SystemExit) as exit_info:

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from catalog_factory import make_frame  # noqa: E402
+from catalog_factory import from_shape, load_shape, make_frame  # noqa: E402
 
 from musicdiscovery.catalog import Catalog  # noqa: E402
 from musicdiscovery.demo import build_catalog, export_demo, parity_queries  # noqa: E402
@@ -52,6 +52,33 @@ def exclusion_cases(catalog: Catalog) -> dict:
 SHAPE_TRACKS = 400
 
 
+def build_fixture(out_dir: Path, shape: bool = True) -> list[str]:
+    """Write the demo bundle to `out_dir` and return one summary line per export.
+
+    The UI launcher calls this in its own process with shape=False, which keeps
+    `out_dir` flat.
+    """
+    out_dir = Path(out_dir)
+    frame = make_frame(per_genre=150)
+    frame["title"] = [f"Synthetic track {t}" for t in frame["track_id"]]
+    frame["license_url"] = "https://creativecommons.org/licenses/by/4.0/"
+    frame["source_url"] = [f"https://example.com/track/{t}" for t in frame["track_id"]]
+    size = export_demo(Catalog(frame), out_dir)
+    cases = {"repeated": exclusion_cases(Catalog(frame))}
+    frame["artist"] = "Only artist"
+    cases["one_artist"] = exclusion_cases(Catalog(frame))
+    lines = [f"wrote {out_dir}: {size.raw} bytes, {size.compressed} bytes gzip"]
+    if shape:
+        shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
+        shape_size = export_demo(shaped, out_dir / "shape")
+        cases["shape"] = exclusion_cases(shaped)
+        lines.append(
+            f"wrote {out_dir}/shape: {shape_size.raw} bytes from {SHAPE_TRACKS} tracks"
+        )
+    (out_dir / "exclusion.json").write_text(json.dumps(cases), encoding="utf-8")
+    return lines
+
+
 def main(argv: list[str]) -> int:
     shape = argv[1:2] != ["--no-shape"]
     if not shape:
@@ -59,26 +86,8 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    frame = make_frame(per_genre=150)
-    frame["title"] = [f"Synthetic track {t}" for t in frame["track_id"]]
-    frame["license_url"] = "https://creativecommons.org/licenses/by/4.0/"
-    frame["source_url"] = [f"https://example.com/track/{t}" for t in frame["track_id"]]
-    size = export_demo(Catalog(frame), Path(argv[1]))
-    cases = {"repeated": exclusion_cases(Catalog(frame))}
-    frame["artist"] = "Only artist"
-    cases["one_artist"] = exclusion_cases(Catalog(frame))
-    if shape:
-        from catalog_factory import from_shape, load_shape
-
-        shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
-        shape_size = export_demo(shaped, Path(argv[1]) / "shape")
-        cases["shape"] = exclusion_cases(shaped)
-    (Path(argv[1]) / "exclusion.json").write_text(json.dumps(cases), encoding="utf-8")
-    print(f"wrote {argv[1]}: {size.raw} bytes, {size.compressed} bytes gzip")
-    if shape:
-        print(
-            f"wrote {argv[1]}/shape: {shape_size.raw} bytes from {SHAPE_TRACKS} tracks"
-        )
+    for line in build_fixture(Path(argv[1]), shape=shape):
+        print(line)
     return 0
 
 

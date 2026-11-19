@@ -247,7 +247,7 @@ class Run:
             notes.append(output)
         survivors = wait_gone(self.state["launcher"], EXIT_TIMEOUT)
         if survivors:
-            # Stop could not reach the instance (for example, still seeding).
+            # Stop could not reach the instance (for example, still building).
             stop_recorded(list(reversed(self.state["launcher"])), notes)
         owner = self.handle_owner()
         if owner is not None and owner[1] and self.node:

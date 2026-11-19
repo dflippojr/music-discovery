@@ -46,10 +46,12 @@ Partial seed failure closes the socket and removes its own files and handle.
 Fixture generation has a 30-second startup deadline, below Playwright's
 60-second readiness timeout. A timeout prints a diagnostic and exits nonzero.
 SIGTERM or Ctrl+C during seeding cancels startup with a cancellation diagnostic.
-The launcher terminates only its owned fixture child and waits for exit,
-escalating to kill after two seconds and allowing two seconds to confirm that
-exit. After the child exits, it closes the socket and removes only its flat
-bundle and handle, within Playwright's 10-second graceful-shutdown window.
+The launcher builds the fixture in its own process and starts no child process.
+On a timeout or a cancellation it waits for the build to return, so a timeout
+fires when the build returns rather than at exactly 30 seconds; the build is
+CPU-bound with no network or other blocking wait and takes a few seconds. It
+then closes the socket and removes only its flat bundle and handle, within
+Playwright's 10-second graceful-shutdown window.
 The stop command requires a ready health endpoint; cancel seeding with SIGTERM
 or Ctrl+C in the owned launcher terminal.
 SIGTERM, Ctrl+C or the stop command triggers cleanup, including a signal that
@@ -176,14 +178,12 @@ Recovery validates the handle's instance name, port, token, PID and process
 creation time using psutil (installed with the dev tools). It requires the
 recorded launcher PID to be absent. A live PID, a reused PID with a different
 creation time, or inaccessible process information preserves the handle and
-bundle. During seeding it also requires the recorded fixture child to have
-exited; a live writer or unknown child identity blocks recovery. A launcher
-killed in phase `starting`, before the child identity is saved, is recovered
-once a read-only psutil scan finds no process whose command line contains the
-run directory's path. A match, or a process whose command line cannot be read,
-refuses and names the PID. Zombies are skipped, since they have no command line
-and hold no files. A process reported as a zombie that still has other threads
-running (its main thread exited, its workers did not) is not skipped and refuses.
+bundle. The launcher builds the fixture in its own process, so once it has
+exited nothing else can still be writing the run directory. That holds for a
+launcher killed while it was building the fixture too. A handle written by an
+older launcher that built the fixture in a child process (one with a `phase` or
+`fixture` field) is refused with a message naming the field, since that child
+could outlive the launcher.
 Older handles without process creation times cannot be recovered automatically.
 Their ready, owned servers can still be stopped with npm run ui:stop.
 
@@ -200,7 +200,7 @@ terminal and verify its new UI_INSTANCE against GET /__ui_health. Finish with
 npm run ui:stop and verify the new handle and bundle are removed.
 
 If recovery refuses, preserve the files and investigate the recorded PID and
-creation time, any recorded fixture child, and the port's listener using the
+creation time and the port's listener using the
 host's process/network tools. Cancel a still-seeding owned launcher with Ctrl+C
 in its terminal; use ui:stop for a ready owned instance. For PID reuse, missing
 identity or denied process access, ask the owner to establish which process and
