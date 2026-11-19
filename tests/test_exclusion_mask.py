@@ -10,7 +10,7 @@ from musicdiscovery.evaluation import PopularRanker, RandomRanker
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import Preference
 from musicdiscovery.profile_ranker import ProfileDiverseRanker, ProfileRanker
-from musicdiscovery.ranking import BaselineRanker, _allowed
+from musicdiscovery.ranking import BaselineRanker, allowed_rows
 
 
 def _audio_embedding():
@@ -64,10 +64,10 @@ def test_all_seed_artist_catalog_is_empty(ranker):
 
 def test_mask_is_fresh_boolean(catalog):
     pref = Preference(SEEDS, exclude_seed_artist=True)
-    first = _allowed(pref, catalog)
+    first = allowed_rows(pref, catalog)
     assert first.dtype == bool
     first[:] = False
-    second = _allowed(pref, catalog)
+    second = allowed_rows(pref, catalog)
     assert second is not first and second.any()
 
 

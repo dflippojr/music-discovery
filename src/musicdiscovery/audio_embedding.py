@@ -28,6 +28,7 @@ from musicdiscovery.ranking import (
     Recommendation,
     allowed_rows,
     quality_terms,
+    top_k,
 )
 
 MODEL_ID = "google/embeddinggemma-2"
@@ -542,13 +543,11 @@ class AudioEmbeddingRanker:
                     self.description_weight * (aligned.unit @ vector),
                 )
             )
-        terms += quality_terms(preference, catalog, self._baseline._fitted(catalog))
+        terms += quality_terms(preference, catalog, self._baseline.fit(catalog))
         scores = np.sum([values for _, _, values in terms], axis=0)
 
-        candidates = np.flatnonzero(allowed_rows(preference, catalog) & aligned.has)
-        # Highest score first; ties go to the lower track id.
-        order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
-        chosen = candidates[order[: preference.k]]
+        allowed = allowed_rows(preference, catalog) & aligned.has
+        chosen = top_k(scores, allowed, catalog, preference.k)
         return [BaselineRanker.build(catalog, int(row), terms) for row in chosen]
 
 

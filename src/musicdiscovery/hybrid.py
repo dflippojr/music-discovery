@@ -11,7 +11,7 @@ import numpy as np
 from musicdiscovery.catalog import Catalog
 from musicdiscovery.jsonfiles import load_packaged_json
 from musicdiscovery.preference import Preference
-from musicdiscovery.ranking import BaselineRanker, Recommendation
+from musicdiscovery.ranking import BaselineRanker, Recommendation, top_k
 
 CONFIG_NAME = "hybrid_config.json"
 VARIETY_TEXT = "added for variety: a different artist or genre from the picks so far"
@@ -121,9 +121,6 @@ class Metadata(TfIdf):
         )
 
 
-_Metadata = Metadata  # the old private name, kept for the existing tests
-
-
 class HybridRanker:
     """Baseline score + metadata similarity + popularity, re-ranked with MMR."""
 
@@ -177,11 +174,9 @@ class HybridRanker:
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
         config = self.config
         terms, relevance, allowed = self.relevance(preference, catalog)
-        candidates = np.flatnonzero(allowed)
-        if not len(candidates):
+        pool = top_k(relevance, allowed, catalog, max(config.pool_size, preference.k))
+        if not len(pool):
             return []
-        order = np.lexsort((catalog.track_ids[candidates], -relevance[candidates]))
-        pool = candidates[order[: max(config.pool_size, preference.k)]]
         picks, variety = mmr(
             pool,
             relevance[pool],

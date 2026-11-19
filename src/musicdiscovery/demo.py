@@ -119,7 +119,7 @@ def build_catalog(catalog: Catalog) -> dict:
         if axis.column not in catalog.feature_columns:
             raise DemoError(f"catalog has no column {axis.column!r} for axis {name!r}")
     frame = catalog.frame
-    fit = ranking.BaselineRanker()._fitted(catalog)
+    fit = ranking.BaselineRanker().fit(catalog)
     config = HybridConfig.load()
     metadata = Metadata(catalog)
     if metadata.size > _UINT16_MAX:
@@ -171,7 +171,7 @@ def build_catalog(catalog: Catalog) -> dict:
             "axisWeight": ranking.AXIS_WEIGHT,
             "genreWeight": ranking.GENRE_WEIGHT,
             "tagWeight": ranking.TAG_WEIGHT,
-            "maxExplanations": ranking._MAX_EXPLANATIONS,
+            "maxExplanations": ranking.MAX_EXPLANATIONS,
         },
         "hybrid": {
             "tokens": metadata.tokens,

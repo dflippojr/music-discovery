@@ -27,6 +27,7 @@ from musicdiscovery.ranking import (
     Recommendation,
     allowed_rows,
     display_title,
+    top_k,
 )
 
 
@@ -75,10 +76,8 @@ class PopularRanker:
         genre = catalog.frame["genre_top"].iloc[catalog.position[preference.seeds[0]]]
         if isinstance(genre, str):
             allowed &= catalog.has_genre(genre)
-        candidates = np.flatnonzero(allowed)
-        listens = catalog.frame["listens"].to_numpy(dtype=np.float64)[candidates]
-        order = np.lexsort((catalog.track_ids[candidates], -listens))
-        return _bare(catalog, candidates[order[: preference.k]].tolist())
+        listens = catalog.frame["listens"].to_numpy(dtype=np.float64)
+        return _bare(catalog, top_k(listens, allowed, catalog, preference.k).tolist())
 
 
 def _audio_embedding(

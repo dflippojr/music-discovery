@@ -26,6 +26,7 @@ from musicdiscovery.ranking import (
     Recommendation,
     allowed_rows,
     quality_terms,
+    top_k,
 )
 
 MODEL_NAME = "profile_ranker.json"
@@ -161,7 +162,7 @@ class ProfileRanker:
 
     def prepare(self, catalog: Catalog) -> Prepared:
         if self._catalog is not catalog or self._prepared is None:
-            self._prepared = Prepared(catalog, self._baseline._fitted(catalog))
+            self._prepared = Prepared(catalog, self._baseline.fit(catalog))
             self._catalog = catalog
         return self._prepared
 
@@ -184,9 +185,8 @@ class ProfileRanker:
         terms += quality_terms(preference, catalog, prepared.fit)
         scores = np.sum([values for _, _, values in terms], axis=0)
 
-        candidates = np.flatnonzero(allowed_rows(preference, catalog))
-        order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
-        return terms, scores, candidates[order]
+        allowed = allowed_rows(preference, catalog)
+        return terms, scores, top_k(scores, allowed, catalog, None)
 
     def rank(self, preference: Preference, catalog: Catalog) -> list[Recommendation]:
         terms, _, ranked = self.score(preference, catalog)

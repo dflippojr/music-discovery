@@ -323,7 +323,7 @@ def bundled_rankers(catalog: Catalog, bundle: dict) -> dict:
     projected = _decoded(base["projected"], "<i2").reshape(n, base["dims"])
     projected *= base["projectedScale"]
     baseline = BaselineRanker()
-    fit = baseline._fitted(catalog)
+    fit = baseline.fit(catalog)
     norms = np.linalg.norm(projected, axis=1)
     norms[norms == 0] = 1.0
     fit.projected, fit.unit = projected, projected / norms[:, None]
