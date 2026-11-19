@@ -384,8 +384,13 @@ def test_signal_after_the_fixture_cancels_before_ready(
     assert_cleaned(launcher, bundles, ports)
 
 
-def start_tracing_lines(launcher, on_line):
-    """Run start(0), calling on_line before each launcher line on this thread."""
+def start_tracing_lines(launcher, monkeypatch, on_line):
+    """Run `start` through main(), calling on_line before each launcher line.
+
+    Only this thread's lines are traced. Returns main()'s exit status.
+    """
+    port = str(free_port())
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "start", "--port", port])
 
     def local(frame, event, _arg):
         if event == "line":
@@ -398,26 +403,28 @@ def start_tracing_lines(launcher, on_line):
     previous = sys.gettrace()  # coverage's tracer, when it runs one
     sys.settrace(enter)
     try:
-        launcher.start(0)
-    except launcher.StartupCancelled:
-        pass  # a signal before the ready lines cancels startup (exit 1 from main)
+        return launcher.main()
     finally:
         sys.settrace(previous)
 
 
 @pytest.mark.parametrize("cancel", [signal.SIGTERM, signal.SIGINT])
 def test_signal_at_any_startup_line_stops_the_launcher(
-    launcher, monkeypatch, building, cancel
+    launcher, monkeypatch, building, capsys, cancel
 ):
-    """Class check for #213: no line between the handlers and serving loses a signal.
+    """Class check for #213 and #254: a signal at any startup line has one outcome.
 
+    No line between the handlers and serving loses a signal. A signal at or
+    before the readiness commit (the last stop check before UI_URL=) cancels:
+    the diagnostic, no ready line, exit 1. After it, the launcher prints both
+    ready lines, then stops as when serving: exit 0. Either way it cleans up.
     It finds the lines by running start(), so a line added later is covered too.
     """
     seed, bundles, ports = building
     seed()
     previous_handler = signal.getsignal(cancel)
     original_serve = ThreadingHTTPServer.serve_forever
-    lines = {}
+    lines = {}  # in the order they first run, which is not file order
     served = []
 
     def handlers_installed():
@@ -430,12 +437,24 @@ def test_signal_at_any_startup_line_stops_the_launcher(
     monkeypatch.setattr(
         ThreadingHTTPServer, "serve_forever", lambda *_, **__: served.append(True)
     )
-    start_tracing_lines(launcher, record)
+    assert start_tracing_lines(launcher, monkeypatch, record) == 0
+    capsys.readouterr()
     source = Path(launcher.__file__).read_text(encoding="utf-8").splitlines()
     reached = [source[line - 1] for line in lines]
     assert any("UI_URL=" in text for text in reached)
     assert any("UI_INSTANCE=" in text for text in reached)
     assert any("serve_forever" in text for text in reached)
+    commits = [n for n, text in enumerate(source, 1) if "# readiness commit" in text]
+    assert len(commits) == 1, "start() must mark one readiness commit"
+    commit = commits[0]
+    assert "stopping.is_set()" in source[commit - 1]
+    order = list(lines)
+    url = next(n for n in order if "UI_URL=" in source[n - 1])
+    assert commit in order and order.index(commit) < order.index(url)
+    assert not any(
+        "stopping.is_set()" in source[n - 1]
+        for n in order[order.index(commit) + 1 : order.index(url)]
+    ), "the readiness commit must be the last stop check before UI_URL="
 
     overran = []
 
@@ -464,14 +483,30 @@ def test_signal_at_any_startup_line_stops_the_launcher(
                 signal.raise_signal(cancel)
 
         overran.clear()
-        start_tracing_lines(launcher, fire)
+        status = start_tracing_lines(launcher, monkeypatch, fire)
+        captured = capsys.readouterr()
         assert fired, f"Line {target} was not reached"
         assert_cleaned(launcher, bundles, ports)
-        return bool(overran)
+        announced = "UI_URL=" in captured.out, "UI_INSTANCE=" in captured.out
+        cancelled = "UI startup cancelled" in captured.err
+        return bool(overran), (status, announced, cancelled)
 
     monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", serve)
-    lost = [f"{line}: {source[line - 1].strip()}" for line in lines if signal_at(line)]
+    lost, wrong = [], []
+    for position, line in enumerate(order):
+        overran_now, outcome = signal_at(line)
+        label = f"{line}: {source[line - 1].strip()}"
+        if overran_now:
+            lost.append(label)
+        before_commit = position <= order.index(commit)
+        # At or before the commit: cancel, exit 1. After it: ready lines, exit 0.
+        expected = (
+            (1, (False, False), True) if before_commit else (0, (True, True), False)
+        )
+        if outcome != expected:
+            wrong.append(f"{label} -> {outcome}, expected {expected}")
     assert not lost, "A signal at these lines was lost:\n" + "\n".join(lost)
+    assert not wrong, "Wrong outcome for a signal at:\n" + "\n".join(wrong)
     assert signal.getsignal(cancel) == previous_handler
 
 
