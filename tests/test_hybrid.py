@@ -13,7 +13,7 @@ from musicdiscovery.hybrid import (
     HybridConfig,
     HybridConfigError,
     HybridRanker,
-    _Metadata,
+    Metadata,
 )
 from musicdiscovery.preference import Preference
 from musicdiscovery.ranking import Ranker
@@ -96,7 +96,7 @@ def test_exclude_seed_artist_and_small_catalog(catalog):
 
 
 def test_metadata_similarity_prefers_shared_genre_ids_and_tags(catalog):
-    metadata = _Metadata(catalog)
+    metadata = Metadata(catalog)
     seed_row = catalog.position[100]
     sim = metadata.similarity([seed_row])
     genres = catalog.frame["genre_top"].to_numpy()
@@ -110,7 +110,7 @@ def test_metadata_similarity_without_tokens():
     frame["genre_ids"] = [[] for _ in range(len(frame))]
     frame["tags"] = [[] for _ in range(len(frame))]
     catalog = Catalog(frame)
-    sim = _Metadata(catalog).similarity([0])
+    sim = Metadata(catalog).similarity([0])
     assert not sim.any()
     assert len(HybridRanker().rank(pref(), catalog)) == 10
 

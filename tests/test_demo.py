@@ -176,7 +176,7 @@ def test_quantised_projection_stays_close(bundle, catalog):
     data = json.loads((bundle[0] / demo.CATALOG_FILE).read_text())
     base = data["baseline"]
     stored = ints(base["projected"], "<i2").reshape(len(catalog), -1)
-    fit = demo.ranking.BaselineRanker()._fitted(catalog)
+    fit = demo.ranking.BaselineRanker().fit(catalog)
     assert np.abs(stored * base["projectedScale"] - fit.projected).max() < 1e-3
 
 

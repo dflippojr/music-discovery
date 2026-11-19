@@ -2,8 +2,10 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -14,7 +16,7 @@ from musicdiscovery.cli import main
 from musicdiscovery.hybrid import HybridRanker
 from musicdiscovery.preference import AXES, Preference, PreferenceError, Quality
 from musicdiscovery.profile_ranker import ProfileRanker
-from musicdiscovery.ranking import BaselineRanker
+from musicdiscovery.ranking import BaselineRanker, top_k
 
 GENRES = ["Folk", "Rock", "Jazz"]
 RANKERS = {"baseline": BaselineRanker, "hybrid": HybridRanker, "profile": ProfileRanker}
@@ -266,3 +268,33 @@ def test_cli_survives_cp1252_console(tmp_path, title):
     )
     assert result.returncode == 0, result.stderr.decode()
     assert result.stdout
+
+
+def test_top_k_breaks_ties_to_the_lower_track_id_whatever_the_row_order():
+    frame = make_frame(per_genre=2)
+    frame["track_id"] = [7, 3, 9, 1, 5, 2]  # ids out of row order
+    catalog = Catalog(frame)
+    by_id = {int(t): row for row, t in enumerate(catalog.track_ids)}
+    scores = np.zeros(len(catalog))
+    for track, score in {7: 1.0, 3: 2.0, 9: 2.0, 1: 0.5, 5: 2.0, 2: 3.0}.items():
+        scores[by_id[track]] = score
+    allowed = np.ones(len(catalog), dtype=bool)
+    allowed[by_id[2]] = False  # the best score, but not allowed
+
+    def ranked(k):
+        return catalog.track_ids[top_k(scores, allowed, catalog, k)].tolist()
+
+    assert ranked(3) == [3, 5, 9]
+    assert ranked(None) == ranked(99) == [3, 5, 9, 7, 1]
+    assert not len(top_k(scores, np.zeros(len(catalog), dtype=bool), catalog, 3))
+
+
+def test_every_ranker_orders_its_top_k_through_one_helper():
+    """The ties-to-the-lower-id rule lives only in ranking.top_k (#255)."""
+    package = Path(__file__).resolve().parents[1] / "src" / "musicdiscovery"
+    users = {
+        str(path.relative_to(package)): len(re.findall(r"\blexsort\(", text))
+        for path in package.rglob("*.py")
+        if "lexsort(" in (text := path.read_text(encoding="utf-8"))
+    }
+    assert users == {"ranking.py": 1}

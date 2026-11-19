@@ -28,6 +28,7 @@ from musicdiscovery.ranking import (
     Recommendation,
     allowed_rows,
     quality_terms,
+    top_k,
 )
 
 MODEL_ID = "google/embeddinggemma-2"
@@ -124,11 +125,6 @@ def member_name(track_id: int) -> str:
     return f"fma_small/{name[:3]}/{name}.mp3"
 
 
-def confined(path: Path) -> Path:
-    """Resolve a user-supplied path and keep it inside the working directory."""
-    return paths.confined(path, AudioEmbeddingError)
-
-
 def _described(error: Exception) -> str:
     """The error's type and message on one line, for a one-line CLI report."""
     return f"{type(error).__name__}: {' '.join(str(error).split())}"
@@ -179,7 +175,7 @@ class VectorStore:
 
     def save(self, path: Path) -> None:
         """Write the cache atomically: a crash never leaves a half-written file."""
-        path = confined(path)
+        path = paths.confined(path, AudioEmbeddingError)
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         with part.open("wb") as handle:
@@ -193,7 +189,7 @@ class VectorStore:
 
     @classmethod
     def load(cls, path: Path) -> "VectorStore":
-        path = confined(path)
+        path = paths.confined(path, AudioEmbeddingError)
         if not path.exists():
             raise AudioEmbeddingError(
                 f"no audio vectors at {path}; run `musicdiscovery embed-audio`"
@@ -269,7 +265,8 @@ def embed_archive(
     """
     if batch_size < 1:
         raise AudioEmbeddingError("batch_size must be at least 1")
-    archive, out = confined(archive), confined(out)
+    archive = paths.confined(archive, AudioEmbeddingError)
+    out = paths.confined(out, AudioEmbeddingError)
     if not archive.exists():
         raise AudioEmbeddingError(f"no audio archive at {archive}")
     archive_sha1 = sha1_of(archive)
@@ -546,13 +543,11 @@ class AudioEmbeddingRanker:
                     self.description_weight * (aligned.unit @ vector),
                 )
             )
-        terms += quality_terms(preference, catalog, self._baseline._fitted(catalog))
+        terms += quality_terms(preference, catalog, self._baseline.fit(catalog))
         scores = np.sum([values for _, _, values in terms], axis=0)
 
-        candidates = np.flatnonzero(allowed_rows(preference, catalog) & aligned.has)
-        # Highest score first; ties go to the lower track id.
-        order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
-        chosen = candidates[order[: preference.k]]
+        allowed = allowed_rows(preference, catalog) & aligned.has
+        chosen = top_k(scores, allowed, catalog, preference.k)
         return [BaselineRanker.build(catalog, int(row), terms) for row in chosen]
 
 

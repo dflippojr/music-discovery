@@ -16,7 +16,7 @@ GENRE_WEIGHT = 0.15
 TAG_WEIGHT = 0.10
 Z_CLIP = 3.0
 _FEATURE_CLIP = 5.0
-_MAX_EXPLANATIONS = 3
+MAX_EXPLANATIONS = 3  # score terms named in one explanation
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,18 @@ def allowed_rows(preference: Preference, catalog: Catalog) -> np.ndarray:
     return allowed
 
 
-_allowed = allowed_rows  # the old private name, kept for the existing tests
+def top_k(
+    scores: np.ndarray, allowed: np.ndarray, catalog: Catalog, k: int | None
+) -> np.ndarray:
+    """The rows of the `k` highest-scoring allowed tracks, best first.
+
+    `allowed` is a boolean mask over the catalog's rows. Ties go to the lower
+    track id, so the order does not depend on row order. `k` of None keeps every
+    allowed row.
+    """
+    candidates = np.flatnonzero(allowed)
+    order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
+    return candidates[order[:k]]
 
 
 def quality_terms(
@@ -142,7 +153,8 @@ class BaselineRanker:
         self._fit_catalog: Catalog | None = None
         self._fit: Fit | None = None
 
-    def _fitted(self, catalog: Catalog) -> Fit:
+    def fit(self, catalog: Catalog) -> Fit:
+        """The features fit on `catalog`, kept until another catalog is passed."""
         if self._fit is None or self._fit_catalog is not catalog:
             self._fit = Fit(catalog, self.dimensions)
             self._fit_catalog = catalog
@@ -154,10 +166,7 @@ class BaselineRanker:
             # The seeds' features say nothing (they sit at the catalog mean)
             # and nothing is liked or disliked: return nothing, not the lowest ids.
             return []
-        candidates = np.flatnonzero(allowed)
-        # Highest score first; ties go to the lower track id.
-        order = np.lexsort((catalog.track_ids[candidates], -scores[candidates]))
-        chosen = candidates[order[: preference.k]]
+        chosen = top_k(scores, allowed, catalog, preference.k)
         return [self.build(catalog, int(row), terms) for row in chosen]
 
     def score_terms(
@@ -165,7 +174,7 @@ class BaselineRanker:
     ) -> tuple[list[tuple[str, str, np.ndarray]], np.ndarray, np.ndarray]:
         """Each score term per track, their sum, and which tracks may be shown."""
         preference.validate(catalog)
-        fit = self._fitted(catalog)
+        fit = self.fit(catalog)
         seed_rows = [catalog.position[s] for s in preference.seeds]
 
         centre = fit.projected[seed_rows].mean(axis=0)
@@ -187,7 +196,7 @@ class BaselineRanker:
         ordered = sorted(parts, key=lambda t: -t.value)
         # Only terms that raised the score explain it; a track that nothing in
         # the query favours gets no explanation rather than an untrue one.
-        explained = [t for t in ordered if t.value > 0][:_MAX_EXPLANATIONS]
+        explained = [t for t in ordered if t.value > 0][:MAX_EXPLANATIONS]
         frame = catalog.frame
         track_id = int(catalog.track_ids[row])
         return Recommendation(

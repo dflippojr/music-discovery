@@ -21,8 +21,6 @@ from musicdiscovery.evaluation import (
     PopularRanker,
     Query,
     RandomRanker,
-    _bare,
-    _relative,
     catalog_version,
     evaluate,
     evaluate_profiles,
@@ -38,6 +36,7 @@ from musicdiscovery.evaluation import (
     write_profiles,
     write_queries,
 )
+from musicdiscovery.evaluation.report import _relative
 from musicdiscovery.preference import Preference, PreferenceError
 from musicdiscovery.profiles import (
     INTERACTIONS_PER_PROFILE,
@@ -51,6 +50,7 @@ from musicdiscovery.profiles import (
     ndcg,
     reciprocal_rank,
 )
+from musicdiscovery.rankers import _bare
 
 GENRES = ["Folk", "Rock", "Jazz"]
 
@@ -630,12 +630,12 @@ def test_held_out_tags_are_never_visible_to_a_ranker(
 ):
     from test_audio_embedding import store_for
 
-    from musicdiscovery import evaluation
+    from musicdiscovery import rankers
     from musicdiscovery.audio_embedding import DEFAULT_VECTORS
 
     store_for(tagged).save(DEFAULT_VECTORS)
     holdout = HeldOut(tagged)
-    original = dict(evaluation.RANKERS)
+    original = dict(rankers.RANKERS)
     spies = {}
 
     def factory(name):
@@ -645,7 +645,7 @@ def test_held_out_tags_are_never_visible_to_a_ranker(
 
         return build
 
-    monkeypatch.setattr(evaluation, "RANKERS", {n: factory(n) for n in original})
+    monkeypatch.setattr(rankers, "RANKERS", {n: factory(n) for n in original})
     evaluate(tagged, tagged_queries, list(original), resamples=10)
     assert set(spies) == set(original)
     blind_runs = 0
@@ -823,11 +823,11 @@ class Fixed:
 
 
 def test_evaluation_drops_weak_signals(monkeypatch, catalog):
-    from musicdiscovery import evaluation
+    from musicdiscovery import rankers
 
     # 103 is a weak held-out play, so ranking it first is not a hit.
     fixed = Fixed([103, 104, 102])
-    monkeypatch.setattr(evaluation, "RANKERS", {"fixed": lambda: fixed})
+    monkeypatch.setattr(rankers, "RANKERS", {"fixed": lambda: fixed})
     profiles = [
         _profile([(100, 0.9), (101, 0.1)], [(102, 0.8), (103, 0.2)], split, i)
         for i, split in enumerate(["validation", "test"])
@@ -844,10 +844,10 @@ def test_evaluation_drops_weak_signals(monkeypatch, catalog):
 
 
 def test_evaluation_refuses_unusable_profiles(monkeypatch, catalog):
-    from musicdiscovery import evaluation
+    from musicdiscovery import rankers
 
     leaky = Fixed([100, 102], drop_seeds=False)
-    monkeypatch.setattr(evaluation, "RANKERS", {"fixed": lambda: leaky})
+    monkeypatch.setattr(rankers, "RANKERS", {"fixed": lambda: leaky})
     profile = [_profile([(100, 0.9)], [(102, 0.8)])]
     with pytest.raises(EvaluationError, match="history tracks"):
         evaluate_profiles(catalog, profile, ["fixed"], resamples=10)
@@ -989,7 +989,7 @@ def test_unknown_benchmark_is_refused(tmp_path, catalog):
 def test_stored_file_hashes_ignore_the_checkout_line_endings(tmp_path):
     # eval/queries.json is CRLF on a Windows checkout and LF on Linux; the hash
     # in a report must not depend on which one wrote it (#105).
-    from musicdiscovery.evaluation import _sha256
+    from musicdiscovery.evaluation.report import _sha256
 
     lf = tmp_path / "lf.json"
     crlf = tmp_path / "crlf.json"

@@ -1,20 +1,26 @@
-"""The working-directory check that evaluation and audio_embedding both expose.
+"""The working-directory check every module calls as `paths.confined` (#255).
 
 Characterizes what callers see: the resolved path for a path inside the working
-directory, and the exact exception type and message for one outside it.
+directory, and the exact exception type and message for one outside it, with
+each error class a caller passes.
 """
 
+from functools import partial
 from pathlib import Path
 
 import pytest
 
-from musicdiscovery import audio_embedding, evaluation
+from musicdiscovery import paths
 from musicdiscovery.audio_embedding import AudioEmbeddingError
+from musicdiscovery.demo import DemoError
 from musicdiscovery.evaluation import EvaluationError
+from musicdiscovery.feedback import FeedbackError
+from musicdiscovery.study import StudyError
 
+ERRORS = [AudioEmbeddingError, DemoError, EvaluationError, FeedbackError, StudyError]
 CHECKS = [
-    pytest.param(evaluation.confined, EvaluationError, id="evaluation"),
-    pytest.param(audio_embedding.confined, AudioEmbeddingError, id="audio_embedding"),
+    pytest.param(partial(paths.confined, error=error), error, id=error.__name__)
+    for error in ERRORS
 ]
 
 
@@ -26,13 +32,15 @@ def work(tmp_path, monkeypatch):
     return work
 
 
-@pytest.mark.parametrize("check", [evaluation.confined, audio_embedding.confined])
-def test_a_relative_path_inside_resolves_under_the_working_directory(work, check):
+@pytest.mark.parametrize(("check", "error"), CHECKS)
+def test_a_relative_path_inside_resolves_under_the_working_directory(
+    work, check, error
+):
     assert check(Path("out") / "run.json") == (work / "out" / "run.json").resolve()
 
 
-@pytest.mark.parametrize("check", [evaluation.confined, audio_embedding.confined])
-def test_an_absolute_path_inside_resolves_to_itself(work, check):
+@pytest.mark.parametrize(("check", "error"), CHECKS)
+def test_an_absolute_path_inside_resolves_to_itself(work, check, error):
     inside = work / "run.json"
     assert check(inside) == inside.resolve()
 

@@ -19,11 +19,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from musicdiscovery import ranking
+from musicdiscovery import paths, ranking
 from musicdiscovery.catalog import Catalog
-from musicdiscovery.evaluation import confined, generate_queries, make_ranker
+from musicdiscovery.evaluation import generate_queries
 from musicdiscovery.hybrid import VARIETY_TEXT, HybridConfig, Metadata
 from musicdiscovery.preference import AXES, Preference
+from musicdiscovery.rankers import make_ranker
 
 FORMAT_VERSION = 1
 CATALOG_FILE = "catalog.json"
@@ -118,7 +119,7 @@ def build_catalog(catalog: Catalog) -> dict:
         if axis.column not in catalog.feature_columns:
             raise DemoError(f"catalog has no column {axis.column!r} for axis {name!r}")
     frame = catalog.frame
-    fit = ranking.BaselineRanker()._fitted(catalog)
+    fit = ranking.BaselineRanker().fit(catalog)
     config = HybridConfig.load()
     metadata = Metadata(catalog)
     if metadata.size > _UINT16_MAX:
@@ -170,7 +171,7 @@ def build_catalog(catalog: Catalog) -> dict:
             "axisWeight": ranking.AXIS_WEIGHT,
             "genreWeight": ranking.GENRE_WEIGHT,
             "tagWeight": ranking.TAG_WEIGHT,
-            "maxExplanations": ranking._MAX_EXPLANATIONS,
+            "maxExplanations": ranking.MAX_EXPLANATIONS,
         },
         "hybrid": {
             "tokens": metadata.tokens,
@@ -311,7 +312,7 @@ def export_demo(catalog: Catalog, out_dir: Path, release: bool = False) -> Bundl
     With `release`, refuse to export from a work tree with uncommitted changes.
     A refused export changes nothing in `out_dir`.
     """
-    out_dir = confined(out_dir)
+    out_dir = paths.confined(out_dir, DemoError)
     source_stamp = build_source(release)
     bundle = {  # built first: each of these can refuse the catalog
         CATALOG_FILE: build_catalog(catalog),
