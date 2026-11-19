@@ -73,6 +73,29 @@ def test_bundle_is_stamped_with_the_checked_out_commit(bundle):
     assert all((ROOT / path).exists() for path in source["paths"])
 
 
+def no_git(*args, **kwargs):
+    raise AssertionError(f"git ran: {args}")
+
+
+def test_a_given_source_is_written_without_running_git(catalog, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(demo, "_git", no_git)
+    stamp = {"repo": demo.SOURCE_REPO, "sha": "synthetic", "built": "x", "paths": []}
+    demo.export_demo(catalog, tmp_path / "out", source=stamp)
+    written = json.loads((tmp_path / "out" / demo.SOURCE_FILE).read_text())
+    assert written == stamp
+
+
+def test_a_release_refuses_a_given_source_and_writes_nothing(
+    catalog, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(demo, "_git", no_git)
+    with pytest.raises(demo.DemoError, match="release is stamped with its commit"):
+        demo.export_demo(catalog, tmp_path / "out", release=True, source={})
+    assert not (tmp_path / "out").exists()
+
+
 def test_stamp_needs_a_git_checkout(monkeypatch):
     def no_git(*args, **kwargs):
         raise FileNotFoundError("git")

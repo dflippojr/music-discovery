@@ -36,8 +36,8 @@ PACKAGE_PATH = "src/musicdiscovery"  # where a checkout tracks the package
 # Repository paths the bundle is built from; a site compares these with main.
 SOURCE_PATHS = (PACKAGE_PATH, "scripts/vendor-into-site")
 DIRTY_SUFFIX = "-dirty"
-# Seconds each git call may take. The UI launcher waits for the export before it
-# cleans up, so a stalled git (a lock, a hook) must fail the export, not hang it.
+# Seconds each git call may take, so a stalled git (a lock, a hook) fails the
+# export instead of hanging it. The UI launcher passes its own stamp and runs none.
 GIT_TIMEOUT = 5
 DEFERRED_FILES = (SOURCES_FILE,)
 STATIC_FILES = (
@@ -315,14 +315,23 @@ def build_source(release: bool = False) -> dict:
     }
 
 
-def export_demo(catalog: Catalog, out_dir: Path, release: bool = False) -> BundleSize:
+def export_demo(
+    catalog: Catalog,
+    out_dir: Path,
+    release: bool = False,
+    source: dict | None = None,
+) -> BundleSize:
     """Write the bundle into `out_dir` (inside the working directory).
 
     With `release`, refuse to export from a work tree with uncommitted changes.
+    `source` replaces the commit stamp read from git, for a bundle that names no
+    commit (the synthetic UI fixture); a release always reads git.
     A refused export changes nothing in `out_dir`.
     """
     out_dir = paths.confined(out_dir, DemoError)
-    source_stamp = build_source(release)
+    if source is not None and release:
+        raise DemoError("a release is stamped with its commit; pass no source")
+    source_stamp = build_source(release) if source is None else source
     bundle = {  # built first: each of these can refuse the catalog
         CATALOG_FILE: build_catalog(catalog),
         SOURCES_FILE: build_sources(catalog),

@@ -250,24 +250,36 @@ def test_sigkill_during_the_build_leaves_a_handle_that_recover_clears(launchers)
         probe.bind(("127.0.0.1", port))
 
 
-# Runs the real launcher with a one-second bound on each git call the export makes.
-SHORT_GIT_TIMEOUT = """\
-import importlib.util, sys
-from musicdiscovery import demo
-demo.GIT_TIMEOUT = 1
+# Runs the real launcher, but its build waits for a go.txt file before it calls
+# the real builder, so a test can signal the launcher at a known point.
+BUILD_ON_GO = """\
+import importlib.util, sys, time
+from pathlib import Path
 spec = importlib.util.spec_from_file_location("ui_instance", "scripts/ui_instance.py")
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
+real_build = launcher.build_bundle
+
+
+def build_on_go(bundle):
+    Path("building.txt").write_text(str(bundle), encoding="utf-8")
+    while not Path("go.txt").exists():
+        time.sleep(0.05)
+    real_build(bundle)
+
+
+launcher.build_bundle = build_on_go
 sys.exit(launcher.main())
 """
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the stand-in git is a POSIX script")
-def test_sigterm_while_git_hangs_in_the_build_exits_and_cleans_up(launchers, tmp_path):
-    """The build runs in the launcher, which waits for it: a hung git must not hang.
+def test_sigterm_during_the_build_never_waits_on_git(launchers, tmp_path):
+    """The launcher waits for its build, so the build must wait on nothing outside.
 
-    The export stamps the bundle with git. A stalled git (a lock or a hook) once
-    could keep the launcher, its socket and its handle alive after a stop (#254).
+    The export once stamped the bundle with git, and a slow or stuck git kept the
+    launcher, its socket and its handle alive past a stop (#254). A git that would
+    hang is first on PATH here; the build must finish without starting it.
     """
     port = free_port()
     marker = tmp_path / "git.pid"
@@ -279,27 +291,31 @@ def test_sigterm_while_git_hangs_in_the_build_exits_and_cleans_up(launchers, tmp
     env["PATH"] = f"{fake.parent}{os.pathsep}{env['PATH']}"
 
     def prepare(tree):
-        (tree / "short_git_timeout.py").write_text(SHORT_GIT_TIMEOUT, encoding="utf-8")
+        (tree / "build_on_go.py").write_text(BUILD_ON_GO, encoding="utf-8")
 
     launcher = launchers(
-        "hung-git", port, prepare=prepare, script="short_git_timeout.py", env=env
+        "no-git", port, prepare=prepare, script="build_on_go.py", env=env
     )
+    building = launcher.tree / "building.txt"
     deadline = time.monotonic() + STARTUP_TIMEOUT
-    while not marker.exists():
+    while not building.exists():
         assert launcher.process.poll() is None, launcher.stderr()
-        assert time.monotonic() < deadline, "the build never ran git"
+        assert time.monotonic() < deadline, "the build did not start"
         time.sleep(0.05)
     assert launcher.handle.exists()
 
     started = time.monotonic()
-    launcher.process.terminate()  # SIGTERM while git hangs
+    launcher.process.terminate()  # SIGTERM; the launcher now waits for the build
+    deadline = time.monotonic() + EXIT_TIMEOUT
+    while "UI startup cancelled" not in launcher.stderr():
+        assert time.monotonic() < deadline, launcher.stderr()
+        time.sleep(0.05)
+    (launcher.tree / "go.txt").write_text("", encoding="utf-8")  # the real build
     assert launcher.process.wait(timeout=EXIT_TIMEOUT) == 0, launcher.stderr()
     assert time.monotonic() - started < EXIT_TIMEOUT
-    assert "UI startup cancelled during fixture generation" in launcher.stderr()
+    assert not marker.exists(), "the build started git"
     assert not launcher.handle.exists()
     assert not list((launcher.tree / "data" / "ui-testing").glob("run-*"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(marker.read_text()), 0)  # the hung git was killed and reaped
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", port))
 

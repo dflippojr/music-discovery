@@ -277,7 +277,8 @@ def build_bundle(bundle):
     spec = importlib.util.spec_from_file_location("build_demo_fixture", path)
     builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(builder)
-    builder.build_fixture(bundle, shape=False)  # flat, so remove_bundle can delete it
+    # Flat, so remove_bundle can delete it; synthetic stamp, so it starts no git.
+    builder.build_fixture(bundle, shape=False, synthetic_source=True)
 
 
 def build_until_stopped(bundle, stopping):
@@ -285,9 +286,9 @@ def build_until_stopped(bundle, stopping):
 
     Signal handlers run on the main thread, so it waits here, watching the stop
     flag and the deadline. On a stop or a timeout it still waits for the build to
-    return before the caller removes any file. The build makes no network request,
-    and its only waits are git commands that musicdiscovery.demo bounds with
-    GIT_TIMEOUT, so it returns.
+    return before the caller removes any file. The build makes no network request
+    and starts no process (its bundle gets a synthetic source stamp, not one from
+    git), so it waits on nothing outside this process and returns.
     """
     failure = []
 

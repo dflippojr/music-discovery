@@ -49,11 +49,10 @@ SIGTERM or Ctrl+C during seeding cancels startup with a cancellation diagnostic.
 The launcher builds the fixture in its own process and starts no child process.
 On a timeout or a cancellation it waits for the build to return, so a timeout
 fires when the build returns rather than at exactly 30 seconds. The build takes
-a few seconds and makes no network request; its only waits are the git commands
-that stamp the bundle's source commit, and a git command that runs past 5
-seconds is killed and fails the build. It then closes the socket and removes
-only its flat bundle and handle, within Playwright's 10-second graceful-shutdown
-window.
+a few seconds, makes no network request and starts no process: its SOURCE.json
+carries a fixed synthetic stamp instead of a commit read from git. It then
+closes the socket and removes only its flat bundle and handle, within
+Playwright's 10-second graceful-shutdown window.
 The stop command requires a ready health endpoint; cancel seeding with SIGTERM
 or Ctrl+C in the owned launcher terminal.
 SIGTERM, Ctrl+C or the stop command triggers cleanup, including a signal that
