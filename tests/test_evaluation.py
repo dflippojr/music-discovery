@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from catalog_factory import make_frame
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -51,36 +52,6 @@ from musicdiscovery.profiles import (
     reciprocal_rank,
 )
 from musicdiscovery.rankers import _bare
-
-GENRES = ["Folk", "Rock", "Jazz"]
-
-
-def make_frame(per_genre=60, seed=0):
-    rng = np.random.default_rng(seed)
-    rows = []
-    track_id = 100
-    for g, genre in enumerate(GENRES):
-        centre = np.zeros(6)
-        centre[g] = 4.0
-        for i in range(per_genre):
-            vec = centre + rng.normal(size=6)
-            rows.append(
-                {
-                    "track_id": track_id,
-                    "title": f"t{track_id}",
-                    "artist": f"artist{track_id % 25}",
-                    "genre_top": genre,
-                    "genre_ids": [g + 1] if i % 2 else [g + 1, 9],
-                    "tags": [f"{genre}-tag", "loud"] if i % 3 else [],
-                    "listens": int(rng.integers(1, 10_000)),
-                    **{f"mfcc_mean_{j:02d}": vec[j] for j in range(6)},
-                    "rmse_mean_01": rng.normal(),
-                    "spectral_centroid_mean_01": rng.normal(),
-                    "zcr_mean_01": rng.normal(),
-                }
-            )
-            track_id += 1
-    return pd.DataFrame(rows).sample(frac=1, random_state=1)
 
 
 @pytest.fixture(autouse=True)

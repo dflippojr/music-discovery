@@ -2,7 +2,7 @@
 
 Usage: python scripts/build_demo_fixture.py [--no-shape] <out_dir>
 
-The catalog is made up (see tests/test_evaluation.py); no dataset is read.
+The catalog is made up (see make_frame in tests/catalog_factory.py); no dataset is read.
 A second catalog shaped like the real one (tests/catalog_factory.py) is
 exported to <out_dir>/shape and its exclusion cases go in exclusion.json, so the
 parity test also runs on missing genres, sparse tags and non-Latin titles.
@@ -16,10 +16,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from test_evaluation import make_frame  # noqa: E402
+from catalog_factory import from_shape, load_shape, make_frame  # noqa: E402
 
 from musicdiscovery.catalog import Catalog  # noqa: E402
-from musicdiscovery.demo import build_catalog, export_demo, parity_queries  # noqa: E402
+from musicdiscovery.demo import (  # noqa: E402
+    SOURCE_REPO,
+    build_catalog,
+    export_demo,
+    parity_queries,
+)
 from musicdiscovery.preference import Preference  # noqa: E402
 from musicdiscovery.rankers import make_ranker  # noqa: E402
 
@@ -50,6 +55,45 @@ def exclusion_cases(catalog: Catalog) -> dict:
 
 
 SHAPE_TRACKS = 400
+# The stamp of a bundle that names no commit. Stamping with git would make the
+# build wait on processes outside the launcher, which a stop cannot bound (#254).
+SYNTHETIC_SOURCE = {
+    "repo": SOURCE_REPO,
+    "sha": "synthetic",
+    "built": "1970-01-01T00:00:00Z",
+    "paths": [],
+}
+
+
+def build_fixture(
+    out_dir: Path, shape: bool = True, synthetic_source: bool = False
+) -> list[str]:
+    """Write the demo bundle to `out_dir` and return one summary line per export.
+
+    The UI launcher calls this in its own process with shape=False, which keeps
+    `out_dir` flat, and synthetic_source=True, so the build starts no process:
+    SOURCE.json gets SYNTHETIC_SOURCE instead of the commit git reports.
+    """
+    out_dir = Path(out_dir)
+    source = dict(SYNTHETIC_SOURCE) if synthetic_source else None
+    frame = make_frame(per_genre=150)
+    frame["title"] = [f"Synthetic track {t}" for t in frame["track_id"]]
+    frame["license_url"] = "https://creativecommons.org/licenses/by/4.0/"
+    frame["source_url"] = [f"https://example.com/track/{t}" for t in frame["track_id"]]
+    size = export_demo(Catalog(frame), out_dir, source=source)
+    cases = {"repeated": exclusion_cases(Catalog(frame))}
+    frame["artist"] = "Only artist"
+    cases["one_artist"] = exclusion_cases(Catalog(frame))
+    lines = [f"wrote {out_dir}: {size.raw} bytes, {size.compressed} bytes gzip"]
+    if shape:
+        shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
+        shape_size = export_demo(shaped, out_dir / "shape", source=source)
+        cases["shape"] = exclusion_cases(shaped)
+        lines.append(
+            f"wrote {out_dir}/shape: {shape_size.raw} bytes from {SHAPE_TRACKS} tracks"
+        )
+    (out_dir / "exclusion.json").write_text(json.dumps(cases), encoding="utf-8")
+    return lines
 
 
 def main(argv: list[str]) -> int:
@@ -59,26 +103,8 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    frame = make_frame(per_genre=150)
-    frame["title"] = [f"Synthetic track {t}" for t in frame["track_id"]]
-    frame["license_url"] = "https://creativecommons.org/licenses/by/4.0/"
-    frame["source_url"] = [f"https://example.com/track/{t}" for t in frame["track_id"]]
-    size = export_demo(Catalog(frame), Path(argv[1]))
-    cases = {"repeated": exclusion_cases(Catalog(frame))}
-    frame["artist"] = "Only artist"
-    cases["one_artist"] = exclusion_cases(Catalog(frame))
-    if shape:
-        from catalog_factory import from_shape, load_shape
-
-        shaped = Catalog(from_shape(load_shape(), SHAPE_TRACKS))
-        shape_size = export_demo(shaped, Path(argv[1]) / "shape")
-        cases["shape"] = exclusion_cases(shaped)
-    (Path(argv[1]) / "exclusion.json").write_text(json.dumps(cases), encoding="utf-8")
-    print(f"wrote {argv[1]}: {size.raw} bytes, {size.compressed} bytes gzip")
-    if shape:
-        print(
-            f"wrote {argv[1]}/shape: {shape_size.raw} bytes from {SHAPE_TRACKS} tracks"
-        )
+    for line in build_fixture(Path(argv[1]), shape=shape):
+        print(line)
     return 0
 
 

@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from test_evaluation import make_frame
+from catalog_factory import make_frame
 
 from musicdiscovery.cli import main
 from musicdiscovery.evaluation import RANKERS

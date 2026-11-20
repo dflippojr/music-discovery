@@ -4,7 +4,7 @@ Usage: python scripts/build_console_catalog.py <data_dir>
 
 CI then runs ``musicdiscovery recommend --data-dir <data_dir>`` on Windows with
 the runner's default console encoding, so a crash like #28 fails the run. The
-catalog is made up (see tests/test_evaluation.py); no dataset is read.
+catalog is made up (see make_frame in tests/catalog_factory.py); no dataset is read.
 """
 
 import sys
@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from test_evaluation import make_frame  # noqa: E402
+from catalog_factory import make_frame  # noqa: E402
 
 # CJK, Cyrillic, Greek and an emoji are outside cp1252; Ångström is inside it.
 TITLES = ["東京の夜", "Кино", "Ångström", "Ωμέγα", "🎵 Song"]

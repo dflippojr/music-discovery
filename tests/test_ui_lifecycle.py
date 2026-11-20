@@ -2,7 +2,8 @@
 
 Each launcher is a copy in its own tree, so it has its own data/ui-testing and
 only the port is shared. Nothing is mocked: the launcher builds the synthetic
-fixture, serves it, and stops through its authenticated endpoint.
+fixture in its own process, serves it, and stops through its authenticated
+endpoint.
 """
 
 import json
@@ -13,14 +14,16 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from urllib.request import urlopen
 
+import psutil
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ["scripts/ui_instance.py", "scripts/build_demo_fixture.py"]
-FILES += ["tests/test_evaluation.py"]  # build_demo_fixture imports make_frame
+FILES += ["tests/catalog_factory.py"]  # make_frame; the shape profile stays out
 STARTUP_TIMEOUT = 90
 EXIT_TIMEOUT = 15
 
@@ -65,7 +68,7 @@ def test_flat_fixture_builds_without_shape_helpers(tmp_path):
 class Launcher:
     """One `ui_instance.py start` process and the lines it prints."""
 
-    def __init__(self, tree, port, script="scripts/ui_instance.py"):
+    def __init__(self, tree, port, script="scripts/ui_instance.py", env=None):
         self.tree = tree
         self.handle = tree / "data" / "ui-testing" / "instance.json"
         self.errors = tree / "launcher.err"
@@ -79,7 +82,7 @@ class Launcher:
                     str(port),
                 ],
                 cwd=tree,
-                env=clean_environment(),
+                env=env or clean_environment(),
                 stdout=subprocess.PIPE,
                 stderr=errors,
                 text=True,
@@ -181,6 +184,140 @@ def test_sigterm_between_ready_lines_and_serving_exits_and_cleans_up(launchers):
     assert not list((launcher.tree / "data" / "ui-testing").glob("run-*"))
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", port), timeout=5).close()
+
+
+# Runs the real launcher with the real builder, then holds the build thread so a
+# test can kill the launcher at a known point inside the build.
+HOLD_AFTER_BUILD = """\
+import importlib.util, sys, threading
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("ui_instance", "scripts/ui_instance.py")
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+real_build = launcher.build_bundle
+
+
+def build_then_hold(bundle):
+    real_build(bundle)
+    Path("built.txt").write_text(str(bundle), encoding="utf-8")
+    threading.Event().wait()
+
+
+launcher.build_bundle = build_then_hold
+sys.exit(launcher.main())
+"""
+
+
+def test_sigkill_during_the_build_leaves_a_handle_that_recover_clears(launchers):
+    port = free_port()
+
+    def prepare(tree):
+        (tree / "hold_after_build.py").write_text(HOLD_AFTER_BUILD, encoding="utf-8")
+
+    launcher = launchers("killed", port, prepare=prepare, script="hold_after_build.py")
+    built = launcher.tree / "built.txt"
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    while not built.exists():
+        assert launcher.process.poll() is None, launcher.stderr()
+        assert time.monotonic() < deadline, "the build did not finish"
+        time.sleep(0.1)
+    bundle = Path(built.read_text(encoding="utf-8"))
+    assert list(bundle.iterdir()), "the build wrote no files"
+    handle = json.loads(launcher.handle.read_text(encoding="utf-8"))
+    assert handle["pid"] == launcher.process.pid
+    assert set(handle) == {"instance", "pid", "created", "port", "token"}
+    # The launcher builds in its own process, so no child can outlive it.
+    assert psutil.Process(launcher.process.pid).children(recursive=True) == []
+
+    launcher.process.kill()  # SIGKILL; TerminateProcess on Windows
+    launcher.process.wait(timeout=EXIT_TIMEOUT)
+    assert launcher.handle.exists() and bundle.exists()
+
+    recovered = subprocess.run(
+        [sys.executable, "scripts/ui_instance.py", "recover"],
+        cwd=launcher.tree,
+        env=clean_environment(),
+        capture_output=True,
+        text=True,
+        timeout=EXIT_TIMEOUT + 10,
+        check=False,
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    assert f"Recovered {handle['instance']}" in recovered.stdout
+    assert not launcher.handle.exists()
+    assert not bundle.exists()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", port))
+
+
+# Runs the real launcher, but its build waits for a go.txt file before it calls
+# the real builder, so a test can signal the launcher at a known point.
+BUILD_ON_GO = """\
+import importlib.util, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("ui_instance", "scripts/ui_instance.py")
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
+real_build = launcher.build_bundle
+
+
+def build_on_go(bundle):
+    Path("building.txt").write_text(str(bundle), encoding="utf-8")
+    while not Path("go.txt").exists():
+        time.sleep(0.05)
+    real_build(bundle)
+
+
+launcher.build_bundle = build_on_go
+sys.exit(launcher.main())
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in git is a POSIX script")
+def test_sigterm_during_the_build_never_waits_on_git(launchers, tmp_path):
+    """The launcher waits for its build, so the build must wait on nothing outside.
+
+    The export once stamped the bundle with git, and a slow or stuck git kept the
+    launcher, its socket and its handle alive past a stop (#254). A git that would
+    hang is first on PATH here; the build must finish without starting it.
+    """
+    port = free_port()
+    marker = tmp_path / "git.pid"
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/sh\necho $$ > "{marker}"\nexec sleep 60\n')
+    fake.chmod(0o755)
+    env = clean_environment()
+    env["PATH"] = f"{fake.parent}{os.pathsep}{env['PATH']}"
+
+    def prepare(tree):
+        (tree / "build_on_go.py").write_text(BUILD_ON_GO, encoding="utf-8")
+
+    launcher = launchers(
+        "no-git", port, prepare=prepare, script="build_on_go.py", env=env
+    )
+    building = launcher.tree / "building.txt"
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    while not building.exists():
+        assert launcher.process.poll() is None, launcher.stderr()
+        assert time.monotonic() < deadline, "the build did not start"
+        time.sleep(0.05)
+    assert launcher.handle.exists()
+
+    started = time.monotonic()
+    launcher.process.terminate()  # SIGTERM; the launcher now waits for the build
+    deadline = time.monotonic() + EXIT_TIMEOUT
+    while "UI startup cancelled" not in launcher.stderr():
+        assert time.monotonic() < deadline, launcher.stderr()
+        time.sleep(0.05)
+    (launcher.tree / "go.txt").write_text("", encoding="utf-8")  # the real build
+    assert launcher.process.wait(timeout=EXIT_TIMEOUT) == 1, launcher.stderr()
+    assert time.monotonic() - started < EXIT_TIMEOUT
+    assert not marker.exists(), "the build started git"
+    assert not launcher.handle.exists()
+    assert not list((launcher.tree / "data" / "ui-testing").glob("run-*"))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", port))
 
 
 def test_second_launcher_refuses_a_served_port_and_stop_frees_it(launchers):

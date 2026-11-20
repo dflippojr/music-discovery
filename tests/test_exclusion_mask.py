@@ -1,8 +1,8 @@
 """Seed and seed-artist exclusion is shared by all seven rankers."""
 
 import pytest
+from catalog_factory import make_frame
 from test_audio_embedding import store_for
-from test_evaluation import make_frame
 
 from musicdiscovery.audio_embedding import AudioEmbeddingRanker
 from musicdiscovery.catalog import Catalog

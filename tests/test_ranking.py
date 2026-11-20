@@ -5,8 +5,10 @@ import os
 import re
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
 
+import catalog_factory
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,39 +20,18 @@ from musicdiscovery.preference import AXES, Preference, PreferenceError, Quality
 from musicdiscovery.profile_ranker import ProfileRanker
 from musicdiscovery.ranking import BaselineRanker, top_k
 
-GENRES = ["Folk", "Rock", "Jazz"]
 RANKERS = {"baseline": BaselineRanker, "hybrid": HybridRanker, "profile": ProfileRanker}
 
 
-def make_frame(per_genre=40, extra_features=0, seed=0):
-    rng = np.random.default_rng(seed)
-    rows = []
-    track_id = 100
-    for g, genre in enumerate(GENRES):
-        centre = np.zeros(6)
-        centre[g] = 4.0
-        for i in range(per_genre):
-            vec = centre + rng.normal(size=6)
-            rows.append(
-                {
-                    "track_id": track_id,
-                    "title": f"t{track_id}",
-                    "artist": f"artist{track_id % 20}",
-                    "genre_top": genre,
-                    "genre_ids": [g + 1],
-                    "tags": ["loud"] if i % 5 == 0 else ["quiet"],
-                    "listens": track_id,
-                    "mfcc_mean_01": vec[0],
-                    "mfcc_mean_02": vec[1],
-                    "mfcc_mean_03": vec[2],
-                    "rmse_mean_01": rng.normal(),
-                    "spectral_centroid_mean_01": rng.normal(),
-                    "zcr_mean_01": rng.normal(),
-                    **{f"x_{j}": rng.normal() for j in range(extra_features)},
-                }
-            )
-            track_id += 1
-    return pd.DataFrame(rows).sample(frac=1, random_state=1)
+# Plain metadata and three feature columns: one genre id and one tag per track.
+make_frame = partial(
+    catalog_factory.make_frame,
+    per_genre=40,
+    artists=20,
+    features=3,
+    first_feature=1,
+    varied_metadata=False,
+)
 
 
 @pytest.fixture
